@@ -206,6 +206,265 @@ html, body, #app {
   gap: 10px;
 }
 
+/* ====== Agent Studio ====== */
+.agent-page {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) minmax(420px, 1fr) minmax(260px, 320px);
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.agent-panel {
+  min-height: 0;
+  border-radius: 8px !important;
+  border-color: #e5e7eb !important;
+  overflow: hidden;
+}
+
+.agent-panel .el-card__body {
+  height: calc(100% - 56px);
+}
+
+.agent-config-panel,
+.agent-run-panel,
+.agent-history-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agent-head-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.agent-form {
+  min-height: 0;
+}
+
+.agent-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 150px;
+  gap: 12px;
+}
+
+.agent-actions,
+.agent-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-actions {
+  margin-top: 10px;
+}
+
+.agent-run-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-result {
+  margin-top: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.agent-run-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: #6b7280;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.agent-output,
+.agent-trace {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+
+.agent-section-title {
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.agent-placeholder {
+  color: #9ca3af;
+  font-size: 13px;
+  padding: 18px 0;
+  text-align: center;
+}
+
+.agent-step {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f9fafb;
+}
+
+.agent-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-step-error {
+  color: #dc2626;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.agent-step-meta {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-history-list {
+  height: 100%;
+}
+
+.agent-side-tabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-side-tabs .el-tabs__content {
+  flex: 1;
+  min-height: 0;
+}
+
+.agent-side-tabs .el-tab-pane {
+  height: 100%;
+}
+
+.agent-resource-scroll {
+  height: 100%;
+}
+
+.agent-resource-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.agent-resource-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.agent-resource-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.agent-resource-meta {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.agent-resource-content {
+  margin-top: 8px;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.agent-inline-field {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  align-items: center;
+  gap: 10px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.agent-history-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: #fff;
+  transition: all .2s;
+}
+
+.agent-history-item:hover,
+.agent-history-item.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.agent-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.agent-history-input {
+  margin-top: 8px;
+  color: #1f2937;
+  font-size: 13px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-history-time {
+  margin-top: 8px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
 /* ====== Thread (Chat & Group) ====== */
 .thread {
   flex: 1;
@@ -1769,3 +2028,82 @@ html.dark .hud-item {
 html.dark .driving-overlay {
   background: rgba(0, 0, 0, 0.7);
 }
+
+html.dark .agent-output,
+html.dark .agent-trace,
+html.dark .agent-history-item {
+  background: #111827;
+  border-color: #334155;
+}
+
+html.dark .agent-step {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+html.dark .agent-section-title,
+html.dark .agent-history-input {
+  color: #e5e7eb;
+}
+
+html.dark .agent-history-item:hover,
+html.dark .agent-history-item.active {
+  background: #172554;
+  border-color: #3b82f6;
+}
+
+@media (max-width: 1180px) {
+  .agent-page {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .agent-panel .el-card__body {
+    height: auto;
+  }
+
+  .agent-history-list {
+    height: 280px;
+  }
+  
+}
+/* ====== Sidebar SubMenu Fix: 玩具箱和普通菜单项等高 ====== */
+.aside-menu > .el-sub-menu {
+  margin: 2px 0;
+}
+
+.aside-menu > .el-sub-menu > .el-sub-menu__title {
+  height: 40px !important;
+  line-height: 40px !important;
+  border-radius: 8px !important;
+  margin: 0 !important;
+  padding: 0 20px !important;
+  box-sizing: border-box;
+}
+
+/* 让玩具箱 hover 和普通菜单项一致 */
+.aside-menu > .el-sub-menu > .el-sub-menu__title:hover {
+  background-color: var(--el-menu-hover-bg-color) !important;
+}
+
+/* 玩具箱展开 / 子项选中时，高亮效果和普通 active 菜单一致 */
+.aside-menu > .el-sub-menu.is-opened > .el-sub-menu__title,
+.aside-menu > .el-sub-menu.is-active > .el-sub-menu__title {
+  background: rgba(37, 99, 235, .1) !important;
+  color: #2563eb !important;
+}
+
+/* 去掉子菜单默认多出来的背景块 */
+.aside-menu > .el-sub-menu .el-menu {
+  background: transparent !important;
+}
+
+/* 子菜单项也保持你的原菜单尺寸 */
+.aside-menu > .el-sub-menu .el-menu-item {
+  height: 40px !important;
+  line-height: 40px !important;
+  border-radius: 8px !important;
+  margin: 2px 0 !important;
+}
+
+

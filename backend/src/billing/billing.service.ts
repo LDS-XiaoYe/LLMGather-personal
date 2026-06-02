@@ -26,7 +26,7 @@ export class BillingService {
     userId: string,
     request: ChatCompletionRequest,
     usage?: ChatCompletionUsage,
-    requestType: 'chat' | 'openai' | 'anthropic' = 'chat',
+    requestType: 'chat' | 'openai' | 'anthropic' | 'agent' = 'chat',
   ): Promise<AuthUser> {
     const normalizedUsage = usage ?? this.estimateNonStreamUsage(request);
     return this.charge(userId, request.model, requestType, normalizedUsage);
@@ -128,7 +128,7 @@ export class BillingService {
   private async charge(
     userId: string,
     model: string,
-    requestType: 'chat' | 'openai' | 'anthropic',
+    requestType: 'chat' | 'openai' | 'anthropic' | 'agent',
     usage: ChatCompletionUsage,
   ): Promise<AuthUser> {
     const cost = await this.calculateCost(model, usage);

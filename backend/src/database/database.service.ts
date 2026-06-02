@@ -30,6 +30,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.initMysql();
     await this.createTables();
     await this.migrateColumnsIfNeeded();
+    await this.seedBuiltinTools();
     await this.seedProviderConfigs();
     await this.seedSystemSettings();
     await this.seedRouterRules();
@@ -206,6 +207,224 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         INDEX idx_cache_hash (query_hash),
         INDEX idx_cache_model (model)
       )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agents (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(80) NOT NULL,
+        description TEXT NOT NULL,
+        model VARCHAR(128) NOT NULL,
+        system_prompt TEXT NOT NULL,
+        temperature DECIMAL(3,2) NOT NULL DEFAULT 0.70,
+        max_tokens INT NOT NULL DEFAULT 1024,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        memory_enabled INT NOT NULL DEFAULT 1,
+        metadata TEXT,
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_agents_user (user_id),
+        INDEX idx_agents_status (status)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        id ${pk},
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        model VARCHAR(128) NOT NULL,
+        error TEXT NOT NULL,
+        prompt_tokens INT NOT NULL DEFAULT 0,
+        completion_tokens INT NOT NULL DEFAULT 0,
+        total_tokens INT NOT NULL DEFAULT 0,
+        latency_ms INT NOT NULL DEFAULT 0,
+        created_at ${ts},
+        completed_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_agent_runs_agent (agent_id),
+        INDEX idx_agent_runs_user_created (user_id, created_at),
+        INDEX idx_agent_runs_status (status)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_run_steps (
+        id ${autoId} PRIMARY KEY,
+        run_id VARCHAR(36) NOT NULL,
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        step_type VARCHAR(32) NOT NULL,
+        name VARCHAR(128) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        error TEXT NOT NULL,
+        started_at ${ts},
+        ended_at DATETIME(3) DEFAULT NULL,
+        latency_ms INT NOT NULL DEFAULT 0,
+        metadata TEXT,
+        INDEX idx_agent_run_steps_run (run_id),
+        INDEX idx_agent_run_steps_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS tools (
+        id ${pk},
+        user_id VARCHAR(36) DEFAULT NULL,
+        name VARCHAR(80) NOT NULL,
+        display_name VARCHAR(128) NOT NULL,
+        description TEXT NOT NULL,
+        schema_json TEXT NOT NULL,
+        implementation_type VARCHAR(32) NOT NULL DEFAULT 'builtin',
+        enabled INT NOT NULL DEFAULT 1,
+        created_at ${ts},
+        updated_at ${ts},
+        UNIQUE KEY uniq_tools_user_name (user_id, name),
+        INDEX idx_tools_enabled (enabled)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_tools (
+        agent_id VARCHAR(36) NOT NULL,
+        tool_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        created_at ${ts},
+        PRIMARY KEY (agent_id, tool_id),
+        INDEX idx_agent_tools_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS tool_invocations (
+        id ${pk},
+        tool_id VARCHAR(36) NOT NULL,
+        agent_id VARCHAR(36) DEFAULT NULL,
+        run_id VARCHAR(36) DEFAULT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        tool_name VARCHAR(80) NOT NULL,
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'succeeded',
+        error TEXT NOT NULL,
+        latency_ms INT NOT NULL DEFAULT 0,
+        created_at ${ts},
+        INDEX idx_tool_invocations_user (user_id, created_at),
+        INDEX idx_tool_invocations_run (run_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS knowledge_bases (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(128) NOT NULL,
+        description TEXT NOT NULL,
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_kb_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS knowledge_documents (
+        id ${pk},
+        kb_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        title VARCHAR(191) NOT NULL,
+        content LONGTEXT NOT NULL,
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_kb_docs_kb (kb_id),
+        INDEX idx_kb_docs_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS knowledge_chunks (
+        id ${pk},
+        kb_id VARCHAR(36) NOT NULL,
+        document_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        chunk_index INT NOT NULL DEFAULT 0,
+        content TEXT NOT NULL,
+        token_estimate INT NOT NULL DEFAULT 0,
+        created_at ${ts},
+        INDEX idx_kb_chunks_kb (kb_id),
+        INDEX idx_kb_chunks_doc (document_id),
+        FULLTEXT INDEX ft_kb_chunks_content (content)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_knowledge_bases (
+        agent_id VARCHAR(36) NOT NULL,
+        kb_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        created_at ${ts},
+        PRIMARY KEY (agent_id, kb_id),
+        INDEX idx_agent_kbs_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        agent_id VARCHAR(36) DEFAULT NULL,
+        namespace VARCHAR(64) NOT NULL DEFAULT 'default',
+        memory_type VARCHAR(32) NOT NULL DEFAULT 'fact',
+        content TEXT NOT NULL,
+        importance INT NOT NULL DEFAULT 3,
+        metadata TEXT,
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_memories_user_agent (user_id, agent_id),
+        FULLTEXT INDEX ft_memories_content (content)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS workflows (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(128) NOT NULL,
+        description TEXT NOT NULL,
+        definition_json LONGTEXT NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_workflows_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS workflow_runs (
+        id ${pk},
+        workflow_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        error TEXT NOT NULL,
+        created_at ${ts},
+        completed_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_workflow_runs_workflow (workflow_id),
+        INDEX idx_workflow_runs_user (user_id, created_at)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS workflow_run_steps (
+        id ${autoId} PRIMARY KEY,
+        run_id VARCHAR(36) NOT NULL,
+        workflow_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        node_id VARCHAR(64) NOT NULL,
+        node_type VARCHAR(32) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'succeeded',
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        error TEXT NOT NULL,
+        created_at ${ts},
+        INDEX idx_workflow_run_steps_run (run_id)
+      )${fk};`);
   }
 
   /* ------------------------------------------------------------------ */
@@ -226,7 +445,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
-    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs'];
+    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'tools', 'agent_tools', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
         await this.adapter.exec(
@@ -345,6 +564,69 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     // Generate invitation codes for existing users who don't have one
     await this.generateInvitationCodesForExistingUsers();
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agents ADD COLUMN memory_enabled INT NOT NULL DEFAULT 1`,
+      );
+    } catch {
+      // column already exists
+    }
+  }
+
+  private async seedBuiltinTools(): Promise<void> {
+    const now = dbNow();
+    const randomUUID = (await import('crypto')).randomUUID;
+    const tools: Array<{
+      name: string;
+      displayName: string;
+      description: string;
+      schema: Record<string, unknown>;
+    }> = [
+      {
+        name: 'current_time',
+        displayName: '当前时间',
+        description: '返回当前服务器时间，可用于日期、时间、时区相关任务。',
+        schema: { type: 'object', properties: { timezone: { type: 'string', default: 'Asia/Shanghai' } } },
+      },
+      {
+        name: 'calculator',
+        displayName: '安全计算器',
+        description: '执行简单数学表达式计算，仅支持数字和 + - * / % ^ ( ) . 运算符。',
+        schema: { type: 'object', required: ['expression'], properties: { expression: { type: 'string' } } },
+      },
+      {
+        name: 'text_stats',
+        displayName: '文本统计',
+        description: '统计文本的字符数、中文字符数、英文词数和行数。',
+        schema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+      },
+      {
+        name: 'uuid',
+        displayName: 'UUID 生成器',
+        description: '生成一个随机 UUID。',
+        schema: { type: 'object', properties: {} },
+      },
+    ];
+
+    for (const tool of tools) {
+      const existing = await this.adapter.prepare(
+        'SELECT id FROM tools WHERE user_id IS NULL AND name = ? LIMIT 1',
+      ).get(tool.name) as { id: string } | undefined;
+
+      if (existing) {
+        await this.adapter.prepare(
+          `UPDATE tools
+           SET display_name = ?, description = ?, schema_json = ?, enabled = 1, updated_at = ?
+           WHERE id = ?`,
+        ).run(tool.displayName, tool.description, JSON.stringify(tool.schema), now, existing.id);
+      } else {
+        await this.adapter.prepare(
+          `INSERT INTO tools (id, user_id, name, display_name, description, schema_json, implementation_type, enabled, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, ?, ?, 'builtin', 1, ?, ?)`,
+        ).run(randomUUID(), tool.name, tool.displayName, tool.description, JSON.stringify(tool.schema), now, now);
+      }
+    }
   }
 
   private async generateInvitationCodesForExistingUsers(): Promise<void> {

@@ -4,8 +4,14 @@ import { Cpu, ChatDotRound, DataAnalysis, Delete, Document, EditPen, Headset, In
 import * as echarts from 'echarts';
 import {
   clearStoredToken,
+  addKnowledgeDocument as apiAddKnowledgeDocument,
+  createAgent as apiCreateAgent,
   createApiKey as apiCreateApiKey,
+  createKnowledgeBase as apiCreateKnowledgeBase,
+  createMemory as apiCreateMemory,
+  createWorkflow as apiCreateWorkflow,
   deleteAdminUser,
+  deleteAgent as apiDeleteAgent,
   deleteConversation,
   exportAdminBillingCsv,
   fetchAdminBilling,
@@ -15,19 +21,27 @@ import {
   fetchAdminStats,
   fetchAdminTodayStats,
   fetchAdminUsers,
+  fetchAgents,
+  fetchAgentRuns,
   fetchBillingLedger,
   fetchBillingRules,
   fetchConversations,
   fetchDailyUsage,
+  fetchKnowledgeBases,
   fetchMe,
+  fetchMemories,
   fetchModels,
   getStoredToken,
+  fetchTools,
+  fetchWorkflows,
   listApiKeys,
   login,
   logout as apiLogout,
   register,
   resetAdminUserPassword,
   revokeApiKey as apiRevokeApiKey,
+  runAgent as apiRunAgent,
+  runWorkflow as apiRunWorkflow,
   sendVerificationCode,
   createRechargeOrder,
   fetchRechargeOrders,
@@ -37,6 +51,7 @@ import {
   syncConversations,
   streamCompletion,
   topUp,
+  updateAgent as apiUpdateAgent,
   updateAdminBillingRule,
   updateAdminUser,
   fetchAdminProviderKeys,
@@ -57,6 +72,8 @@ import {
   type AdminBillingRow,
   type AdminStats,
   type AdminUser,
+  type AgentDefinition,
+  type AgentRun,
   type ApiKeyItem,
   type AuthUser,
   type BillingLedgerItem,
@@ -72,6 +89,12 @@ import {
   type TodayStats,
   type TierPriceInfo,
   type ModelTiersData,
+  type KnowledgeBase,
+  type MemoryItem,
+  type ToolDefinition,
+  type Workflow,
+  type WorkflowRun,
+  type WorkflowNode,
 } from './api';
 import type { PageMode, ChatMessage, ChatSession, BattlePanelState, GroupChatMessage } from './types';
 import { getModelLogo } from './constants';
@@ -79,6 +102,7 @@ import {
   createId, buildSessionTitle, pickTwoRandomModels, shuffleArray,
   formatTime, getStoredValue, setStoredValue, renderMarkdown,
 } from './utils';
+import { MagicStick } from '@element-plus/icons-vue';
 
 const BASE_URL_KEY = 'llm_gather_base_url';
 const THEME_KEY = 'llm_gather_theme';
@@ -154,6 +178,56 @@ const rechargeOrders = ref<RechargeOrder[]>([]);
 const rechargeOrdersLoading = ref(false);
 const billingRules = ref<BillingRule[]>([]);
 const billingLedger = ref<BillingLedgerItem[]>([]);
+
+// Agent Studio
+const agents = ref<AgentDefinition[]>([]);
+const activeAgentId = ref('');
+const agentLoading = ref(false);
+const agentSaving = ref(false);
+const agentRunning = ref(false);
+const agentPrompt = ref('');
+const agentRuns = ref<AgentRun[]>([]);
+const activeAgentRun = ref<AgentRun | null>(null);
+const agentSideTab = ref<'history' | 'knowledge' | 'memory' | 'workflow'>('history');
+const availableTools = ref<ToolDefinition[]>([]);
+const knowledgeBases = ref<KnowledgeBase[]>([]);
+const agentMemories = ref<MemoryItem[]>([]);
+const workflows = ref<Workflow[]>([]);
+const agentResourceLoading = ref(false);
+const knowledgeCreating = ref(false);
+const knowledgeDocSaving = ref(false);
+const memorySaving = ref(false);
+const workflowCreating = ref(false);
+const workflowRunning = ref(false);
+const activeWorkflowId = ref('');
+const workflowInput = ref('');
+const activeWorkflowRun = ref<WorkflowRun | null>(null);
+const agentForm = ref({
+  id: '',
+  name: '',
+  description: '',
+  model: '',
+  systemPrompt: '',
+  temperature: 0.7,
+  maxTokens: 1024,
+  memoryEnabled: true,
+  toolIds: [] as string[],
+  knowledgeBaseIds: [] as string[],
+  status: 'active' as 'active' | 'archived',
+});
+const knowledgeForm = ref({
+  name: '',
+  description: '',
+});
+const knowledgeDocForm = ref({
+  kbId: '',
+  title: '',
+  content: '',
+});
+const memoryForm = ref({
+  content: '',
+  importance: 3,
+});
 
 // API Docs
 const apiKeys = ref<Array<{ id: string; name: string; maskedKey: string; fullKey?: string; createdAt: string }>>([]);
@@ -271,7 +345,8 @@ const isSessionLoaded = ref(false);
 
 // Navigation
 const pageMode = ref<PageMode>(
-  window.location.hash === '#/battle' ? 'battle'
+  window.location.hash === '#/agent' ? 'agent'
+  : window.location.hash === '#/battle' ? 'battle'
   : window.location.hash === '#/group' ? 'group'
   : window.location.hash === '#/console' ? 'console'
   : window.location.hash === '#/api' ? 'api'
@@ -450,6 +525,7 @@ const activeMessages = computed(() => activeSession.value?.messages ?? []);
 const sidebarSessions = computed(() => sessions.value.filter((s) => !s.isDraft));
 const isAuthenticated = computed(() => Boolean(authUser.value));
 const isAdmin = computed(() => authUser.value?.role === 'admin');
+const activeAgent = computed(() => agents.value.find((agent) => agent.id === activeAgentId.value) ?? null);
 const authCreditsText = computed(() => (authUser.value ? Number(authUser.value.credits).toFixed(4) : '0.0000'));
 const authSpentText = computed(() => (authUser.value ? Number(authUser.value.totalSpent).toFixed(4) : '0.0000'));
 const apiBaseUrl = computed(() => {
@@ -496,14 +572,14 @@ watch(backendBaseUrl, (val) => setStoredValue(BASE_URL_KEY, val));
 
 window.addEventListener('hashchange', () => {
   const hash = window.location.hash;
-  if (hash === '#/battle') pageMode.value = 'battle';
+  if (hash === '#/agent') pageMode.value = 'agent';
+    else if (hash === '#/battle') pageMode.value = 'battle';
     else if (hash === '#/group') pageMode.value = 'group';
     else if (hash === '#/console') pageMode.value = 'console';
     else if (hash === '#/api') pageMode.value = 'api';
     else if (hash === '#/admin') pageMode.value = 'admin';
     else if (hash === '#/vision') pageMode.value = 'vision';
     else if (hash === '#/tts') pageMode.value = 'tts';
-    else if (hash === '#/multimodal') pageMode.value = 'multimodal';
     else if (hash === '#/multimodal') pageMode.value = 'multimodal';
     else if (hash === '#/router') pageMode.value = 'router';
     else if (hash === '#/collab') pageMode.value = 'collab';
@@ -513,7 +589,9 @@ window.addEventListener('hashchange', () => {
 
 watch(pageMode, (mode) => {
   if (!isAuthenticated.value) return;
-  if (mode === 'console') {
+  if (mode === 'agent') {
+    void loadAgents();
+  } else if (mode === 'console') {
     onConsoleEnter();
   } else if (mode === 'api') {
     void loadApiKeys();
@@ -529,6 +607,8 @@ watch(pageMode, (mode) => {
 watch(isAuthenticated, (authed) => {
   if (authed && pageMode.value === 'console') {
     onConsoleEnter();
+  } else if (authed && pageMode.value === 'agent') {
+    void loadAgents();
   }
 });
 
@@ -609,6 +689,406 @@ async function loadModels() {
     }
   } finally {
     isLoadingModels.value = false;
+  }
+}
+
+function resetAgentForm() {
+  const defaultModel = selectedModel.value && selectedModel.value !== 'auto'
+    ? selectedModel.value
+    : (chatModels.value[0]?.id || models.value[0]?.id || '');
+  agentForm.value = {
+    id: '',
+    name: '新建 Agent',
+    description: '',
+    model: defaultModel,
+    systemPrompt: '你是一个可靠的任务型 AI Agent。你会先理解用户目标，再给出清晰、可执行、可复盘的结果。',
+    temperature: 0.7,
+    maxTokens: 1024,
+    memoryEnabled: true,
+    toolIds: [],
+    knowledgeBaseIds: [],
+    status: 'active',
+  };
+  agentRuns.value = [];
+  activeAgentRun.value = null;
+  agentMemories.value = [];
+}
+
+function fillAgentForm(agent: AgentDefinition) {
+  agentForm.value = {
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    model: agent.model,
+    systemPrompt: agent.systemPrompt,
+    temperature: Number(agent.temperature),
+    maxTokens: Number(agent.maxTokens),
+    memoryEnabled: agent.memoryEnabled !== false,
+    toolIds: [...(agent.toolIds ?? [])],
+    knowledgeBaseIds: [...(agent.knowledgeBaseIds ?? [])],
+    status: agent.status,
+  };
+}
+
+async function refreshAgentStudio() {
+  await Promise.all([
+    loadAgents(),
+    loadAgentResources(),
+  ]);
+}
+
+async function loadAgentResources() {
+  if (!isAuthenticated.value) {
+    availableTools.value = [];
+    knowledgeBases.value = [];
+    workflows.value = [];
+    agentMemories.value = [];
+    return;
+  }
+
+  agentResourceLoading.value = true;
+  try {
+    const [tools, bases, workflowItems] = await Promise.all([
+      fetchTools(backendBaseUrl.value),
+      fetchKnowledgeBases(backendBaseUrl.value),
+      fetchWorkflows(backendBaseUrl.value),
+    ]);
+    availableTools.value = tools;
+    knowledgeBases.value = bases;
+    workflows.value = workflowItems;
+    if (!knowledgeDocForm.value.kbId && bases[0]) knowledgeDocForm.value.kbId = bases[0].id;
+    if (!activeWorkflowId.value && workflowItems[0]) activeWorkflowId.value = workflowItems[0].id;
+    await loadAgentMemories();
+  } catch (error) {
+    console.error('[loadAgentResources] failed:', error);
+  } finally {
+    agentResourceLoading.value = false;
+  }
+}
+
+async function loadAgentMemories(agentId = agentForm.value.id) {
+  if (!isAuthenticated.value || !agentId) {
+    agentMemories.value = [];
+    return;
+  }
+  try {
+    agentMemories.value = await fetchMemories(agentId, backendBaseUrl.value);
+  } catch (error) {
+    console.error('[loadAgentMemories] failed:', error);
+  }
+}
+
+async function loadAgents() {
+  if (!isAuthenticated.value) {
+    agents.value = [];
+    resetAgentForm();
+    return;
+  }
+  agentLoading.value = true;
+  try {
+    const data = await fetchAgents(backendBaseUrl.value);
+    agents.value = data;
+    const existing = activeAgentId.value ? data.find((agent) => agent.id === activeAgentId.value) : null;
+    const next = existing ?? data[0] ?? null;
+    if (next) {
+      activeAgentId.value = next.id;
+      fillAgentForm(next);
+      await loadAgentRuns(next.id);
+      await loadAgentMemories(next.id);
+    } else {
+      activeAgentId.value = '';
+      resetAgentForm();
+    }
+    void loadAgentResources();
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '加载 Agent 失败';
+  } finally {
+    agentLoading.value = false;
+  }
+}
+
+async function loadAgentRuns(agentId = activeAgentId.value) {
+  if (!agentId || !isAuthenticated.value) {
+    agentRuns.value = [];
+    activeAgentRun.value = null;
+    return;
+  }
+  try {
+    agentRuns.value = await fetchAgentRuns(agentId, backendBaseUrl.value);
+    activeAgentRun.value = agentRuns.value[0] ?? activeAgentRun.value;
+  } catch (error) {
+    console.error('[loadAgentRuns] failed:', error);
+  }
+}
+
+function createAgentDraft() {
+  activeAgentId.value = '';
+  resetAgentForm();
+  status.value = '已创建本地 Agent 草稿';
+}
+
+function selectAgent(agent: AgentDefinition) {
+  activeAgentId.value = agent.id;
+  fillAgentForm(agent);
+  void loadAgentRuns(agent.id);
+  void loadAgentMemories(agent.id);
+}
+
+async function persistAgent(): Promise<AgentDefinition | null> {
+  if (!isAuthenticated.value) {
+    isAuthDialogOpen.value = true;
+    return null;
+  }
+  const name = agentForm.value.name.trim();
+  const model = agentForm.value.model.trim();
+  if (!name || !model) {
+    status.value = '请填写 Agent 名称并选择模型';
+    return null;
+  }
+
+  agentSaving.value = true;
+  try {
+    const payload = {
+      name,
+      description: agentForm.value.description.trim(),
+      model,
+      systemPrompt: agentForm.value.systemPrompt.trim(),
+      temperature: agentForm.value.temperature,
+      maxTokens: agentForm.value.maxTokens,
+      memoryEnabled: agentForm.value.memoryEnabled,
+      toolIds: [...agentForm.value.toolIds],
+      knowledgeBaseIds: [...agentForm.value.knowledgeBaseIds],
+      status: agentForm.value.status,
+    };
+    const saved = agentForm.value.id
+      ? await apiUpdateAgent(agentForm.value.id, payload, backendBaseUrl.value)
+      : await apiCreateAgent(payload, backendBaseUrl.value);
+
+    const idx = agents.value.findIndex((agent) => agent.id === saved.id);
+    if (idx >= 0) agents.value.splice(idx, 1, saved);
+    else agents.value.unshift(saved);
+    activeAgentId.value = saved.id;
+    fillAgentForm(saved);
+    status.value = 'Agent 已保存';
+    return saved;
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '保存 Agent 失败';
+    return null;
+  } finally {
+    agentSaving.value = false;
+  }
+}
+
+async function saveAgent() {
+  await persistAgent();
+}
+
+async function removeAgent(agent: AgentDefinition) {
+  if (!window.confirm(`确认删除 Agent「${agent.name}」？运行记录会保留用于审计。`)) return;
+  try {
+    await apiDeleteAgent(agent.id, backendBaseUrl.value);
+    agents.value = agents.value.filter((item) => item.id !== agent.id);
+    if (activeAgentId.value === agent.id) {
+      const next = agents.value[0] ?? null;
+      if (next) {
+        selectAgent(next);
+      } else {
+        activeAgentId.value = '';
+        resetAgentForm();
+      }
+    }
+    status.value = 'Agent 已删除';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '删除 Agent 失败';
+  }
+}
+
+async function runCurrentAgent() {
+  const input = agentPrompt.value.trim();
+  if (!input || agentRunning.value) return;
+  const agent = agentForm.value.id ? activeAgent.value : await persistAgent();
+  if (!agent) return;
+
+  agentRunning.value = true;
+  activeAgentRun.value = null;
+  status.value = 'Agent 正在执行';
+  try {
+    const run = await apiRunAgent(agent.id, input, backendBaseUrl.value);
+    activeAgentRun.value = run;
+    agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id)].slice(0, 20);
+    agentPrompt.value = '';
+    status.value = run.status === 'succeeded' ? 'Agent 执行完成' : 'Agent 执行失败';
+    try { authUser.value = await fetchMe(backendBaseUrl.value); } catch {}
+    try { billingLedger.value = await fetchBillingLedger(backendBaseUrl.value); } catch {}
+    void loadAgents();
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '运行 Agent 失败';
+  } finally {
+    agentRunning.value = false;
+  }
+}
+
+function selectAgentRun(run: AgentRun) {
+  activeAgentRun.value = run;
+}
+
+function agentRunTagType(statusValue: AgentRun['status'] | AgentRun['steps'][number]['status']) {
+  if (statusValue === 'succeeded') return 'success';
+  if (statusValue === 'failed') return 'danger';
+  return 'warning';
+}
+
+function formatAgentDate(value?: string | null) {
+  if (!value) return '暂无';
+  const date = new Date(value.replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function formatStepMetadata(raw: string) {
+  if (!raw) return '';
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+async function createKnowledgeBaseFromForm() {
+  const name = knowledgeForm.value.name.trim();
+  if (!name || knowledgeCreating.value) return;
+  knowledgeCreating.value = true;
+  try {
+    const kb = await apiCreateKnowledgeBase({
+      name,
+      description: knowledgeForm.value.description.trim(),
+    }, backendBaseUrl.value);
+    knowledgeBases.value = [kb, ...knowledgeBases.value.filter((item) => item.id !== kb.id)];
+    knowledgeDocForm.value.kbId = kb.id;
+    knowledgeForm.value = { name: '', description: '' };
+    status.value = '知识库已创建';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '创建知识库失败';
+  } finally {
+    knowledgeCreating.value = false;
+  }
+}
+
+async function addDocumentToKnowledgeBase() {
+  const kbId = knowledgeDocForm.value.kbId;
+  const title = knowledgeDocForm.value.title.trim();
+  const content = knowledgeDocForm.value.content.trim();
+  if (!kbId || !title || !content || knowledgeDocSaving.value) return;
+  knowledgeDocSaving.value = true;
+  try {
+    const result = await apiAddKnowledgeDocument(kbId, { title, content }, backendBaseUrl.value);
+    if (!agentForm.value.knowledgeBaseIds.includes(kbId)) {
+      agentForm.value.knowledgeBaseIds = [...agentForm.value.knowledgeBaseIds, kbId];
+    }
+    knowledgeDocForm.value.title = '';
+    knowledgeDocForm.value.content = '';
+    await loadAgentResources();
+    status.value = `文档已入库，切分 ${result.chunkCount} 个片段`;
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '写入知识库失败';
+  } finally {
+    knowledgeDocSaving.value = false;
+  }
+}
+
+async function createAgentMemory() {
+  const content = memoryForm.value.content.trim();
+  if (!content || memorySaving.value) return;
+  if (!agentForm.value.id) {
+    status.value = '请先保存 Agent，再写入专属记忆';
+    return;
+  }
+  memorySaving.value = true;
+  try {
+    await apiCreateMemory({
+      agentId: agentForm.value.id,
+      namespace: 'manual',
+      memoryType: 'fact',
+      content,
+      importance: memoryForm.value.importance,
+    }, backendBaseUrl.value);
+    memoryForm.value.content = '';
+    await loadAgentMemories(agentForm.value.id);
+    status.value = '记忆已写入';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '写入记忆失败';
+  } finally {
+    memorySaving.value = false;
+  }
+}
+
+async function createDefaultWorkflow() {
+  if (workflowCreating.value) return;
+  workflowCreating.value = true;
+  try {
+    const nodes: WorkflowNode[] = [];
+    if (agentForm.value.memoryEnabled && agentForm.value.id) {
+      nodes.push({
+        id: createId('wf-memory'),
+        type: 'memory',
+        name: '长期记忆检索',
+        config: { agentId: agentForm.value.id },
+      });
+    }
+    if (agentForm.value.knowledgeBaseIds.length > 0) {
+      nodes.push({
+        id: createId('wf-knowledge'),
+        type: 'knowledge',
+        name: '知识库检索',
+        config: { kbIds: agentForm.value.knowledgeBaseIds },
+      });
+    }
+    if (agentForm.value.toolIds.length > 0) {
+      const textStatsTool = availableTools.value.find((tool) => tool.name === 'text_stats' && agentForm.value.toolIds.includes(tool.id));
+      if (textStatsTool) {
+        nodes.push({
+          id: createId('wf-tool'),
+          type: 'tool',
+          name: '文本统计',
+          config: { toolId: textStatsTool.id, args: { text: '{{input}}' } },
+        });
+      }
+    }
+    nodes.push({
+      id: createId('wf-prompt'),
+      type: 'prompt',
+      name: '结果整理',
+      config: { template: 'Workflow 输入:\n{{input}}\n\n请基于以上上下文整理可执行要点。' },
+    });
+
+    const workflow = await apiCreateWorkflow({
+      name: `${agentForm.value.name || 'Agent'} Workflow`,
+      description: 'Agent Studio 生成的顺序编排',
+      nodes,
+    }, backendBaseUrl.value);
+    workflows.value = [workflow, ...workflows.value.filter((item) => item.id !== workflow.id)];
+    activeWorkflowId.value = workflow.id;
+    status.value = 'Workflow 已生成';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '生成 Workflow 失败';
+  } finally {
+    workflowCreating.value = false;
+  }
+}
+
+async function runSelectedWorkflow() {
+  const input = workflowInput.value.trim();
+  if (!activeWorkflowId.value || !input || workflowRunning.value) return;
+  workflowRunning.value = true;
+  activeWorkflowRun.value = null;
+  try {
+    activeWorkflowRun.value = await apiRunWorkflow(activeWorkflowId.value, input, backendBaseUrl.value);
+    workflowInput.value = '';
+    status.value = activeWorkflowRun.value.status === 'succeeded' ? 'Workflow 执行完成' : 'Workflow 执行失败';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '运行 Workflow 失败';
+  } finally {
+    workflowRunning.value = false;
   }
 }
 
@@ -754,6 +1234,7 @@ async function loadUserData() {
   } catch (e) { console.error('[loadUserData] apiKeys failed:', e); }
   try { pageModelsConfig.value = await fetchPageModels(backendBaseUrl.value); } catch (e) { console.error('[loadUserData] pageModels failed:', e); }
   try { await loadModels(); } catch (e) { console.error('[loadUserData] loadModels failed:', e); }
+  try { await loadAgents(); } catch (e) { console.error('[loadUserData] loadAgents failed:', e); }
   isSessionLoaded.value = true;
 }
 
@@ -770,6 +1251,16 @@ function logout() {
   billingRules.value = [];
   billingLedger.value = [];
   apiKeys.value = [];
+  agents.value = [];
+  activeAgentId.value = '';
+  agentRuns.value = [];
+  activeAgentRun.value = null;
+  availableTools.value = [];
+  knowledgeBases.value = [];
+  agentMemories.value = [];
+  workflows.value = [];
+  activeWorkflowId.value = '';
+  activeWorkflowRun.value = null;
   isSessionLoaded.value = false;
   isAuthLoaded.value = true;
   sessions.value = [{
@@ -2275,14 +2766,14 @@ darkMediaQuery2.addEventListener('change', onDarkChange);
 
 function switchPage(mode: PageMode) {
   pageMode.value = mode;
-  if (mode === 'battle') window.location.hash = '/battle';
+  if (mode === 'agent') window.location.hash = '/agent';
+    else if (mode === 'battle') window.location.hash = '/battle';
     else if (mode === 'group') window.location.hash = '/group';
     else if (mode === 'console') window.location.hash = '/console';
     else if (mode === 'api') window.location.hash = '/api';
     else if (mode === 'admin') window.location.hash = '/admin';
     else if (mode === 'vision') window.location.hash = '/vision';
     else if (mode === 'tts') window.location.hash = '/tts';
-    else if (mode === 'multimodal') window.location.hash = '/multimodal';
     else if (mode === 'multimodal') window.location.hash = '/multimodal';
     else if (mode === 'router') window.location.hash = '/router';
     else if (mode === 'collab') window.location.hash = '/collab';
@@ -3679,6 +4170,11 @@ function copyToClipboard(text: string) {
     () => { status.value = '复制失败'; },
   );
 }
+
+function openVideoUploadInput() {
+  const el = window.document.getElementById('video-upload-input');
+  if (el) el.click();
+}
 </script>
 
 <template>
@@ -3702,30 +4198,40 @@ function copyToClipboard(text: string) {
           <el-icon><ChatDotRound /></el-icon>
           <span>聊天</span>
         </el-menu-item>
-        <el-menu-item index="battle">
-          <el-icon><Lightning /></el-icon>
-          <span>对战</span>
+        <el-menu-item index="agent">
+          <el-icon><Star /></el-icon>
+          <span>Agent</span>
         </el-menu-item>
-        <el-menu-item index="group">
-          <el-icon><UserFilled /></el-icon>
-          <span>群聊</span>
-        </el-menu-item>
-        <el-menu-item index="collab">
-          <el-icon><TrendCharts /></el-icon>
-          <span>协同推理</span>
-        </el-menu-item>
-        <el-menu-item index="vision">
-          <el-icon><Monitor /></el-icon>
-          <span>视觉理解</span>
-        </el-menu-item>
-        <el-menu-item index="tts">
-          <el-icon><Headset /></el-icon>
-          <span>语音生成</span>
-        </el-menu-item>
-        <el-menu-item index="multimodal">
-          <el-icon><VideoCamera /></el-icon>
-          <span>多模态 Beta</span>
-        </el-menu-item>
+        <el-sub-menu index="toolbox">
+          <template #title>
+            <el-icon><MagicStick /></el-icon>
+            <span>玩具箱</span>
+          </template>
+          <el-menu-item index="battle">
+            <el-icon><Lightning /></el-icon>
+            <span>对战</span>
+          </el-menu-item>
+          <el-menu-item index="group">
+            <el-icon><UserFilled /></el-icon>
+            <span>群组</span>
+          </el-menu-item>
+          <el-menu-item index="collab">
+            <el-icon><TrendCharts /></el-icon>
+            <span>协同推理</span>
+          </el-menu-item>
+          <el-menu-item index="vision">
+            <el-icon><Monitor /></el-icon>
+            <span>视觉理解</span>
+          </el-menu-item>
+          <el-menu-item index="tts">
+            <el-icon><Headset /></el-icon>
+            <span>语音生成</span>
+          </el-menu-item>
+          <el-menu-item index="multimodal">
+            <el-icon><PictureFilled /></el-icon>
+            <span>多模态 Beta</span>
+          </el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="console">
           <el-icon><DataAnalysis /></el-icon>
           <span>控制台</span>
@@ -3768,6 +4274,33 @@ function copyToClipboard(text: string) {
               </template>
             </el-dropdown>
           </div>
+        </el-scrollbar>
+      </div>
+      <div v-else-if="pageMode === 'agent'" class="aside-sessions">
+        <el-button type="primary" plain :icon="Plus" @click="createAgentDraft" class="new-chat-btn">新建 Agent</el-button>
+        <el-scrollbar class="session-list">
+          <div
+            v-for="agent in agents"
+            :key="agent.id"
+            class="session-item"
+            :class="{ active: agent.id === activeAgentId }"
+            @click="selectAgent(agent)"
+          >
+            <el-icon :size="14"><Star /></el-icon>
+            <span class="session-title">{{ agent.name }}</span>
+            <el-tag v-if="agent.runCount > 0" size="small" type="info">{{ agent.runCount }}</el-tag>
+            <el-dropdown trigger="click" class="session-menu" @command="(cmd: string | number) => { if (cmd === 'delete') removeAgent(agent); }" @click.stop>
+              <el-icon :size="14" class="session-menu-icon"><MoreFilled /></el-icon>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="delete" style="color: #ef4444">
+                    <el-icon><Delete /></el-icon> 删除 Agent
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+          <el-empty v-if="!agentLoading && agents.length === 0" description="还没有 Agent" :image-size="64" />
         </el-scrollbar>
       </div>
 
@@ -3951,6 +4484,360 @@ function copyToClipboard(text: string) {
               </div>
             </div>
           </el-card>
+        </div>
+      </template>
+
+      <!-- ========== AGENT PAGE ========== -->
+      <template v-else-if="pageMode === 'agent'">
+        <div class="page-header">
+          <div class="header-left" style="gap:8px">
+            <strong>Agent Studio</strong>
+            <el-button :icon="Refresh" :loading="agentLoading || agentResourceLoading" @click="refreshAgentStudio()">刷新 Agent</el-button>
+            <el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button>
+          </div>
+          <div class="header-right">
+            <template v-if="isAuthLoaded">
+              <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
+              <el-dropdown v-else trigger="click" @command="handleUserMenu">
+                <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
+                    <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-tag>{{ status }}</el-tag>
+            </template>
+          </div>
+        </div>
+
+        <div class="agent-page">
+          <el-alert v-if="isAuthLoaded && !isAuthenticated" type="warning" :closable="false" show-icon title="请先登录以创建和运行 Agent" />
+
+          <template v-else>
+            <el-card class="agent-panel agent-config-panel" shadow="never">
+              <template #header>
+                <div class="agent-panel-head">
+                  <span>Agent 配置</span>
+                  <el-tag size="small" :type="agentForm.status === 'active' ? 'success' : 'info'">
+                    {{ agentForm.status === 'active' ? 'Active' : 'Archived' }}
+                  </el-tag>
+                </div>
+              </template>
+
+              <el-form label-position="top" class="agent-form">
+                <el-form-item label="名称">
+                  <el-input v-model="agentForm.name" maxlength="80" show-word-limit placeholder="例如：产品客服 Agent" />
+                </el-form-item>
+                <el-form-item label="描述">
+                  <el-input v-model="agentForm.description" maxlength="500" show-word-limit placeholder="这个 Agent 适合处理什么任务" />
+                </el-form-item>
+                <el-form-item label="模型">
+                  <el-select v-model="agentForm.model" placeholder="选择模型" filterable style="width:100%">
+                    <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id">
+                      <span>{{ model.id }}</span>
+                      <el-tag v-if="getModelTags(model.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
+                    </el-option>
+                  </el-select>
+                </el-form-item>
+                <div class="agent-form-grid">
+                  <el-form-item label="Temperature">
+                    <el-slider v-model="agentForm.temperature" :min="0" :max="2" :step="0.1" show-input />
+                  </el-form-item>
+                  <el-form-item label="Max Tokens">
+                    <el-input-number v-model="agentForm.maxTokens" :min="1" :max="32000" :step="256" style="width:100%" />
+                  </el-form-item>
+                </div>
+                <el-form-item label="状态">
+                  <el-segmented
+                    v-model="agentForm.status"
+                    :options="[
+                      { label: 'Active', value: 'active' },
+                      { label: 'Archived', value: 'archived' },
+                    ]"
+                  />
+                </el-form-item>
+                <el-form-item label="长期记忆">
+                  <el-switch v-model="agentForm.memoryEnabled" active-text="启用" inactive-text="关闭" />
+                </el-form-item>
+                <el-form-item label="工具">
+                  <el-select
+                    v-model="agentForm.toolIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="选择工具"
+                    style="width:100%"
+                  >
+                    <el-option
+                      v-for="tool in availableTools"
+                      :key="tool.id"
+                      :label="tool.displayName"
+                      :value="tool.id"
+                    >
+                      <span>{{ tool.displayName }}</span>
+                      <el-text type="info" size="small" style="margin-left:8px">{{ tool.name }}</el-text>
+                    </el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="知识库">
+                  <el-select
+                    v-model="agentForm.knowledgeBaseIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="选择知识库"
+                    style="width:100%"
+                  >
+                    <el-option
+                      v-for="kb in knowledgeBases"
+                      :key="kb.id"
+                      :label="kb.name"
+                      :value="kb.id"
+                    >
+                      <span>{{ kb.name }}</span>
+                      <el-text type="info" size="small" style="margin-left:8px">{{ kb.chunkCount }} chunks</el-text>
+                    </el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="系统提示词">
+                  <el-input
+                    v-model="agentForm.systemPrompt"
+                    type="textarea"
+                    :rows="8"
+                    resize="vertical"
+                    maxlength="12000"
+                    show-word-limit
+                    placeholder="定义角色、目标、输出格式、约束和安全边界"
+                  />
+                </el-form-item>
+              </el-form>
+
+              <div class="agent-actions">
+                <el-button @click="createAgentDraft" :icon="Plus">新草稿</el-button>
+                <el-button type="primary" :loading="agentSaving" @click="saveAgent()">保存 Agent</el-button>
+              </div>
+            </el-card>
+
+            <el-card class="agent-panel agent-run-panel" shadow="never">
+              <template #header>
+                <div class="agent-panel-head">
+                  <span>{{ agentForm.id ? agentForm.name : '未保存 Agent' }}</span>
+                  <div class="agent-head-tags">
+                    <el-tag v-if="agentForm.model" size="small">{{ agentForm.model }}</el-tag>
+                    <el-tag v-if="agentForm.memoryEnabled" size="small" type="success">Memory</el-tag>
+                    <el-tag v-if="agentForm.toolIds.length" size="small" type="warning">Tools {{ agentForm.toolIds.length }}</el-tag>
+                    <el-tag v-if="agentForm.knowledgeBaseIds.length" size="small" type="primary">RAG {{ agentForm.knowledgeBaseIds.length }}</el-tag>
+                    <el-tag v-if="activeAgent" size="small" type="info">运行 {{ activeAgent.runCount }} 次</el-tag>
+                  </div>
+                </div>
+              </template>
+
+              <div class="agent-run-box">
+                <el-input
+                  v-model="agentPrompt"
+                  type="textarea"
+                  :rows="5"
+                  resize="vertical"
+                  placeholder="给这个 Agent 一个明确任务，例如：根据我们的产品手册，生成一份客服答复。"
+                  :disabled="agentRunning"
+                  @keydown.enter.exact.prevent="runCurrentAgent()"
+                  @compositionstart="isComposing = true"
+                  @compositionend="isComposing = false"
+                />
+                <div class="agent-run-actions">
+                  <el-text type="info" size="small">
+                    {{ agentForm.id ? `Agent ID: ${agentForm.id}` : '首次运行前会先保存 Agent' }}
+                  </el-text>
+                  <el-button
+                    type="primary"
+                    :icon="Promotion"
+                    :loading="agentRunning"
+                    :disabled="!agentPrompt.trim() || !agentForm.model"
+                    @click="runCurrentAgent()"
+                  >
+                    运行 Agent
+                  </el-button>
+                </div>
+              </div>
+
+              <div v-if="activeAgentRun" class="agent-result">
+                <div class="agent-run-meta">
+                  <el-tag :type="agentRunTagType(activeAgentRun.status)">{{ activeAgentRun.status }}</el-tag>
+                  <el-tag type="info">{{ activeAgentRun.model }}</el-tag>
+                  <el-tag type="info">{{ activeAgentRun.totalTokens }} tokens</el-tag>
+                  <el-tag type="info">{{ activeAgentRun.latencyMs }} ms</el-tag>
+                  <span>{{ formatAgentDate(activeAgentRun.createdAt) }}</span>
+                </div>
+
+                <el-alert
+                  v-if="activeAgentRun.error"
+                  type="error"
+                  :closable="false"
+                  show-icon
+                  :title="activeAgentRun.error"
+                  style="margin-bottom:12px"
+                />
+
+                <div class="agent-output">
+                  <div class="agent-section-title">输出</div>
+                  <div v-if="activeAgentRun.output" class="markdown-content" v-html="renderMarkdown(activeAgentRun.output)"></div>
+                  <div v-else class="agent-placeholder">暂无输出</div>
+                </div>
+
+                <div class="agent-trace">
+                  <div class="agent-section-title">Trace</div>
+                  <el-timeline>
+                    <el-timeline-item
+                      v-for="step in activeAgentRun.steps"
+                      :key="step.id"
+                      :timestamp="formatAgentDate(step.startedAt)"
+                      placement="top"
+                      :type="agentRunTagType(step.status)"
+                    >
+                      <div class="agent-step">
+                        <div class="agent-step-head">
+                          <strong>{{ step.name }}</strong>
+                          <div>
+                            <el-tag size="small" :type="agentRunTagType(step.status)">{{ step.status }}</el-tag>
+                            <el-tag size="small" type="info" style="margin-left:4px">{{ step.latencyMs }} ms</el-tag>
+                          </div>
+                        </div>
+                        <div v-if="step.error" class="agent-step-error">{{ step.error }}</div>
+                        <pre v-if="formatStepMetadata(step.metadata)" class="agent-step-meta">{{ formatStepMetadata(step.metadata) }}</pre>
+                      </div>
+                    </el-timeline-item>
+                  </el-timeline>
+                </div>
+              </div>
+
+              <el-empty v-else description="保存并运行 Agent 后，这里会显示输出和执行链路。" :image-size="96" />
+            </el-card>
+
+            <el-card class="agent-panel agent-history-panel" shadow="never">
+              <template #header>
+                <div class="agent-panel-head">
+                  <span>Agent 控制台</span>
+                  <el-button size="small" text :loading="agentResourceLoading" @click="loadAgentResources()">刷新</el-button>
+                </div>
+              </template>
+              <el-tabs v-model="agentSideTab" class="agent-side-tabs">
+                <el-tab-pane label="历史" name="history">
+                  <el-scrollbar class="agent-history-list">
+                    <div
+                      v-for="run in agentRuns"
+                      :key="run.id"
+                      class="agent-history-item"
+                      :class="{ active: activeAgentRun?.id === run.id }"
+                      @click="selectAgentRun(run)"
+                    >
+                      <div class="agent-history-head">
+                        <el-tag size="small" :type="agentRunTagType(run.status)">{{ run.status }}</el-tag>
+                        <span>{{ run.totalTokens }} tokens</span>
+                      </div>
+                      <div class="agent-history-input">{{ run.input }}</div>
+                      <div class="agent-history-time">{{ formatAgentDate(run.createdAt) }}</div>
+                    </div>
+                    <el-empty v-if="agentRuns.length === 0" description="暂无运行历史" :image-size="72" />
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="知识" name="knowledge">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="knowledgeForm.name" placeholder="知识库名称" maxlength="80" />
+                      <el-input v-model="knowledgeForm.description" placeholder="描述" maxlength="300" />
+                      <el-button type="primary" plain :loading="knowledgeCreating" :disabled="!knowledgeForm.name.trim()" @click="createKnowledgeBaseFromForm()">创建知识库</el-button>
+                      <el-divider />
+                      <el-select v-model="knowledgeDocForm.kbId" placeholder="选择知识库" filterable style="width:100%">
+                        <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
+                      </el-select>
+                      <el-input v-model="knowledgeDocForm.title" placeholder="文档标题" maxlength="120" />
+                      <el-input v-model="knowledgeDocForm.content" type="textarea" :rows="5" resize="vertical" placeholder="粘贴文档内容" />
+                      <el-button
+                        type="primary"
+                        :loading="knowledgeDocSaving"
+                        :disabled="!knowledgeDocForm.kbId || !knowledgeDocForm.title.trim() || !knowledgeDocForm.content.trim()"
+                        @click="addDocumentToKnowledgeBase()"
+                      >
+                        写入文档
+                      </el-button>
+                      <div v-for="kb in knowledgeBases" :key="kb.id" class="agent-resource-item">
+                        <div class="agent-resource-title">{{ kb.name }}</div>
+                        <div class="agent-resource-meta">{{ kb.documentCount }} docs · {{ kb.chunkCount }} chunks</div>
+                      </div>
+                      <el-empty v-if="knowledgeBases.length === 0" description="暂无知识库" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="记忆" name="memory">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="memoryForm.content" type="textarea" :rows="5" resize="vertical" placeholder="写入一条长期记忆" />
+                      <div class="agent-inline-field">
+                        <span>重要性</span>
+                        <el-slider v-model="memoryForm.importance" :min="1" :max="5" :step="1" show-stops />
+                      </div>
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="memorySaving"
+                        :disabled="!memoryForm.content.trim() || !agentForm.id"
+                        @click="createAgentMemory()"
+                      >
+                        写入记忆
+                      </el-button>
+                      <el-divider />
+                      <div v-for="memory in agentMemories" :key="memory.id" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
+                          <span>重要性 {{ memory.importance }}</span>
+                        </div>
+                        <div class="agent-resource-content">{{ memory.content }}</div>
+                      </div>
+                      <el-empty v-if="agentMemories.length === 0" description="暂无记忆" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="Workflow" name="workflow">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-button type="primary" plain :loading="workflowCreating" @click="createDefaultWorkflow()">生成 Workflow</el-button>
+                      <el-select v-model="activeWorkflowId" placeholder="选择 Workflow" filterable style="width:100%">
+                        <el-option v-for="workflow in workflows" :key="workflow.id" :label="workflow.name" :value="workflow.id" />
+                      </el-select>
+                      <el-input v-model="workflowInput" type="textarea" :rows="4" resize="vertical" placeholder="Workflow 输入" />
+                      <el-button
+                        type="primary"
+                        :loading="workflowRunning"
+                        :disabled="!activeWorkflowId || !workflowInput.trim()"
+                        @click="runSelectedWorkflow()"
+                      >
+                        运行 Workflow
+                      </el-button>
+                      <div v-if="activeWorkflowRun" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <el-tag size="small" :type="agentRunTagType(activeWorkflowRun.status)">{{ activeWorkflowRun.status }}</el-tag>
+                          <span>{{ activeWorkflowRun.steps.length }} steps</span>
+                        </div>
+                        <pre class="agent-step-meta">{{ activeWorkflowRun.output || activeWorkflowRun.error }}</pre>
+                      </div>
+                      <div v-for="workflow in workflows" :key="workflow.id" class="agent-resource-item">
+                        <div class="agent-resource-title">{{ workflow.name }}</div>
+                        <div class="agent-resource-meta">{{ workflow.nodes.length }} nodes · {{ workflow.status }}</div>
+                      </div>
+                      <el-empty v-if="workflows.length === 0" description="暂无 Workflow" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+              </el-tabs>
+            </el-card>
+          </template>
         </div>
       </template>
 
@@ -4442,7 +5329,7 @@ function copyToClipboard(text: string) {
                 <div class="video-player-section">
                   <el-card shadow="never">
                     <template #header><strong>视频播放</strong></template>
-                    <div v-if="!videoUrl" class="video-upload-area" @click="() => { const el = document.getElementById('video-upload-input'); if (el) el.click(); }">
+                    <div v-if="!videoUrl" class="video-upload-area" @click="openVideoUploadInput()">
                       <el-icon :size="48" color="#c0c4cc"><VideoCamera /></el-icon>
                       <p>点击上传视频文件 (MP4, WebM)</p>
                       <input id="video-upload-input" type="file" accept="video/*" style="display:none" @change="handleVideoUpload" />

@@ -1,4 +1,4 @@
-export type PageMode = 'chat' | 'battle' | 'group' | 'collab' | 'console' | 'api' | 'admin' | 'vision' | 'tts' | 'multimodal' | 'router' | 'docs';
+export type PageMode = 'chat' | 'agent' | 'battle' | 'group' | 'collab' | 'console' | 'api' | 'admin' | 'vision' | 'tts' | 'multimodal' | 'router' | 'docs';
 export type ChatRole = 'user' | 'assistant';
 
 export interface ChatMessage {

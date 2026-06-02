@@ -1,0 +1,252 @@
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { DatabaseService } from '../database/database.service';
+
+export interface ToolDefinition {
+  id: string;
+  userId: string | null;
+  name: string;
+  displayName: string;
+  description: string;
+  schema: Record<string, unknown>;
+  implementationType: string;
+  enabled: boolean;
+}
+
+export interface ToolInvocationResult {
+  id: string;
+  toolId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  output: string;
+  status: 'succeeded' | 'failed';
+  error: string;
+  latencyMs: number;
+}
+
+type ToolRow = {
+  id: string;
+  userId: string | null;
+  name: string;
+  displayName: string;
+  description: string;
+  schemaJson: string;
+  implementationType: string;
+  enabled: number | string;
+};
+
+@Injectable()
+export class ToolsService {
+  constructor(private readonly databaseService: DatabaseService) {}
+
+  async listForUser(userId: string): Promise<ToolDefinition[]> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, name, display_name as displayName, description,
+              schema_json as schemaJson, implementation_type as implementationType, enabled
+       FROM tools
+       WHERE enabled = 1 AND (user_id IS NULL OR user_id = ?)
+       ORDER BY user_id IS NULL DESC, display_name ASC`,
+    ).all(userId) as unknown as ToolRow[];
+    return rows.map((row) => this.mapTool(row));
+  }
+
+  async getById(userId: string, toolId: string): Promise<ToolDefinition> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, name, display_name as displayName, description,
+              schema_json as schemaJson, implementation_type as implementationType, enabled
+       FROM tools
+       WHERE id = ? AND enabled = 1 AND (user_id IS NULL OR user_id = ?)
+       LIMIT 1`,
+    ).get(toolId, userId) as unknown as ToolRow | undefined;
+    if (!row) throw new NotFoundException('工具不存在或不可用');
+    return this.mapTool(row);
+  }
+
+  async getAgentTools(userId: string, agentId: string): Promise<ToolDefinition[]> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT t.id, t.user_id as userId, t.name, t.display_name as displayName, t.description,
+              t.schema_json as schemaJson, t.implementation_type as implementationType, t.enabled
+       FROM agent_tools at
+       JOIN tools t ON t.id = at.tool_id
+       WHERE at.user_id = ? AND at.agent_id = ? AND t.enabled = 1
+       ORDER BY t.display_name ASC`,
+    ).all(userId, agentId) as unknown as ToolRow[];
+    return rows.map((row) => this.mapTool(row));
+  }
+
+  async setAgentTools(userId: string, agentId: string, toolIds: string[]): Promise<void> {
+    await this.databaseService.connection.prepare(
+      'DELETE FROM agent_tools WHERE user_id = ? AND agent_id = ?',
+    ).run(userId, agentId);
+
+    const uniqueIds = Array.from(new Set(toolIds.filter(Boolean)));
+    for (const toolId of uniqueIds) {
+      await this.getById(userId, toolId);
+      await this.databaseService.connection.prepare(
+        'INSERT INTO agent_tools (agent_id, tool_id, user_id, created_at) VALUES (?, ?, ?, ?)',
+      ).run(agentId, toolId, userId, this.databaseService.now());
+    }
+  }
+
+  async invoke(
+    userId: string,
+    toolIdOrName: string,
+    args: Record<string, unknown>,
+    context?: { agentId?: string; runId?: string },
+  ): Promise<ToolInvocationResult> {
+    const tool = await this.resolveTool(userId, toolIdOrName);
+    const startedAt = Date.now();
+    const invocationId = randomUUID();
+    let output = '';
+    let error = '';
+    let status: 'succeeded' | 'failed' = 'succeeded';
+
+    try {
+      output = await this.runBuiltin(tool.name, args);
+    } catch (err) {
+      status = 'failed';
+      error = err instanceof Error ? err.message : String(err);
+    }
+
+    const latencyMs = Date.now() - startedAt;
+    await this.databaseService.connection.prepare(
+      `INSERT INTO tool_invocations
+        (id, tool_id, agent_id, run_id, user_id, tool_name, input, output, status, error, latency_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      invocationId,
+      tool.id,
+      context?.agentId ?? '',
+      context?.runId ?? '',
+      userId,
+      tool.name,
+      JSON.stringify(args),
+      output,
+      status,
+      error,
+      latencyMs,
+      this.databaseService.now(),
+    );
+
+    return {
+      id: invocationId,
+      toolId: tool.id,
+      toolName: tool.name,
+      input: args,
+      output,
+      status,
+      error,
+      latencyMs,
+    };
+  }
+
+  async autoInvokeForInput(
+    userId: string,
+    agentId: string,
+    runId: string,
+    input: string,
+  ): Promise<ToolInvocationResult[]> {
+    const tools = await this.getAgentTools(userId, agentId);
+    const results: ToolInvocationResult[] = [];
+    const lower = input.toLowerCase();
+
+    for (const tool of tools) {
+      if (tool.name === 'current_time' && /时间|日期|今天|现在|current\s*time|date/i.test(input)) {
+        results.push(await this.invoke(userId, tool.id, { timezone: 'Asia/Shanghai' }, { agentId, runId }));
+      }
+
+      if (tool.name === 'uuid' && /uuid|唯一id|唯一标识/i.test(input)) {
+        results.push(await this.invoke(userId, tool.id, {}, { agentId, runId }));
+      }
+
+      if (tool.name === 'text_stats' && /字数|字符|词数|统计|text\s*stats/i.test(input)) {
+        results.push(await this.invoke(userId, tool.id, { text: input }, { agentId, runId }));
+      }
+
+      if (tool.name === 'calculator' && (/计算|算一下|calculate/.test(input) || lower.includes('math'))) {
+        const expression = this.extractExpression(input);
+        if (expression) {
+          results.push(await this.invoke(userId, tool.id, { expression }, { agentId, runId }));
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private async resolveTool(userId: string, toolIdOrName: string): Promise<ToolDefinition> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, name, display_name as displayName, description,
+              schema_json as schemaJson, implementation_type as implementationType, enabled
+       FROM tools
+       WHERE enabled = 1 AND (id = ? OR name = ?) AND (user_id IS NULL OR user_id = ?)
+       ORDER BY user_id IS NULL DESC
+       LIMIT 1`,
+    ).get(toolIdOrName, toolIdOrName, userId) as unknown as ToolRow | undefined;
+    if (!row) throw new NotFoundException('工具不存在或不可用');
+    return this.mapTool(row);
+  }
+
+  private async runBuiltin(name: string, args: Record<string, unknown>): Promise<string> {
+    if (name === 'current_time') {
+      const timezone = typeof args.timezone === 'string' ? args.timezone : 'Asia/Shanghai';
+      return new Intl.DateTimeFormat('zh-CN', {
+        timeZone: timezone,
+        dateStyle: 'full',
+        timeStyle: 'long',
+      }).format(new Date());
+    }
+
+    if (name === 'uuid') {
+      return randomUUID();
+    }
+
+    if (name === 'text_stats') {
+      const text = typeof args.text === 'string' ? args.text : '';
+      const cjk = [...text].filter((ch) => /[\u3400-\u9fff]/.test(ch)).length;
+      const words = (text.match(/[A-Za-z0-9_]+/g) ?? []).length;
+      const lines = text ? text.split(/\r?\n/).length : 0;
+      return JSON.stringify({ chars: [...text].length, cjkChars: cjk, englishWords: words, lines }, null, 2);
+    }
+
+    if (name === 'calculator') {
+      const expression = typeof args.expression === 'string' ? args.expression.trim() : '';
+      if (!expression || expression.length > 200) {
+        throw new BadRequestException('计算表达式为空或过长');
+      }
+      if (!/^[0-9+\-*/%.^()\s]+$/.test(expression)) {
+        throw new BadRequestException('表达式包含不支持的字符');
+      }
+      const normalized = expression.replace(/\^/g, '**');
+      const value = Function(`"use strict"; return (${normalized});`)() as unknown;
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new BadRequestException('计算结果无效');
+      }
+      return String(value);
+    }
+
+    throw new BadRequestException(`暂不支持的内置工具: ${name}`);
+  }
+
+  private extractExpression(input: string): string {
+    const matches = input.match(/[0-9][0-9+\-*/%.^()\s]{2,}[0-9)]/g);
+    return matches?.[0]?.trim() ?? '';
+  }
+
+  private mapTool(row: ToolRow): ToolDefinition {
+    let schema: Record<string, unknown> = {};
+    try {
+      schema = JSON.parse(row.schemaJson || '{}') as Record<string, unknown>;
+    } catch {}
+    return {
+      id: row.id,
+      userId: row.userId || null,
+      name: row.name,
+      displayName: row.displayName,
+      description: row.description,
+      schema,
+      implementationType: row.implementationType,
+      enabled: Number(row.enabled) === 1,
+    };
+  }
+}

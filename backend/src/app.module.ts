@@ -11,6 +11,11 @@ import { ProvidersModule } from './providers/providers.module';
 import { RouterModule } from './router/router.module';
 import { CollabModule } from './collab/collab.module';
 import { CacheModule } from './cache/cache.module';
+import { AgentsModule } from './agents/agents.module';
+import { ToolsModule } from './tools/tools.module';
+import { KnowledgeModule } from './knowledge/knowledge.module';
+import { MemoryModule } from './memory/memory.module';
+import { WorkflowsModule } from './workflows/workflows.module';
 
 @Module({
   imports: [
@@ -25,6 +30,11 @@ import { CacheModule } from './cache/cache.module';
     RouterModule,
     CollabModule,
     CacheModule,
+    ToolsModule,
+    KnowledgeModule,
+    MemoryModule,
+    AgentsModule,
+    WorkflowsModule,
   ],
   controllers: [HealthController],
 })

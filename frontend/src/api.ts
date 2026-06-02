@@ -69,7 +69,7 @@ export interface ChatCompletionRequest {
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | Array<{ type: string; [key: string]: unknown }>;
   name?: string;
 }
 
@@ -479,6 +479,402 @@ export async function streamCompletion(
     externalSignal?.removeEventListener('abort', onAnyAbort);
     reader.releaseLock();
   }
+}
+
+/* ───────── Agent API ───────── */
+
+export interface AgentDefinition {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  model: string;
+  systemPrompt: string;
+  temperature: number;
+  maxTokens: number;
+  memoryEnabled: boolean;
+  toolIds: string[];
+  knowledgeBaseIds: string[];
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;
+  runCount: number;
+}
+
+export interface AgentInput {
+  name: string;
+  description?: string;
+  model: string;
+  systemPrompt?: string;
+  temperature?: number;
+  maxTokens?: number;
+  memoryEnabled?: boolean;
+  toolIds?: string[];
+  knowledgeBaseIds?: string[];
+  status?: 'active' | 'archived';
+}
+
+export interface AgentRunStep {
+  id: number;
+  runId: string;
+  stepType: string;
+  name: string;
+  status: 'running' | 'succeeded' | 'failed';
+  input: string;
+  output: string;
+  error: string;
+  startedAt: string;
+  endedAt: string | null;
+  latencyMs: number;
+  metadata: string;
+}
+
+export interface AgentRun {
+  id: string;
+  agentId: string;
+  userId: string;
+  status: 'running' | 'succeeded' | 'failed';
+  input: string;
+  output: string;
+  model: string;
+  error: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  latencyMs: number;
+  createdAt: string;
+  completedAt: string | null;
+  steps: AgentRunStep[];
+}
+
+export async function fetchAgents(baseUrl = defaultBaseUrl): Promise<AgentDefinition[]> {
+  const response = await fetch(`${baseUrl}/agents`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentDefinition[] };
+  return payload.data ?? [];
+}
+
+export async function createAgent(payload: AgentInput, baseUrl = defaultBaseUrl): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
+export async function updateAgent(
+  id: string,
+  payload: Partial<AgentInput>,
+  baseUrl = defaultBaseUrl,
+): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
+export async function deleteAgent(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function runAgent(
+  id: string,
+  input: string,
+  baseUrl = defaultBaseUrl,
+): Promise<AgentRun> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ input }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentRun };
+  return data.data;
+}
+
+export async function fetchAgentRuns(id: string, baseUrl = defaultBaseUrl): Promise<AgentRun[]> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs`, {
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentRun[] };
+  return payload.data ?? [];
+}
+
+/* ───────── Agent Capability APIs ───────── */
+
+export interface ToolDefinition {
+  id: string;
+  userId: string | null;
+  name: string;
+  displayName: string;
+  description: string;
+  schema: Record<string, unknown>;
+  implementationType: string;
+  enabled: boolean;
+}
+
+export interface ToolInvocationResult {
+  id: string;
+  toolId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  output: string;
+  status: 'succeeded' | 'failed';
+  error: string;
+  latencyMs: number;
+}
+
+export interface KnowledgeBase {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  documentCount: number;
+  chunkCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeDocumentResult {
+  id: string;
+  kbId: string;
+  title: string;
+  chunkCount: number;
+}
+
+export interface KnowledgeSearchResult {
+  id: string;
+  kbId: string;
+  documentId: string;
+  title: string;
+  content: string;
+  score: number;
+}
+
+export interface MemoryItem {
+  id: string;
+  userId: string;
+  agentId: string | null;
+  namespace: string;
+  memoryType: string;
+  content: string;
+  importance: number;
+  metadata: string;
+  createdAt: string;
+  updatedAt: string;
+  score?: number;
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: 'prompt' | 'tool' | 'knowledge' | 'memory';
+  name?: string;
+  config: Record<string, unknown>;
+}
+
+export interface Workflow {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  nodes: WorkflowNode[];
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  userId: string;
+  status: 'running' | 'succeeded' | 'failed';
+  input: string;
+  output: string;
+  error: string;
+  createdAt: string;
+  completedAt: string | null;
+  steps: Array<{
+    id: number;
+    nodeId: string;
+    nodeType: string;
+    status: string;
+    input: string;
+    output: string;
+    error: string;
+    createdAt: string;
+  }>;
+}
+
+export async function fetchTools(baseUrl = defaultBaseUrl): Promise<ToolDefinition[]> {
+  const response = await fetch(`${baseUrl}/tools`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: ToolDefinition[] };
+  return payload.data ?? [];
+}
+
+export async function invokeTool(
+  id: string,
+  args: Record<string, unknown>,
+  baseUrl = defaultBaseUrl,
+): Promise<ToolInvocationResult> {
+  const response = await fetch(`${baseUrl}/tools/${encodeURIComponent(id)}/invoke`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ args }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: ToolInvocationResult };
+  return payload.data;
+}
+
+export async function fetchKnowledgeBases(baseUrl = defaultBaseUrl): Promise<KnowledgeBase[]> {
+  const response = await fetch(`${baseUrl}/knowledge/bases`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: KnowledgeBase[] };
+  return payload.data ?? [];
+}
+
+export async function createKnowledgeBase(
+  payload: { name: string; description?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<KnowledgeBase> {
+  const response = await fetch(`${baseUrl}/knowledge/bases`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: KnowledgeBase };
+  return data.data;
+}
+
+export async function addKnowledgeDocument(
+  kbId: string,
+  payload: { title: string; content: string },
+  baseUrl = defaultBaseUrl,
+): Promise<KnowledgeDocumentResult> {
+  const response = await fetch(`${baseUrl}/knowledge/bases/${encodeURIComponent(kbId)}/documents`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: KnowledgeDocumentResult };
+  return data.data;
+}
+
+export async function searchKnowledgeBase(
+  kbId: string,
+  query: string,
+  baseUrl = defaultBaseUrl,
+): Promise<KnowledgeSearchResult[]> {
+  const response = await fetch(`${baseUrl}/knowledge/bases/${encodeURIComponent(kbId)}/search`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ query }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: KnowledgeSearchResult[] };
+  return payload.data ?? [];
+}
+
+export async function fetchMemories(agentId?: string, baseUrl = defaultBaseUrl): Promise<MemoryItem[]> {
+  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
+  const response = await fetch(`${baseUrl}/memory${query}`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: MemoryItem[] };
+  return payload.data ?? [];
+}
+
+export async function createMemory(
+  payload: { content: string; agentId?: string; namespace?: string; memoryType?: string; importance?: number },
+  baseUrl = defaultBaseUrl,
+): Promise<MemoryItem> {
+  const response = await fetch(`${baseUrl}/memory`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: MemoryItem };
+  return data.data;
+}
+
+export async function searchMemory(
+  query: string,
+  agentId?: string,
+  baseUrl = defaultBaseUrl,
+): Promise<MemoryItem[]> {
+  const response = await fetch(`${baseUrl}/memory/search`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ query, agentId }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: MemoryItem[] };
+  return payload.data ?? [];
+}
+
+export async function fetchWorkflows(baseUrl = defaultBaseUrl): Promise<Workflow[]> {
+  const response = await fetch(`${baseUrl}/workflows`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: Workflow[] };
+  return payload.data ?? [];
+}
+
+export async function createWorkflow(
+  payload: { name: string; description?: string; nodes: WorkflowNode[] },
+  baseUrl = defaultBaseUrl,
+): Promise<Workflow> {
+  const response = await fetch(`${baseUrl}/workflows`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: Workflow };
+  return data.data;
+}
+
+export async function runWorkflow(
+  id: string,
+  input: string,
+  baseUrl = defaultBaseUrl,
+): Promise<WorkflowRun> {
+  const response = await fetch(`${baseUrl}/workflows/${encodeURIComponent(id)}/runs`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ input }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: WorkflowRun };
+  return data.data;
 }
 
 /* ───────── Admin API ───────── */

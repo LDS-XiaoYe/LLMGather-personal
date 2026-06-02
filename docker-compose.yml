@@ -28,11 +28,12 @@ services:
     image: node:22-alpine
     container_name: llmgather-backend-dev
     working_dir: /app
-    command: sh -c "npm install --include=dev && npm run dev:backend"
+    command: sh scripts/docker-dev-entrypoint.sh npm run dev:backend
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     volumes:
       - .:/app
+      - node_modules_dev:/app/node_modules
     env_file:
       - .env.docker
     environment:
@@ -48,11 +49,12 @@ services:
     image: node:22-alpine
     container_name: llmgather-frontend-dev
     working_dir: /app
-    command: sh -c "npm install --include=dev && npm run dev:frontend"
+    command: sh scripts/docker-dev-entrypoint.sh npm run dev:frontend
     ports:
       - "${FRONTEND_DEV_PORT:-5174}:5173"
     volumes:
       - .:/app
+      - node_modules_dev:/app/node_modules
     environment:
       - VITE_API_TARGET=http://backend:3000
       - VITE_PORT=5173
@@ -67,3 +69,4 @@ networks:
 
 volumes:
   mysql_dev_data:
+  node_modules_dev:

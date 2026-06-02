@@ -16,6 +16,11 @@ function onClosed() {
 function onSendCode() {
   handleSendCode(backendBaseUrl.value);
 }
+
+function copyInvitationCode() {
+  if (!userInvitationCode.value) return;
+  navigator.clipboard.writeText(userInvitationCode.value).catch(() => {});
+}
 </script>
 
 <template>
@@ -55,7 +60,7 @@ function onSendCode() {
       <el-form-item v-if="authMode === 'login' && userInvitationCode" label="我的邀请码">
         <el-input :model-value="userInvitationCode" readonly>
           <template #append>
-            <el-button @click="$copyText(userInvitationCode!)">复制</el-button>
+            <el-button @click="copyInvitationCode">复制</el-button>
           </template>
         </el-input>
       </el-form-item>

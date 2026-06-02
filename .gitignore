@@ -4,3 +4,4 @@ node_modules
 .env
 .env.docker
 .claude
+.docker-npm-install.lock

@@ -1,0 +1,69 @@
+# LLM Gather — 开发环境（热重载）
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 查看日志: docker compose logs -f
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: llmgather-db-dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-llmgather123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-llmgather}
+    volumes:
+      - mysql_dev_data:/var/lib/mysql
+    ports:
+      - "${MYSQL_DEV_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pllmgather123"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - llmgather-dev-net
+
+  backend:
+    image: node:22-alpine
+    container_name: llmgather-backend-dev
+    working_dir: /app
+    command: sh -c "npm install --include=dev && npm run dev:backend"
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      - .:/app
+    env_file:
+      - .env.docker
+    environment:
+      - MYSQL_HOST=db
+      - NODE_ENV=development
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - llmgather-dev-net
+
+  frontend:
+    image: node:22-alpine
+    container_name: llmgather-frontend-dev
+    working_dir: /app
+    command: sh -c "npm install --include=dev && npm run dev:frontend"
+    ports:
+      - "${FRONTEND_DEV_PORT:-5174}:5173"
+    volumes:
+      - .:/app
+    environment:
+      - VITE_API_TARGET=http://backend:3000
+      - VITE_PORT=5173
+    depends_on:
+      - backend
+    networks:
+      - llmgather-dev-net
+
+networks:
+  llmgather-dev-net:
+    driver: bridge
+
+volumes:
+  mysql_dev_data:

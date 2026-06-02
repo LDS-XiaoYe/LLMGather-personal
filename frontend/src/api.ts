@@ -495,6 +495,10 @@ export interface AgentDefinition {
   memoryEnabled: boolean;
   toolIds: string[];
   knowledgeBaseIds: string[];
+  skillIds: string[];
+  published: boolean;
+  apiEnabled: boolean;
+  publicSlug: string;
   status: 'active' | 'archived';
   createdAt: string;
   updatedAt: string;
@@ -512,6 +516,7 @@ export interface AgentInput {
   memoryEnabled?: boolean;
   toolIds?: string[];
   knowledgeBaseIds?: string[];
+  skillIds?: string[];
   status?: 'active' | 'archived';
 }
 
@@ -546,6 +551,30 @@ export interface AgentRun {
   createdAt: string;
   completedAt: string | null;
   steps: AgentRunStep[];
+}
+
+export interface AgentEvaluation {
+  id: string;
+  agentId: string;
+  runId: string;
+  userId: string;
+  score: number;
+  grade: 'excellent' | 'good' | 'fair' | 'poor' | 'failed';
+  summary: string;
+  rubric: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentRunStats {
+  agentId: string;
+  totalRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  successRate: number;
+  averageLatencyMs: number;
+  averageTokens: number;
+  averageScore: number;
+  evaluatedRuns: number;
 }
 
 export async function fetchAgents(baseUrl = defaultBaseUrl): Promise<AgentDefinition[]> {
@@ -583,6 +612,22 @@ export async function updateAgent(
   return data.data;
 }
 
+export async function updateAgentPublication(
+  id: string,
+  payload: { published?: boolean; apiEnabled?: boolean; publicSlug?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/publication`, {
+    method: 'PATCH',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
 export async function deleteAgent(id: string, baseUrl = defaultBaseUrl): Promise<void> {
   const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}`, {
     method: 'DELETE',
@@ -595,12 +640,15 @@ export async function deleteAgent(id: string, baseUrl = defaultBaseUrl): Promise
 export async function runAgent(
   id: string,
   input: string,
-  baseUrl = defaultBaseUrl,
+  optionsOrBaseUrl: { imageUrls?: string[] } | string = {},
+  maybeBaseUrl = defaultBaseUrl,
 ): Promise<AgentRun> {
+  const options = typeof optionsOrBaseUrl === 'string' ? {} : optionsOrBaseUrl;
+  const baseUrl = typeof optionsOrBaseUrl === 'string' ? optionsOrBaseUrl : maybeBaseUrl;
   const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ input }),
+    body: JSON.stringify({ input, imageUrls: options.imageUrls }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -616,6 +664,42 @@ export async function fetchAgentRuns(id: string, baseUrl = defaultBaseUrl): Prom
   if (!response.ok) throw new Error(await readError(response));
   const payload = (await response.json()) as { data?: AgentRun[] };
   return payload.data ?? [];
+}
+
+export async function evaluateAgentRun(
+  runId: string,
+  payload: { expectedOutput?: string; rubric?: string } = {},
+  baseUrl = defaultBaseUrl,
+): Promise<AgentEvaluation> {
+  const response = await fetch(`${baseUrl}/agents/runs/${encodeURIComponent(runId)}/evaluations`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentEvaluation };
+  return data.data;
+}
+
+export async function fetchAgentEvaluations(id: string, baseUrl = defaultBaseUrl): Promise<AgentEvaluation[]> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/evaluations`, {
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentEvaluation[] };
+  return payload.data ?? [];
+}
+
+export async function fetchAgentStats(id: string, baseUrl = defaultBaseUrl): Promise<AgentRunStats> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/stats`, {
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentRunStats };
+  return data.data;
 }
 
 /* ───────── Agent Capability APIs ───────── */
@@ -683,9 +767,21 @@ export interface MemoryItem {
   score?: number;
 }
 
+export interface SkillDefinition {
+  id: string;
+  userId: string | null;
+  name: string;
+  description: string;
+  content: string;
+  category: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkflowNode {
   id: string;
-  type: 'prompt' | 'tool' | 'knowledge' | 'memory';
+  type: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory';
   name?: string;
   config: Record<string, unknown>;
 }
@@ -723,11 +819,292 @@ export interface WorkflowRun {
   }>;
 }
 
+export interface AgentTeamMember {
+  agentId: string;
+  role?: string;
+  inputTemplate?: string;
+}
+
+export interface AgentTeam {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  strategy: 'sequential' | 'review' | 'debate' | 'parallel' | 'consensus' | 'router';
+  members: AgentTeamMember[];
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentTeamRun {
+  id: string;
+  teamId: string;
+  userId: string;
+  status: 'running' | 'succeeded' | 'failed';
+  input: string;
+  output: string;
+  error: string;
+  memberOutputs: Array<{
+    agentId: string;
+    role: string;
+    runId: string;
+    status: string;
+    output: string;
+    error: string;
+  }>;
+  latencyMs: number;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface McpServer {
+  id: string;
+  userId: string;
+  name: string;
+  serverType: 'notion';
+  config: Record<string, unknown>;
+  enabled: boolean;
+  lastStatus: string;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentVersion {
+  id: string;
+  agentId: string;
+  userId: string;
+  versionNumber: number;
+  label: string;
+  snapshot: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentTestSuite {
+  id: string;
+  agentId: string;
+  userId: string;
+  name: string;
+  description: string;
+  caseCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentTestCase {
+  id: string;
+  suiteId: string;
+  agentId: string;
+  name: string;
+  input: string;
+  expectedOutput: string;
+  rubric: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function fetchTools(baseUrl = defaultBaseUrl): Promise<ToolDefinition[]> {
   const response = await fetch(`${baseUrl}/tools`, { headers: buildHeaders(), ...credOpts });
   if (!response.ok) throw new Error(await readError(response));
   const payload = (await response.json()) as { data?: ToolDefinition[] };
   return payload.data ?? [];
+}
+
+export async function fetchSkills(baseUrl = defaultBaseUrl): Promise<SkillDefinition[]> {
+  const response = await fetch(`${baseUrl}/skills`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: SkillDefinition[] };
+  return payload.data ?? [];
+}
+
+export async function createSkill(
+  payload: { name: string; description?: string; content: string; category?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<SkillDefinition> {
+  const response = await fetch(`${baseUrl}/skills`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: SkillDefinition };
+  return data.data;
+}
+
+export async function fetchAgentTeams(baseUrl = defaultBaseUrl): Promise<AgentTeam[]> {
+  const response = await fetch(`${baseUrl}/agent-teams`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentTeam[] };
+  return payload.data ?? [];
+}
+
+export async function createAgentTeam(
+  payload: { name: string; description?: string; strategy?: AgentTeam['strategy']; members: AgentTeamMember[] },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentTeam> {
+  const response = await fetch(`${baseUrl}/agent-teams`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentTeam };
+  return data.data;
+}
+
+export async function generateAgent(
+  payload: { requirement: string; model: string; persist?: boolean },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents/generate`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
+export async function runAgentTeam(
+  id: string,
+  input: string,
+  baseUrl = defaultBaseUrl,
+): Promise<AgentTeamRun> {
+  const response = await fetch(`${baseUrl}/agent-teams/${encodeURIComponent(id)}/runs`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ input }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentTeamRun };
+  return data.data;
+}
+
+export async function fetchMcpServers(baseUrl = defaultBaseUrl): Promise<McpServer[]> {
+  const response = await fetch(`${baseUrl}/mcp/servers`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: McpServer[] };
+  return payload.data ?? [];
+}
+
+export async function createMcpServer(
+  payload: { name: string; serverType: 'notion'; config: Record<string, unknown>; enabled?: boolean },
+  baseUrl = defaultBaseUrl,
+): Promise<McpServer> {
+  const response = await fetch(`${baseUrl}/mcp/servers`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: McpServer };
+  return data.data;
+}
+
+export async function testMcpServer(id: string, query = 'test', baseUrl = defaultBaseUrl): Promise<Record<string, unknown>> {
+  const response = await fetch(`${baseUrl}/mcp/servers/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ query }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: Record<string, unknown> };
+  return data.data;
+}
+
+export async function fetchAgentVersions(id: string, baseUrl = defaultBaseUrl): Promise<AgentVersion[]> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentVersion[] };
+  return payload.data ?? [];
+}
+
+export async function createAgentVersion(id: string, label = '', baseUrl = defaultBaseUrl): Promise<AgentVersion> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ label }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentVersion };
+  return data.data;
+}
+
+export async function restoreAgentVersion(id: string, versionId: string, baseUrl = defaultBaseUrl): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/restore`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
+export async function fetchAgentTestSuites(id: string, baseUrl = defaultBaseUrl): Promise<AgentTestSuite[]> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/test-suites`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentTestSuite[] };
+  return payload.data ?? [];
+}
+
+export async function createAgentTestSuite(
+  id: string,
+  payload: { name: string; description?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentTestSuite> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/test-suites`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentTestSuite };
+  return data.data;
+}
+
+export async function fetchAgentTestCases(suiteId: string, baseUrl = defaultBaseUrl): Promise<AgentTestCase[]> {
+  const response = await fetch(`${baseUrl}/agents/test-suites/${encodeURIComponent(suiteId)}/cases`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentTestCase[] };
+  return payload.data ?? [];
+}
+
+export async function createAgentTestCase(
+  suiteId: string,
+  payload: { name: string; input: string; expectedOutput?: string; rubric?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentTestCase> {
+  const response = await fetch(`${baseUrl}/agents/test-suites/${encodeURIComponent(suiteId)}/cases`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentTestCase };
+  return data.data;
+}
+
+export async function runAgentTestSuite(suiteId: string, baseUrl = defaultBaseUrl): Promise<Record<string, unknown>> {
+  const response = await fetch(`${baseUrl}/agents/test-suites/${encodeURIComponent(suiteId)}/runs`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: Record<string, unknown> };
+  return data.data;
 }
 
 export async function invokeTool(

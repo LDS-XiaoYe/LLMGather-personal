@@ -71,6 +71,16 @@ export class CreateAgentDto {
   @ArrayMaxSize(30)
   @IsString({ each: true })
   knowledgeBaseIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  skillIds?: string[];
+
+  @IsOptional()
+  @IsIn(['active', 'archived'])
+  status?: 'active' | 'archived';
 }
 
 export class UpdateAgentDto {
@@ -127,6 +137,12 @@ export class UpdateAgentDto {
   @ArrayMaxSize(30)
   @IsString({ each: true })
   knowledgeBaseIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  skillIds?: string[];
 }
 
 export class RunAgentDto {
@@ -141,4 +157,94 @@ export class RunAgentDto {
   @ValidateNested({ each: true })
   @Type(() => AgentMessageDto)
   messages?: AgentMessageDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  imageUrls?: string[];
+}
+
+export class EvaluateAgentRunDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(12000)
+  expectedOutput?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  rubric?: string;
+}
+
+export class UpdateAgentPublicationDto {
+  @IsOptional()
+  @IsBoolean()
+  published?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  apiEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  publicSlug?: string;
+}
+
+export class CreateAgentVersionDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  label?: string;
+}
+
+export class CreateAgentTestSuiteDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+}
+
+export class CreateAgentTestCaseDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  name!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30000)
+  input!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(12000)
+  expectedOutput?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  rubric?: string;
+}
+
+export class GenerateAgentDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4000)
+  requirement!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  model!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  persist?: boolean;
 }

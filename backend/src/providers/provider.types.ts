@@ -8,6 +8,24 @@ export interface ChatMessage {
   role: ChatMessageRole;
   content: string | ContentPart[];
   name?: string;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+}
+
+export interface ChatToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 export interface ChatCompletionRequest {
@@ -18,6 +36,8 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   stream?: boolean;
   user?: string;
+  tools?: ChatToolDefinition[];
+  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   extra_body?: {
     enable_thinking?: boolean;
     [key: string]: unknown;
@@ -35,6 +55,14 @@ export interface ChatCompletionChoice {
   message: {
     role: 'assistant';
     content: string;
+    tool_calls?: Array<{
+      id: string;
+      type: 'function';
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }>;
   };
   finish_reason: string;
 }

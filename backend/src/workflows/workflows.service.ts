@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { AgentsService } from '../agents/agents.service';
 import { DatabaseService } from '../database/database.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
 import { MemoryService } from '../memory/memory.service';
@@ -54,6 +55,7 @@ type WorkflowRow = {
 export class WorkflowsService {
   constructor(
     private readonly databaseService: DatabaseService,
+    private readonly agentsService: AgentsService,
     private readonly toolsService: ToolsService,
     private readonly knowledgeService: KnowledgeService,
     private readonly memoryService: MemoryService,
@@ -100,13 +102,14 @@ export class WorkflowsService {
        VALUES (?, ?, ?, 'running', ?, '', '', ?)`,
     ).run(runId, workflowId, userId, input, now);
 
+    const originalInput = input;
     let current = input;
     let status: 'succeeded' | 'failed' = 'succeeded';
     let error = '';
 
     for (const node of workflow.nodes) {
       try {
-        const output = await this.runNode(userId, node, current);
+        const output = await this.runNode(userId, node, current, originalInput);
         await this.insertStep(runId, workflowId, userId, node, current, output, 'succeeded', '');
         current = output;
       } catch (err) {
@@ -138,17 +141,30 @@ export class WorkflowsService {
     return { ...row, steps };
   }
 
-  private async runNode(userId: string, node: WorkflowNodeDto, input: string): Promise<string> {
+  private async runNode(userId: string, node: WorkflowNodeDto, input: string, originalInput: string): Promise<string> {
     if (node.type === 'prompt') {
       const template = String(node.config.template ?? '{{input}}');
-      return template.replaceAll('{{input}}', input);
+      return this.interpolateText(template, input, originalInput);
     }
 
     if (node.type === 'tool') {
       const tool = String(node.config.tool || node.config.toolId || '');
-      const args = this.interpolateArgs(node.config.args as Record<string, unknown> | undefined, input);
+      const args = this.interpolateArgs(node.config.args as Record<string, unknown> | undefined, input, originalInput);
       const result = await this.toolsService.invoke(userId, tool, args);
       return result.output;
+    }
+
+    if (node.type === 'agent') {
+      const agentId = String(node.config.agentId || '');
+      if (!agentId) throw new NotFoundException('Workflow Agent 节点缺少 agentId');
+      const agentInputTemplate = typeof node.config.input === 'string' ? node.config.input : '{{input}}';
+      const run = await this.agentsService.run(userId, agentId, {
+        input: this.interpolateText(agentInputTemplate, input, originalInput),
+      });
+      if (run.status === 'failed') {
+        throw new Error(run.error || 'Agent 节点执行失败');
+      }
+      return run.output;
     }
 
     if (node.type === 'knowledge') {
@@ -166,13 +182,19 @@ export class WorkflowsService {
     return input;
   }
 
-  private interpolateArgs(args: Record<string, unknown> | undefined, input: string): Record<string, unknown> {
+  private interpolateArgs(args: Record<string, unknown> | undefined, input: string, originalInput: string): Record<string, unknown> {
     const source = args ?? { text: '{{input}}' };
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(source)) {
-      result[key] = typeof value === 'string' ? value.replaceAll('{{input}}', input) : value;
+      result[key] = typeof value === 'string' ? this.interpolateText(value, input, originalInput) : value;
     }
     return result;
+  }
+
+  private interpolateText(template: string, input: string, originalInput: string): string {
+    return template
+      .replaceAll('{{input}}', input)
+      .replaceAll('{{originalInput}}', originalInput);
   }
 
   private async insertStep(

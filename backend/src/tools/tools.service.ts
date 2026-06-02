@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { Script, createContext } from 'vm';
 import { DatabaseService } from '../database/database.service';
+import { McpService } from '../mcp/mcp.service';
 
 export interface ToolDefinition {
   id: string;
@@ -37,7 +39,10 @@ type ToolRow = {
 
 @Injectable()
 export class ToolsService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly mcpService: McpService,
+  ) {}
 
   async listForUser(userId: string): Promise<ToolDefinition[]> {
     const rows = await this.databaseService.connection.prepare(
@@ -102,7 +107,7 @@ export class ToolsService {
     let status: 'succeeded' | 'failed' = 'succeeded';
 
     try {
-      output = await this.runBuiltin(tool.name, args);
+      output = await this.runBuiltin(userId, tool.name, args);
     } catch (err) {
       status = 'failed';
       error = err instanceof Error ? err.message : String(err);
@@ -169,6 +174,13 @@ export class ToolsService {
           results.push(await this.invoke(userId, tool.id, { expression }, { agentId, runId }));
         }
       }
+
+      if (tool.name === 'javascript_runner' && /代码|执行.*js|javascript|run\s*code|code\s*run/i.test(input)) {
+        const code = this.extractCodeBlock(input) || this.extractInlineCodeRequest(input);
+        if (code) {
+          results.push(await this.invoke(userId, tool.id, { code }, { agentId, runId }));
+        }
+      }
     }
 
     return results;
@@ -187,7 +199,7 @@ export class ToolsService {
     return this.mapTool(row);
   }
 
-  private async runBuiltin(name: string, args: Record<string, unknown>): Promise<string> {
+  private async runBuiltin(userId: string, name: string, args: Record<string, unknown>): Promise<string> {
     if (name === 'current_time') {
       const timezone = typeof args.timezone === 'string' ? args.timezone : 'Asia/Shanghai';
       return new Intl.DateTimeFormat('zh-CN', {
@@ -225,12 +237,96 @@ export class ToolsService {
       return String(value);
     }
 
+    if (name === 'javascript_runner') {
+      return this.runJavascript(args);
+    }
+
+    if (name === 'container_javascript_runner') {
+      return this.runContainerJavascript(args);
+    }
+
+    if (name === 'notion_search') {
+      const server = await this.mcpService.getFirstEnabledNotion(userId);
+      if (!server) throw new BadRequestException('请先配置并启用 Notion MCP Server');
+      const query = typeof args.query === 'string' ? args.query.trim() : '';
+      if (!query) throw new BadRequestException('Notion 搜索 query 不能为空');
+      const limit = typeof args.limit === 'number' ? args.limit : 5;
+      const results = await this.mcpService.searchNotion(server, query, limit);
+      return JSON.stringify(results, null, 2);
+    }
+
     throw new BadRequestException(`暂不支持的内置工具: ${name}`);
+  }
+
+  private runJavascript(args: Record<string, unknown>): string {
+    const code = typeof args.code === 'string' ? args.code.trim() : '';
+    if (!code || code.length > 4000) {
+      throw new BadRequestException('代码为空或超过 4000 字符');
+    }
+
+    const logs: string[] = [];
+    const sandbox = createContext({
+      input: args.input ?? {},
+      Math,
+      JSON,
+      Number,
+      String,
+      Boolean,
+      Array,
+      Object,
+      Date,
+      RegExp,
+      console: {
+        log: (...items: unknown[]) => logs.push(items.map((item) => this.stringifyValue(item)).join(' ')),
+      },
+    });
+    const wrapped = `"use strict";\n${code}`;
+    const script = new Script(wrapped);
+    const result = script.runInContext(sandbox, { timeout: 1000 });
+    return JSON.stringify({ result, logs }, null, 2);
+  }
+
+  private async runContainerJavascript(args: Record<string, unknown>): Promise<string> {
+    const code = typeof args.code === 'string' ? args.code.trim() : '';
+    if (!code || code.length > 4000) {
+      throw new BadRequestException('代码为空或超过 4000 字符');
+    }
+    const endpoint = process.env.CODE_RUNNER_URL || 'http://code-runner:8787/run';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, input: args.input ?? {} }),
+      signal: AbortSignal.timeout(2500),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new BadRequestException(`容器代码执行失败: ${text.slice(0, 500)}`);
+    }
+    return text;
   }
 
   private extractExpression(input: string): string {
     const matches = input.match(/[0-9][0-9+\-*/%.^()\s]{2,}[0-9)]/g);
     return matches?.[0]?.trim() ?? '';
+  }
+
+  private extractCodeBlock(input: string): string {
+    const match = input.match(/```(?:javascript|js|ts|code)?\s*([\s\S]*?)```/i);
+    return match?.[1]?.trim() ?? '';
+  }
+
+  private extractInlineCodeRequest(input: string): string {
+    const marker = input.match(/(?:执行|运行|run)\s*(?:这段|以下)?\s*(?:javascript|js|代码|code)[:：]\s*([\s\S]+)/i);
+    return marker?.[1]?.trim() ?? '';
+  }
+
+  private stringifyValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
 
   private mapTool(row: ToolRow): ToolDefinition {

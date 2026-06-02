@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
 
 export class WorkflowNodeDto {
   @IsString()
@@ -9,6 +9,7 @@ export class WorkflowNodeDto {
 
   @IsString()
   @IsNotEmpty()
+  @IsIn(['prompt', 'agent', 'tool', 'knowledge', 'memory'])
   @MaxLength(32)
   type!: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory';
 

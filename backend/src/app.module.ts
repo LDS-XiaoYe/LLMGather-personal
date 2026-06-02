@@ -12,9 +12,12 @@ import { RouterModule } from './router/router.module';
 import { CollabModule } from './collab/collab.module';
 import { CacheModule } from './cache/cache.module';
 import { AgentsModule } from './agents/agents.module';
+import { AgentTeamsModule } from './agent-teams/agent-teams.module';
 import { ToolsModule } from './tools/tools.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { MemoryModule } from './memory/memory.module';
+import { McpModule } from './mcp/mcp.module';
+import { SkillsModule } from './skills/skills.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 
 @Module({
@@ -33,7 +36,10 @@ import { WorkflowsModule } from './workflows/workflows.module';
     ToolsModule,
     KnowledgeModule,
     MemoryModule,
+    McpModule,
+    SkillsModule,
     AgentsModule,
+    AgentTeamsModule,
     WorkflowsModule,
   ],
   controllers: [HealthController],

@@ -3,7 +3,17 @@ import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AgentsService } from './agents.service';
-import { CreateAgentDto, RunAgentDto, UpdateAgentDto } from './dto/agent.dto';
+import {
+  CreateAgentDto,
+  CreateAgentTestCaseDto,
+  CreateAgentTestSuiteDto,
+  CreateAgentVersionDto,
+  EvaluateAgentRunDto,
+  GenerateAgentDto,
+  RunAgentDto,
+  UpdateAgentDto,
+  UpdateAgentPublicationDto,
+} from './dto/agent.dto';
 
 @Controller('agents')
 @UseGuards(JwtAuthGuard)
@@ -23,6 +33,31 @@ export class AgentsController {
     return { data: await this.agentsService.create(user.id, payload) };
   }
 
+  @Post('generate')
+  async generate(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Body() payload: GenerateAgentDto,
+  ) {
+    return { data: await this.agentsService.generate(user.id, payload) };
+  }
+
+  @Get('runs/:runId')
+  async getRun(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('runId') runId: string,
+  ) {
+    return { data: await this.agentsService.getRun(user.id, runId) };
+  }
+
+  @Post('runs/:runId/evaluations')
+  async evaluateRun(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('runId') runId: string,
+    @Body() payload: EvaluateAgentRunDto,
+  ) {
+    return { data: await this.agentsService.evaluateRun(user.id, runId, payload) };
+  }
+
   @Get(':id')
   async get(
     @CurrentUser() user: AuthenticatedRequestUser,
@@ -38,6 +73,15 @@ export class AgentsController {
     @Body() payload: UpdateAgentDto,
   ) {
     return { data: await this.agentsService.update(user.id, id, payload) };
+  }
+
+  @Patch(':id/publication')
+  async updatePublication(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: UpdateAgentPublicationDto,
+  ) {
+    return { data: await this.agentsService.updatePublication(user.id, id, payload) };
   }
 
   @Delete(':id')
@@ -66,11 +110,75 @@ export class AgentsController {
     return { data: await this.agentsService.listRuns(user.id, id) };
   }
 
-  @Get('runs/:runId')
-  async getRun(
+  @Get(':id/evaluations')
+  async listEvaluations(
     @CurrentUser() user: AuthenticatedRequestUser,
-    @Param('runId') runId: string,
+    @Param('id') id: string,
   ) {
-    return { data: await this.agentsService.getRun(user.id, runId) };
+    return { data: await this.agentsService.listEvaluations(user.id, id) };
+  }
+
+  @Get(':id/stats')
+  async getStats(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+  ) {
+    return { data: await this.agentsService.getStats(user.id, id) };
+  }
+
+  @Get(':id/versions')
+  async listVersions(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string) {
+    return { data: await this.agentsService.listVersions(user.id, id) };
+  }
+
+  @Post(':id/versions')
+  async createVersion(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: CreateAgentVersionDto,
+  ) {
+    return { data: await this.agentsService.createVersion(user.id, id, payload) };
+  }
+
+  @Post(':id/versions/:versionId/restore')
+  async restoreVersion(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+  ) {
+    return { data: await this.agentsService.restoreVersion(user.id, id, versionId) };
+  }
+
+  @Get(':id/test-suites')
+  async listTestSuites(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string) {
+    return { data: await this.agentsService.listTestSuites(user.id, id) };
+  }
+
+  @Post(':id/test-suites')
+  async createTestSuite(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: CreateAgentTestSuiteDto,
+  ) {
+    return { data: await this.agentsService.createTestSuite(user.id, id, payload) };
+  }
+
+  @Get('test-suites/:suiteId/cases')
+  async listTestCases(@CurrentUser() user: AuthenticatedRequestUser, @Param('suiteId') suiteId: string) {
+    return { data: await this.agentsService.listTestCases(user.id, suiteId) };
+  }
+
+  @Post('test-suites/:suiteId/cases')
+  async addTestCase(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('suiteId') suiteId: string,
+    @Body() payload: CreateAgentTestCaseDto,
+  ) {
+    return { data: await this.agentsService.addTestCase(user.id, suiteId, payload) };
+  }
+
+  @Post('test-suites/:suiteId/runs')
+  async runTestSuite(@CurrentUser() user: AuthenticatedRequestUser, @Param('suiteId') suiteId: string) {
+    return { data: await this.agentsService.runTestSuite(user.id, suiteId) };
   }
 }

@@ -39,9 +39,24 @@ services:
     environment:
       - MYSQL_HOST=db
       - NODE_ENV=development
+      - CODE_RUNNER_URL=http://code-runner:8787/run
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      - llmgather-dev-net
+
+  code-runner:
+    image: node:22-alpine
+    container_name: llmgather-code-runner-dev
+    working_dir: /app
+    command: node scripts/code-runner-server.mjs
+    volumes:
+      - .:/app:ro
+    environment:
+      - CODE_RUNNER_PORT=8787
+      - CODE_RUNNER_TIMEOUT_MS=1000
+      - CODE_RUNNER_MAX_CODE_LENGTH=4000
     networks:
       - llmgather-dev-net
 

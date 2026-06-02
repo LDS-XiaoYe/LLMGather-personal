@@ -9,10 +9,17 @@ import {
   createApiKey as apiCreateApiKey,
   createKnowledgeBase as apiCreateKnowledgeBase,
   createMemory as apiCreateMemory,
+  createSkill as apiCreateSkill,
+  createAgentTeam as apiCreateAgentTeam,
+  createAgentTestCase as apiCreateAgentTestCase,
+  createAgentTestSuite as apiCreateAgentTestSuite,
+  createAgentVersion as apiCreateAgentVersion,
+  createMcpServer as apiCreateMcpServer,
   createWorkflow as apiCreateWorkflow,
   deleteAdminUser,
   deleteAgent as apiDeleteAgent,
   deleteConversation,
+  evaluateAgentRun as apiEvaluateAgentRun,
   exportAdminBillingCsv,
   fetchAdminBilling,
   fetchAdminCheck,
@@ -23,6 +30,8 @@ import {
   fetchAdminUsers,
   fetchAgents,
   fetchAgentRuns,
+  fetchAgentEvaluations,
+  fetchAgentStats,
   fetchBillingLedger,
   fetchBillingRules,
   fetchConversations,
@@ -31,6 +40,13 @@ import {
   fetchMe,
   fetchMemories,
   fetchModels,
+  fetchSkills,
+  fetchAgentTeams,
+  fetchAgentTestCases,
+  fetchAgentTestSuites,
+  fetchAgentVersions,
+  fetchMcpServers,
+  generateAgent as apiGenerateAgent,
   getStoredToken,
   fetchTools,
   fetchWorkflows,
@@ -41,6 +57,8 @@ import {
   resetAdminUserPassword,
   revokeApiKey as apiRevokeApiKey,
   runAgent as apiRunAgent,
+  runAgentTeam as apiRunAgentTeam,
+  runAgentTestSuite as apiRunAgentTestSuite,
   runWorkflow as apiRunWorkflow,
   sendVerificationCode,
   createRechargeOrder,
@@ -52,6 +70,9 @@ import {
   streamCompletion,
   topUp,
   updateAgent as apiUpdateAgent,
+  updateAgentPublication as apiUpdateAgentPublication,
+  restoreAgentVersion as apiRestoreAgentVersion,
+  testMcpServer as apiTestMcpServer,
   updateAdminBillingRule,
   updateAdminUser,
   fetchAdminProviderKeys,
@@ -73,7 +94,14 @@ import {
   type AdminStats,
   type AdminUser,
   type AgentDefinition,
+  type AgentEvaluation,
   type AgentRun,
+  type AgentRunStats,
+  type AgentTeam,
+  type AgentTeamRun,
+  type AgentTestCase,
+  type AgentTestSuite,
+  type AgentVersion,
   type ApiKeyItem,
   type AuthUser,
   type BillingLedgerItem,
@@ -91,6 +119,8 @@ import {
   type ModelTiersData,
   type KnowledgeBase,
   type MemoryItem,
+  type McpServer,
+  type SkillDefinition,
   type ToolDefinition,
   type Workflow,
   type WorkflowRun,
@@ -184,24 +214,57 @@ const agents = ref<AgentDefinition[]>([]);
 const activeAgentId = ref('');
 const agentLoading = ref(false);
 const agentSaving = ref(false);
+const agentPublishing = ref(false);
 const agentRunning = ref(false);
+const agentGenerating = ref(false);
 const agentPrompt = ref('');
+const agentImageUrlInput = ref('');
 const agentRuns = ref<AgentRun[]>([]);
 const activeAgentRun = ref<AgentRun | null>(null);
-const agentSideTab = ref<'history' | 'knowledge' | 'memory' | 'workflow'>('history');
+const agentSideTab = ref<'history' | 'knowledge' | 'memory' | 'skills' | 'team' | 'workflow' | 'eval' | 'versions' | 'tests' | 'mcp'>('history');
 const availableTools = ref<ToolDefinition[]>([]);
 const knowledgeBases = ref<KnowledgeBase[]>([]);
 const agentMemories = ref<MemoryItem[]>([]);
+const availableSkills = ref<SkillDefinition[]>([]);
 const workflows = ref<Workflow[]>([]);
+const agentTeams = ref<AgentTeam[]>([]);
+const mcpServers = ref<McpServer[]>([]);
+const agentVersions = ref<AgentVersion[]>([]);
+const agentTestSuites = ref<AgentTestSuite[]>([]);
+const agentTestCases = ref<AgentTestCase[]>([]);
 const agentResourceLoading = ref(false);
 const knowledgeCreating = ref(false);
 const knowledgeDocSaving = ref(false);
 const memorySaving = ref(false);
+const skillCreating = ref(false);
 const workflowCreating = ref(false);
 const workflowRunning = ref(false);
+const teamCreating = ref(false);
+const teamRunning = ref(false);
+const mcpSaving = ref(false);
+const mcpTesting = ref(false);
+const versionSaving = ref(false);
+const testSaving = ref(false);
+const testRunning = ref(false);
 const activeWorkflowId = ref('');
 const workflowInput = ref('');
 const activeWorkflowRun = ref<WorkflowRun | null>(null);
+const activeTeamId = ref('');
+const teamInput = ref('');
+const activeTeamRun = ref<AgentTeamRun | null>(null);
+const activeTestSuiteId = ref('');
+const activeTestRun = ref<Record<string, unknown> | null>(null);
+const agentEvaluations = ref<AgentEvaluation[]>([]);
+const agentStats = ref<AgentRunStats | null>(null);
+const agentEvaluationLoading = ref(false);
+const agentEvaluationSaving = ref(false);
+const evaluationForm = ref({
+  expectedOutput: '',
+  rubric: '',
+});
+const generatorForm = ref({
+  requirement: '',
+});
 const agentForm = ref({
   id: '',
   name: '',
@@ -213,6 +276,10 @@ const agentForm = ref({
   memoryEnabled: true,
   toolIds: [] as string[],
   knowledgeBaseIds: [] as string[],
+  skillIds: [] as string[],
+  published: false,
+  apiEnabled: false,
+  publicSlug: '',
   status: 'active' as 'active' | 'archived',
 });
 const knowledgeForm = ref({
@@ -227,6 +294,67 @@ const knowledgeDocForm = ref({
 const memoryForm = ref({
   content: '',
   importance: 3,
+});
+const skillForm = ref({
+  name: '',
+  description: '',
+  category: 'custom',
+  content: '',
+});
+const teamForm = ref({
+  name: '',
+  description: '',
+  strategy: 'sequential' as AgentTeam['strategy'],
+  memberIds: [] as string[],
+});
+const mcpForm = ref({
+  name: 'Notion',
+  token: '',
+  query: '',
+});
+const versionForm = ref({
+  label: '',
+});
+const testSuiteForm = ref({
+  name: '',
+  description: '',
+});
+const testCaseForm = ref({
+  name: '',
+  input: '',
+  expectedOutput: '',
+  rubric: '',
+});
+type AgentBuilderBlockType = 'identity' | 'model' | 'tools' | 'skills' | 'knowledge' | 'memory' | 'run';
+interface AgentBuilderBlock {
+  type: AgentBuilderBlockType;
+  title: string;
+  detail: string;
+}
+const agentBuilderBlocks: AgentBuilderBlock[] = [
+  { type: 'identity', title: '角色', detail: '生成名称、描述和系统提示词' },
+  { type: 'model', title: '模型', detail: '绑定当前默认语言模型' },
+  { type: 'tools', title: '工具', detail: '挂载时间、计算、文本统计和代码执行工具' },
+  { type: 'skills', title: 'Skills', detail: '挂载研究、代码、数据分析能力包' },
+  { type: 'knowledge', title: '知识库', detail: '挂载第一个可用知识库' },
+  { type: 'memory', title: '记忆', detail: '开启长期记忆' },
+  { type: 'run', title: '运行', detail: '生成一条试运行任务' },
+];
+const agentBuilderCanvas = ref<AgentBuilderBlock[]>([]);
+const agentBuilderDragging = ref<AgentBuilderBlockType | ''>('');
+
+const agentPublicEndpoint = computed(() => {
+  if (!agentForm.value.publicSlug) return '';
+  return `${backendBaseUrl.value}/public/agents/${encodeURIComponent(agentForm.value.publicSlug)}/runs`;
+});
+
+const agentApiEndpoint = computed(() => {
+  if (!agentForm.value.id) return '';
+  return `${backendBaseUrl.value}/agents/${encodeURIComponent(agentForm.value.id)}/invoke`;
+});
+
+watch(activeTestSuiteId, () => {
+  void loadSelectedTestCases();
 });
 
 // API Docs
@@ -707,6 +835,10 @@ function resetAgentForm() {
     memoryEnabled: true,
     toolIds: [],
     knowledgeBaseIds: [],
+    skillIds: [],
+    published: false,
+    apiEnabled: false,
+    publicSlug: '',
     status: 'active',
   };
   agentRuns.value = [];
@@ -726,6 +858,10 @@ function fillAgentForm(agent: AgentDefinition) {
     memoryEnabled: agent.memoryEnabled !== false,
     toolIds: [...(agent.toolIds ?? [])],
     knowledgeBaseIds: [...(agent.knowledgeBaseIds ?? [])],
+    skillIds: [...(agent.skillIds ?? [])],
+    published: agent.published === true,
+    apiEnabled: agent.apiEnabled === true,
+    publicSlug: agent.publicSlug ?? '',
     status: agent.status,
   };
 }
@@ -741,24 +877,40 @@ async function loadAgentResources() {
   if (!isAuthenticated.value) {
     availableTools.value = [];
     knowledgeBases.value = [];
+    availableSkills.value = [];
     workflows.value = [];
+    agentTeams.value = [];
+    mcpServers.value = [];
+    agentVersions.value = [];
+    agentTestSuites.value = [];
+    agentTestCases.value = [];
     agentMemories.value = [];
     return;
   }
 
   agentResourceLoading.value = true;
   try {
-    const [tools, bases, workflowItems] = await Promise.all([
+    const [tools, bases, skills, teamItems, mcpItems, workflowItems] = await Promise.all([
       fetchTools(backendBaseUrl.value),
       fetchKnowledgeBases(backendBaseUrl.value),
+      fetchSkills(backendBaseUrl.value),
+      fetchAgentTeams(backendBaseUrl.value),
+      fetchMcpServers(backendBaseUrl.value),
       fetchWorkflows(backendBaseUrl.value),
     ]);
     availableTools.value = tools;
     knowledgeBases.value = bases;
+    availableSkills.value = skills;
+    agentTeams.value = teamItems;
+    mcpServers.value = mcpItems;
     workflows.value = workflowItems;
     if (!knowledgeDocForm.value.kbId && bases[0]) knowledgeDocForm.value.kbId = bases[0].id;
+    if (!activeTeamId.value && teamItems[0]) activeTeamId.value = teamItems[0].id;
     if (!activeWorkflowId.value && workflowItems[0]) activeWorkflowId.value = workflowItems[0].id;
     await loadAgentMemories();
+    await loadAgentEvaluations();
+    await loadAgentVersions();
+    await loadAgentTestSuites();
   } catch (error) {
     console.error('[loadAgentResources] failed:', error);
   } finally {
@@ -775,6 +927,59 @@ async function loadAgentMemories(agentId = agentForm.value.id) {
     agentMemories.value = await fetchMemories(agentId, backendBaseUrl.value);
   } catch (error) {
     console.error('[loadAgentMemories] failed:', error);
+  }
+}
+
+async function loadAgentEvaluations(agentId = agentForm.value.id) {
+  if (!isAuthenticated.value || !agentId) {
+    agentEvaluations.value = [];
+    agentStats.value = null;
+    return;
+  }
+  agentEvaluationLoading.value = true;
+  try {
+    const [evaluations, stats] = await Promise.all([
+      fetchAgentEvaluations(agentId, backendBaseUrl.value),
+      fetchAgentStats(agentId, backendBaseUrl.value),
+    ]);
+    agentEvaluations.value = evaluations;
+    agentStats.value = stats;
+  } catch (error) {
+    console.error('[loadAgentEvaluations] failed:', error);
+  } finally {
+    agentEvaluationLoading.value = false;
+  }
+}
+
+async function loadAgentVersions(agentId = agentForm.value.id) {
+  if (!isAuthenticated.value || !agentId) {
+    agentVersions.value = [];
+    return;
+  }
+  try {
+    agentVersions.value = await fetchAgentVersions(agentId, backendBaseUrl.value);
+  } catch (error) {
+    console.error('[loadAgentVersions] failed:', error);
+  }
+}
+
+async function loadAgentTestSuites(agentId = agentForm.value.id) {
+  if (!isAuthenticated.value || !agentId) {
+    agentTestSuites.value = [];
+    agentTestCases.value = [];
+    activeTestSuiteId.value = '';
+    return;
+  }
+  try {
+    agentTestSuites.value = await fetchAgentTestSuites(agentId, backendBaseUrl.value);
+    if (!activeTestSuiteId.value && agentTestSuites.value[0]) {
+      activeTestSuiteId.value = agentTestSuites.value[0].id;
+    }
+    if (activeTestSuiteId.value) {
+      agentTestCases.value = await fetchAgentTestCases(activeTestSuiteId.value, backendBaseUrl.value);
+    }
+  } catch (error) {
+    console.error('[loadAgentTestSuites] failed:', error);
   }
 }
 
@@ -795,6 +1000,9 @@ async function loadAgents() {
       fillAgentForm(next);
       await loadAgentRuns(next.id);
       await loadAgentMemories(next.id);
+      await loadAgentEvaluations(next.id);
+      await loadAgentVersions(next.id);
+      await loadAgentTestSuites(next.id);
     } else {
       activeAgentId.value = '';
       resetAgentForm();
@@ -832,6 +1040,90 @@ function selectAgent(agent: AgentDefinition) {
   fillAgentForm(agent);
   void loadAgentRuns(agent.id);
   void loadAgentMemories(agent.id);
+  void loadAgentEvaluations(agent.id);
+  void loadAgentVersions(agent.id);
+  void loadAgentTestSuites(agent.id);
+}
+
+function startAgentBuilderDrag(block: AgentBuilderBlock) {
+  agentBuilderDragging.value = block.type;
+}
+
+function dropAgentBuilderBlock() {
+  const type = agentBuilderDragging.value;
+  if (!type) return;
+  const block = agentBuilderBlocks.find((item) => item.type === type);
+  if (!block) return;
+  if (!agentBuilderCanvas.value.some((item) => item.type === type)) {
+    agentBuilderCanvas.value = [...agentBuilderCanvas.value, block];
+  }
+  agentBuilderDragging.value = '';
+}
+
+function removeAgentBuilderBlock(type: AgentBuilderBlockType) {
+  agentBuilderCanvas.value = agentBuilderCanvas.value.filter((item) => item.type !== type);
+}
+
+function clearAgentBuilderCanvas() {
+  agentBuilderCanvas.value = [];
+}
+
+function applyAgentBuilder() {
+  if (agentBuilderCanvas.value.length === 0) {
+    status.value = '请先拖入至少一个 Agent 模块';
+    return;
+  }
+
+  const selectedTypes = new Set(agentBuilderCanvas.value.map((item) => item.type));
+  if (selectedTypes.has('identity')) {
+    agentForm.value.name = agentForm.value.id ? agentForm.value.name : '拖拽生成 Agent';
+    agentForm.value.description = '由 Agent Builder 组合生成，可继续微调工具、知识库和提示词。';
+    agentForm.value.systemPrompt = [
+      '你是一个任务型 AI Agent。',
+      '你会先理解用户目标，再按步骤调用可用工具、参考知识库和长期记忆。',
+      '输出时先给结论，再给关键步骤和可执行结果。',
+    ].join('\n');
+  }
+
+  if (selectedTypes.has('model')) {
+    const defaultModel = selectedModel.value && selectedModel.value !== 'auto'
+      ? selectedModel.value
+      : (chatModels.value[0]?.id || models.value[0]?.id || '');
+    if (defaultModel) agentForm.value.model = defaultModel;
+  }
+
+  if (selectedTypes.has('tools')) {
+    const preferred = ['current_time', 'calculator', 'text_stats', 'javascript_runner'];
+    const preferredIds = availableTools.value
+      .filter((tool) => preferred.includes(tool.name))
+      .map((tool) => tool.id);
+    agentForm.value.toolIds = Array.from(new Set([...agentForm.value.toolIds, ...preferredIds]));
+  }
+
+  if (selectedTypes.has('skills')) {
+    const preferred = ['Research Planner', 'Code Operator', 'Data Analyst', 'Workflow Orchestrator'];
+    const preferredIds = availableSkills.value
+      .filter((skill) => preferred.includes(skill.name))
+      .map((skill) => skill.id);
+    agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, ...preferredIds]));
+  }
+
+  if (selectedTypes.has('knowledge')) {
+    const kbId = knowledgeBases.value[0]?.id;
+    if (kbId && !agentForm.value.knowledgeBaseIds.includes(kbId)) {
+      agentForm.value.knowledgeBaseIds = [...agentForm.value.knowledgeBaseIds, kbId];
+    }
+  }
+
+  if (selectedTypes.has('memory')) {
+    agentForm.value.memoryEnabled = true;
+  }
+
+  if (selectedTypes.has('run')) {
+    agentPrompt.value = '请基于你的角色设定、可用工具、知识库和长期记忆，给出一份当前能力说明和一次示例执行。';
+  }
+
+  status.value = `已应用 ${agentBuilderCanvas.value.length} 个 Builder 模块`;
 }
 
 async function persistAgent(): Promise<AgentDefinition | null> {
@@ -848,7 +1140,7 @@ async function persistAgent(): Promise<AgentDefinition | null> {
 
   agentSaving.value = true;
   try {
-    const payload = {
+    const basePayload = {
       name,
       description: agentForm.value.description.trim(),
       model,
@@ -858,11 +1150,15 @@ async function persistAgent(): Promise<AgentDefinition | null> {
       memoryEnabled: agentForm.value.memoryEnabled,
       toolIds: [...agentForm.value.toolIds],
       knowledgeBaseIds: [...agentForm.value.knowledgeBaseIds],
+      skillIds: [...agentForm.value.skillIds],
+    };
+    const updatePayload = {
+      ...basePayload,
       status: agentForm.value.status,
     };
     const saved = agentForm.value.id
-      ? await apiUpdateAgent(agentForm.value.id, payload, backendBaseUrl.value)
-      : await apiCreateAgent(payload, backendBaseUrl.value);
+      ? await apiUpdateAgent(agentForm.value.id, updatePayload, backendBaseUrl.value)
+      : await apiCreateAgent(basePayload, backendBaseUrl.value);
 
     const idx = agents.value.findIndex((agent) => agent.id === saved.id);
     if (idx >= 0) agents.value.splice(idx, 1, saved);
@@ -876,6 +1172,58 @@ async function persistAgent(): Promise<AgentDefinition | null> {
     return null;
   } finally {
     agentSaving.value = false;
+  }
+}
+
+async function saveAgentPublication() {
+  if (!agentForm.value.id) {
+    status.value = '请先保存 Agent，再配置发布接入';
+    return;
+  }
+  if (agentPublishing.value) return;
+  agentPublishing.value = true;
+  try {
+    const saved = await apiUpdateAgentPublication(agentForm.value.id, {
+      published: agentForm.value.published,
+      apiEnabled: agentForm.value.apiEnabled,
+      publicSlug: agentForm.value.publicSlug || agentForm.value.name,
+    }, backendBaseUrl.value);
+    const idx = agents.value.findIndex((agent) => agent.id === saved.id);
+    if (idx >= 0) agents.value.splice(idx, 1, saved);
+    fillAgentForm(saved);
+    status.value = 'Agent 发布配置已保存';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '保存发布配置失败';
+  } finally {
+    agentPublishing.value = false;
+  }
+}
+
+async function generateAgentFromRequirement() {
+  if (!generatorForm.value.requirement.trim() || agentGenerating.value) return;
+  const model = agentForm.value.model || selectedModel.value || chatModels.value[0]?.id || models.value[0]?.id || '';
+  if (!model || model === 'auto') {
+    status.value = '请先选择一个具体模型用于生成 Agent';
+    return;
+  }
+  agentGenerating.value = true;
+  try {
+    const generated = await apiGenerateAgent({
+      requirement: generatorForm.value.requirement.trim(),
+      model,
+      persist: true,
+    }, backendBaseUrl.value);
+    const idx = agents.value.findIndex((agent) => agent.id === generated.id);
+    if (idx >= 0) agents.value.splice(idx, 1, generated);
+    else agents.value.unshift(generated);
+    activeAgentId.value = generated.id;
+    fillAgentForm(generated);
+    generatorForm.value.requirement = '';
+    status.value = 'Agent 已自动生成';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '自动生成 Agent 失败';
+  } finally {
+    agentGenerating.value = false;
   }
 }
 
@@ -913,7 +1261,11 @@ async function runCurrentAgent() {
   activeAgentRun.value = null;
   status.value = 'Agent 正在执行';
   try {
-    const run = await apiRunAgent(agent.id, input, backendBaseUrl.value);
+    const imageUrls = agentImageUrlInput.value
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const run = await apiRunAgent(agent.id, input, { imageUrls }, backendBaseUrl.value);
     activeAgentRun.value = run;
     agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id)].slice(0, 20);
     agentPrompt.value = '';
@@ -936,6 +1288,32 @@ function agentRunTagType(statusValue: AgentRun['status'] | AgentRun['steps'][num
   if (statusValue === 'succeeded') return 'success';
   if (statusValue === 'failed') return 'danger';
   return 'warning';
+}
+
+function agentEvalTagType(grade: AgentEvaluation['grade']) {
+  if (grade === 'excellent' || grade === 'good') return 'success';
+  if (grade === 'fair') return 'warning';
+  return 'danger';
+}
+
+async function evaluateActiveAgentRun() {
+  if (!activeAgentRun.value || agentEvaluationSaving.value) return;
+  agentEvaluationSaving.value = true;
+  try {
+    const evaluation = await apiEvaluateAgentRun(activeAgentRun.value.id, {
+      expectedOutput: evaluationForm.value.expectedOutput.trim() || undefined,
+      rubric: evaluationForm.value.rubric.trim() || undefined,
+    }, backendBaseUrl.value);
+    agentEvaluations.value = [evaluation, ...agentEvaluations.value.filter((item) => item.id !== evaluation.id)];
+    evaluationForm.value.expectedOutput = '';
+    evaluationForm.value.rubric = '';
+    await loadAgentEvaluations(activeAgentRun.value.agentId);
+    status.value = `评测完成：${evaluation.score}/100`;
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '评测失败';
+  } finally {
+    agentEvaluationSaving.value = false;
+  }
 }
 
 function formatAgentDate(value?: string | null) {
@@ -1022,6 +1400,209 @@ async function createAgentMemory() {
   }
 }
 
+async function createSkillFromForm() {
+  const name = skillForm.value.name.trim();
+  const content = skillForm.value.content.trim();
+  if (!name || !content || skillCreating.value) return;
+  skillCreating.value = true;
+  try {
+    const skill = await apiCreateSkill({
+      name,
+      description: skillForm.value.description.trim(),
+      content,
+      category: skillForm.value.category.trim() || 'custom',
+    }, backendBaseUrl.value);
+    availableSkills.value = [skill, ...availableSkills.value.filter((item) => item.id !== skill.id)];
+    agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, skill.id]));
+    skillForm.value = { name: '', description: '', category: 'custom', content: '' };
+    status.value = 'Skill 已创建并挂载到当前 Agent';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '创建 Skill 失败';
+  } finally {
+    skillCreating.value = false;
+  }
+}
+
+async function createTeamFromForm() {
+  const name = (teamForm.value.name.trim() || `${agentForm.value.name || 'Agent'} Team`).slice(0, 80);
+  const ids = Array.from(new Set([
+    agentForm.value.id,
+    ...teamForm.value.memberIds,
+  ].filter(Boolean)));
+  if (ids.length === 0) {
+    status.value = '请先保存或选择至少一个 Agent';
+    return;
+  }
+  if (teamCreating.value) return;
+  teamCreating.value = true;
+  try {
+    const team = await apiCreateAgentTeam({
+      name,
+      description: teamForm.value.description.trim(),
+      strategy: teamForm.value.strategy,
+      members: ids.map((agentId, index) => ({
+        agentId,
+        role: index === 0 ? '主执行 Agent' : `协作 Agent ${index + 1}`,
+      })),
+    }, backendBaseUrl.value);
+    agentTeams.value = [team, ...agentTeams.value.filter((item) => item.id !== team.id)];
+    activeTeamId.value = team.id;
+    teamForm.value.name = '';
+    teamForm.value.description = '';
+    teamForm.value.memberIds = [];
+    status.value = 'Agent Team 已创建';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '创建 Agent Team 失败';
+  } finally {
+    teamCreating.value = false;
+  }
+}
+
+async function runSelectedTeam() {
+  if (!activeTeamId.value || !teamInput.value.trim() || teamRunning.value) return;
+  teamRunning.value = true;
+  try {
+    activeTeamRun.value = await apiRunAgentTeam(activeTeamId.value, teamInput.value.trim(), backendBaseUrl.value);
+    status.value = `Agent Team 运行完成：${activeTeamRun.value.status}`;
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '运行 Agent Team 失败';
+  } finally {
+    teamRunning.value = false;
+  }
+}
+
+async function createVersionFromForm() {
+  if (!agentForm.value.id || versionSaving.value) {
+    status.value = '请先保存 Agent，再创建版本';
+    return;
+  }
+  versionSaving.value = true;
+  try {
+    const version = await apiCreateAgentVersion(agentForm.value.id, versionForm.value.label.trim(), backendBaseUrl.value);
+    agentVersions.value = [version, ...agentVersions.value.filter((item) => item.id !== version.id)];
+    versionForm.value.label = '';
+    status.value = `已创建 Agent 版本 v${version.versionNumber}`;
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '创建版本失败';
+  } finally {
+    versionSaving.value = false;
+  }
+}
+
+async function restoreVersion(versionId: string) {
+  if (!agentForm.value.id || versionSaving.value) return;
+  versionSaving.value = true;
+  try {
+    const restored = await apiRestoreAgentVersion(agentForm.value.id, versionId, backendBaseUrl.value);
+    fillAgentForm(restored);
+    status.value = 'Agent 版本已恢复';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '恢复版本失败';
+  } finally {
+    versionSaving.value = false;
+  }
+}
+
+async function createTestSuiteFromForm() {
+  if (!agentForm.value.id || !testSuiteForm.value.name.trim() || testSaving.value) return;
+  testSaving.value = true;
+  try {
+    const suite = await apiCreateAgentTestSuite(agentForm.value.id, {
+      name: testSuiteForm.value.name.trim(),
+      description: testSuiteForm.value.description.trim(),
+    }, backendBaseUrl.value);
+    agentTestSuites.value = [suite, ...agentTestSuites.value.filter((item) => item.id !== suite.id)];
+    activeTestSuiteId.value = suite.id;
+    testSuiteForm.value = { name: '', description: '' };
+    agentTestCases.value = [];
+    status.value = '测试集已创建';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '创建测试集失败';
+  } finally {
+    testSaving.value = false;
+  }
+}
+
+async function createTestCaseFromForm() {
+  if (!activeTestSuiteId.value || !testCaseForm.value.name.trim() || !testCaseForm.value.input.trim() || testSaving.value) return;
+  testSaving.value = true;
+  try {
+    const testCase = await apiCreateAgentTestCase(activeTestSuiteId.value, {
+      name: testCaseForm.value.name.trim(),
+      input: testCaseForm.value.input.trim(),
+      expectedOutput: testCaseForm.value.expectedOutput.trim(),
+      rubric: testCaseForm.value.rubric.trim(),
+    }, backendBaseUrl.value);
+    agentTestCases.value = [...agentTestCases.value, testCase];
+    testCaseForm.value = { name: '', input: '', expectedOutput: '', rubric: '' };
+    await loadAgentTestSuites();
+    status.value = '测试用例已添加';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '添加测试用例失败';
+  } finally {
+    testSaving.value = false;
+  }
+}
+
+async function loadSelectedTestCases() {
+  if (!activeTestSuiteId.value) {
+    agentTestCases.value = [];
+    return;
+  }
+  try {
+    agentTestCases.value = await fetchAgentTestCases(activeTestSuiteId.value, backendBaseUrl.value);
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '加载测试用例失败';
+  }
+}
+
+async function runSelectedTestSuite() {
+  if (!activeTestSuiteId.value || testRunning.value) return;
+  testRunning.value = true;
+  try {
+    activeTestRun.value = await apiRunAgentTestSuite(activeTestSuiteId.value, backendBaseUrl.value);
+    status.value = '回归测试已完成';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '运行回归测试失败';
+  } finally {
+    testRunning.value = false;
+  }
+}
+
+async function createMcpServerFromForm() {
+  if (!mcpForm.value.token.trim() || mcpSaving.value) return;
+  mcpSaving.value = true;
+  try {
+    const server = await apiCreateMcpServer({
+      name: mcpForm.value.name.trim() || 'Notion',
+      serverType: 'notion',
+      config: { token: mcpForm.value.token.trim() },
+      enabled: true,
+    }, backendBaseUrl.value);
+    mcpServers.value = [server, ...mcpServers.value.filter((item) => item.id !== server.id)];
+    mcpForm.value.token = '';
+    status.value = 'Notion MCP Server 已保存';
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '保存 MCP Server 失败';
+  } finally {
+    mcpSaving.value = false;
+  }
+}
+
+async function testMcpServer(serverId: string) {
+  if (mcpTesting.value) return;
+  mcpTesting.value = true;
+  try {
+    const result = await apiTestMcpServer(serverId, mcpForm.value.query.trim() || 'test', backendBaseUrl.value);
+    status.value = `MCP 测试${result.ok ? '成功' : '失败'}`;
+    mcpServers.value = await fetchMcpServers(backendBaseUrl.value);
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '测试 MCP 失败';
+  } finally {
+    mcpTesting.value = false;
+  }
+}
+
 async function createDefaultWorkflow() {
   if (workflowCreating.value) return;
   workflowCreating.value = true;
@@ -1057,9 +1638,21 @@ async function createDefaultWorkflow() {
     nodes.push({
       id: createId('wf-prompt'),
       type: 'prompt',
-      name: '结果整理',
-      config: { template: 'Workflow 输入:\n{{input}}\n\n请基于以上上下文整理可执行要点。' },
+      name: '上下文整理',
+      config: { template: '用户原始任务:\n{{originalInput}}\n\n上游节点输出:\n{{input}}' },
     });
+
+    if (agentForm.value.id) {
+      nodes.push({
+        id: createId('wf-agent'),
+        type: 'agent',
+        name: 'Agent 执行',
+        config: {
+          agentId: agentForm.value.id,
+          input: '请完成用户原始任务:\n{{originalInput}}\n\n可参考的上游上下文:\n{{input}}',
+        },
+      });
+    }
 
     const workflow = await apiCreateWorkflow({
       name: `${agentForm.value.name || 'Agent'} Workflow`,
@@ -4526,6 +5119,72 @@ function openVideoUploadInput() {
                 </div>
               </template>
 
+              <div class="agent-builder">
+                <div class="agent-builder-head">
+                  <span>拖拽制作 Agent</span>
+                  <div class="agent-builder-actions">
+                    <el-button size="small" text @click="clearAgentBuilderCanvas()">清空</el-button>
+                    <el-button size="small" type="primary" plain @click="applyAgentBuilder()">应用</el-button>
+                  </div>
+                </div>
+                <div class="agent-builder-body">
+                  <div class="agent-builder-palette">
+                    <div
+                      v-for="block in agentBuilderBlocks"
+                      :key="block.type"
+                      class="agent-builder-block"
+                      draggable="true"
+                      @dragstart="startAgentBuilderDrag(block)"
+                    >
+                      <strong>{{ block.title }}</strong>
+                      <span>{{ block.detail }}</span>
+                    </div>
+                  </div>
+                  <div
+                    class="agent-builder-canvas"
+                    :class="{ dragging: Boolean(agentBuilderDragging) }"
+                    @dragover.prevent
+                    @drop.prevent="dropAgentBuilderBlock()"
+                  >
+                    <template v-if="agentBuilderCanvas.length > 0">
+                      <div
+                        v-for="block in agentBuilderCanvas"
+                        :key="block.type"
+                        class="agent-builder-node"
+                      >
+                        <span>{{ block.title }}</span>
+                        <el-button size="small" text :icon="Delete" @click="removeAgentBuilderBlock(block.type)" />
+                      </div>
+                    </template>
+                    <span v-else>拖到这里组合 Agent</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="agent-generator-box">
+                <div class="agent-builder-head">
+                  <span>AI 生成 Agent</span>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    plain
+                    :loading="agentGenerating"
+                    :disabled="!generatorForm.requirement.trim()"
+                    @click="generateAgentFromRequirement()"
+                  >
+                    生成
+                  </el-button>
+                </div>
+                <el-input
+                  v-model="generatorForm.requirement"
+                  type="textarea"
+                  :rows="3"
+                  resize="vertical"
+                  maxlength="4000"
+                  placeholder="描述你想要的 Agent，例如：一个能读取知识库、调用 Notion、生成周报并做自检的研究助理。"
+                />
+              </div>
+
               <el-form label-position="top" class="agent-form">
                 <el-form-item label="名称">
                   <el-input v-model="agentForm.name" maxlength="80" show-word-limit placeholder="例如：产品客服 Agent" />
@@ -4558,6 +5217,39 @@ function openVideoUploadInput() {
                     ]"
                   />
                 </el-form-item>
+                <div class="agent-publish-box">
+                  <div class="agent-publish-row">
+                    <div>
+                      <strong>发布与接入</strong>
+                      <p>开启后可通过公开地址或 API Key 调用当前 Agent。</p>
+                    </div>
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :loading="agentPublishing"
+                      :disabled="!agentForm.id"
+                      @click="saveAgentPublication()"
+                    >
+                      保存发布配置
+                    </el-button>
+                  </div>
+                  <div class="agent-form-grid">
+                    <el-form-item label="公开发布">
+                      <el-switch v-model="agentForm.published" active-text="公开" inactive-text="私有" />
+                    </el-form-item>
+                    <el-form-item label="API 接入">
+                      <el-switch v-model="agentForm.apiEnabled" active-text="开启" inactive-text="关闭" />
+                    </el-form-item>
+                  </div>
+                  <el-form-item label="公开标识">
+                    <el-input v-model="agentForm.publicSlug" maxlength="80" placeholder="例如 product-support-agent" />
+                  </el-form-item>
+                  <div class="agent-endpoint-list">
+                    <el-input :model-value="agentPublicEndpoint" readonly placeholder="公开调用地址" />
+                    <el-input :model-value="agentApiEndpoint" readonly placeholder="API Key 调用地址" />
+                  </div>
+                </div>
                 <el-form-item label="长期记忆">
                   <el-switch v-model="agentForm.memoryEnabled" active-text="启用" inactive-text="关闭" />
                 </el-form-item>
@@ -4579,6 +5271,27 @@ function openVideoUploadInput() {
                     >
                       <span>{{ tool.displayName }}</span>
                       <el-text type="info" size="small" style="margin-left:8px">{{ tool.name }}</el-text>
+                    </el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="Skills">
+                  <el-select
+                    v-model="agentForm.skillIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="选择 Agent 能力包"
+                    style="width:100%"
+                  >
+                    <el-option
+                      v-for="skill in availableSkills"
+                      :key="skill.id"
+                      :label="skill.name"
+                      :value="skill.id"
+                    >
+                      <span>{{ skill.name }}</span>
+                      <el-text type="info" size="small" style="margin-left:8px">{{ skill.category }}</el-text>
                     </el-option>
                   </el-select>
                 </el-form-item>
@@ -4630,6 +5343,7 @@ function openVideoUploadInput() {
                     <el-tag v-if="agentForm.model" size="small">{{ agentForm.model }}</el-tag>
                     <el-tag v-if="agentForm.memoryEnabled" size="small" type="success">Memory</el-tag>
                     <el-tag v-if="agentForm.toolIds.length" size="small" type="warning">Tools {{ agentForm.toolIds.length }}</el-tag>
+                    <el-tag v-if="agentForm.skillIds.length" size="small" type="success">Skills {{ agentForm.skillIds.length }}</el-tag>
                     <el-tag v-if="agentForm.knowledgeBaseIds.length" size="small" type="primary">RAG {{ agentForm.knowledgeBaseIds.length }}</el-tag>
                     <el-tag v-if="activeAgent" size="small" type="info">运行 {{ activeAgent.runCount }} 次</el-tag>
                   </div>
@@ -4647,6 +5361,13 @@ function openVideoUploadInput() {
                   @keydown.enter.exact.prevent="runCurrentAgent()"
                   @compositionstart="isComposing = true"
                   @compositionend="isComposing = false"
+                />
+                <el-input
+                  v-model="agentImageUrlInput"
+                  type="textarea"
+                  :rows="2"
+                  resize="vertical"
+                  placeholder="可选：图片 URL，一行一个；使用视觉模型时会作为多模态输入"
                 />
                 <div class="agent-run-actions">
                   <el-text type="info" size="small">
@@ -4804,6 +5525,121 @@ function openVideoUploadInput() {
                   </el-scrollbar>
                 </el-tab-pane>
 
+                <el-tab-pane label="Skills" name="skills">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="skillForm.name" placeholder="Skill 名称" maxlength="80" />
+                      <el-input v-model="skillForm.category" placeholder="分类，例如 code / research / ops" maxlength="64" />
+                      <el-input v-model="skillForm.description" placeholder="描述" maxlength="300" />
+                      <el-input
+                        v-model="skillForm.content"
+                        type="textarea"
+                        :rows="6"
+                        resize="vertical"
+                        placeholder="写入可复用能力说明、步骤约束、输出格式和工具使用策略"
+                      />
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="skillCreating"
+                        :disabled="!skillForm.name.trim() || !skillForm.content.trim()"
+                        @click="createSkillFromForm()"
+                      >
+                        创建并挂载 Skill
+                      </el-button>
+                      <el-divider />
+                      <div v-for="skill in availableSkills" :key="skill.id" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <span>{{ skill.name }}</span>
+                          <el-tag size="small" type="info">{{ skill.category }}</el-tag>
+                        </div>
+                        <div class="agent-resource-meta">{{ skill.userId ? '自定义 Skill' : '平台预置 Skill' }}</div>
+                        <div class="agent-resource-content">{{ skill.description || skill.content }}</div>
+                      </div>
+                      <el-empty v-if="availableSkills.length === 0" description="暂无 Skill" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="Team" name="team">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="teamForm.name" placeholder="Team 名称，默认使用当前 Agent 名称" maxlength="80" />
+                      <el-input v-model="teamForm.description" placeholder="团队职责描述" maxlength="300" />
+                      <el-segmented
+                        v-model="teamForm.strategy"
+                        :options="[
+                          { label: 'Sequential', value: 'sequential' },
+                          { label: 'Review', value: 'review' },
+                          { label: 'Debate', value: 'debate' },
+                          { label: 'Parallel', value: 'parallel' },
+                          { label: 'Consensus', value: 'consensus' },
+                          { label: 'Router', value: 'router' },
+                        ]"
+                      />
+                      <el-select
+                        v-model="teamForm.memberIds"
+                        multiple
+                        filterable
+                        collapse-tags
+                        placeholder="选择协作 Agent"
+                        style="width:100%"
+                      >
+                        <el-option
+                          v-for="agent in agents"
+                          :key="agent.id"
+                          :label="agent.name"
+                          :value="agent.id"
+                          :disabled="agent.id === agentForm.id"
+                        />
+                      </el-select>
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="teamCreating"
+                        :disabled="!agentForm.id && teamForm.memberIds.length === 0"
+                        @click="createTeamFromForm()"
+                      >
+                        创建 Team
+                      </el-button>
+                      <el-divider />
+                      <el-select v-model="activeTeamId" placeholder="选择 Agent Team" filterable style="width:100%">
+                        <el-option v-for="team in agentTeams" :key="team.id" :label="team.name" :value="team.id" />
+                      </el-select>
+                      <el-input v-model="teamInput" type="textarea" :rows="4" resize="vertical" placeholder="Team 输入" />
+                      <el-button
+                        type="primary"
+                        :loading="teamRunning"
+                        :disabled="!activeTeamId || !teamInput.trim()"
+                        @click="runSelectedTeam()"
+                      >
+                        运行 Team
+                      </el-button>
+                      <div v-for="team in agentTeams" :key="team.id" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <span>{{ team.name }}</span>
+                          <el-tag size="small" type="info">{{ team.strategy }}</el-tag>
+                        </div>
+                        <div class="agent-resource-meta">{{ team.members.length }} agents</div>
+                        <div class="agent-resource-content">{{ team.description || '暂无描述' }}</div>
+                      </div>
+                      <div v-if="activeTeamRun" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <span>最近 Team 输出</span>
+                          <el-tag size="small" :type="agentRunTagType(activeTeamRun.status)">{{ activeTeamRun.status }}</el-tag>
+                        </div>
+                        <div class="agent-resource-content">{{ activeTeamRun.output || activeTeamRun.error }}</div>
+                        <el-divider />
+                        <div v-for="member in activeTeamRun.memberOutputs" :key="member.runId" class="agent-resource-content">
+                          <strong>{{ member.role }}</strong>
+                          <p>{{ member.output || member.error }}</p>
+                        </div>
+                      </div>
+                      <el-empty v-if="agentTeams.length === 0" description="暂无 Agent Team" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
                 <el-tab-pane label="Workflow" name="workflow">
                   <el-scrollbar class="agent-resource-scroll">
                     <div class="agent-resource-stack">
@@ -4832,6 +5668,172 @@ function openVideoUploadInput() {
                         <div class="agent-resource-meta">{{ workflow.nodes.length }} nodes · {{ workflow.status }}</div>
                       </div>
                       <el-empty v-if="workflows.length === 0" description="暂无 Workflow" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="版本" name="versions">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="versionForm.label" placeholder="版本标签，例如 release-1" maxlength="120" />
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="versionSaving"
+                        :disabled="!agentForm.id"
+                        @click="createVersionFromForm()"
+                      >
+                        创建版本快照
+                      </el-button>
+                      <div v-for="version in agentVersions" :key="version.id" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <span>v{{ version.versionNumber }} · {{ version.label }}</span>
+                          <el-button size="small" text :loading="versionSaving" @click="restoreVersion(version.id)">恢复</el-button>
+                        </div>
+                        <div class="agent-resource-meta">{{ formatAgentDate(version.createdAt) }}</div>
+                      </div>
+                      <el-empty v-if="agentVersions.length === 0" description="暂无版本" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="测试" name="tests">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="testSuiteForm.name" placeholder="测试集名称" maxlength="120" />
+                      <el-input v-model="testSuiteForm.description" placeholder="测试集描述" maxlength="300" />
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="testSaving"
+                        :disabled="!agentForm.id || !testSuiteForm.name.trim()"
+                        @click="createTestSuiteFromForm()"
+                      >
+                        创建测试集
+                      </el-button>
+                      <el-select v-model="activeTestSuiteId" placeholder="选择测试集" filterable style="width:100%">
+                        <el-option v-for="suite in agentTestSuites" :key="suite.id" :label="`${suite.name} (${suite.caseCount})`" :value="suite.id" />
+                      </el-select>
+                      <el-input v-model="testCaseForm.name" placeholder="用例名称" maxlength="120" />
+                      <el-input v-model="testCaseForm.input" type="textarea" :rows="3" resize="vertical" placeholder="测试输入" />
+                      <el-input v-model="testCaseForm.expectedOutput" type="textarea" :rows="3" resize="vertical" placeholder="期望输出/关键点" />
+                      <el-input v-model="testCaseForm.rubric" type="textarea" :rows="2" resize="vertical" placeholder="评测标准" />
+                      <div class="agent-run-actions">
+                        <el-button
+                          type="primary"
+                          plain
+                          :loading="testSaving"
+                          :disabled="!activeTestSuiteId || !testCaseForm.name.trim() || !testCaseForm.input.trim()"
+                          @click="createTestCaseFromForm()"
+                        >
+                          添加用例
+                        </el-button>
+                        <el-button
+                          type="primary"
+                          :loading="testRunning"
+                          :disabled="!activeTestSuiteId || agentTestCases.length === 0"
+                          @click="runSelectedTestSuite()"
+                        >
+                          运行回归
+                        </el-button>
+                      </div>
+                      <div v-if="activeTestRun" class="agent-resource-item">
+                        <div class="agent-resource-title">最近回归结果</div>
+                        <pre class="agent-step-meta">{{ JSON.stringify(activeTestRun, null, 2) }}</pre>
+                      </div>
+                      <div v-for="testCase in agentTestCases" :key="testCase.id" class="agent-resource-item">
+                        <div class="agent-resource-title">{{ testCase.name }}</div>
+                        <div class="agent-resource-content">{{ testCase.input }}</div>
+                      </div>
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="MCP" name="mcp">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <el-input v-model="mcpForm.name" placeholder="Server 名称" maxlength="80" />
+                      <el-input v-model="mcpForm.token" type="password" show-password placeholder="Notion Internal Integration Token" />
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="mcpSaving"
+                        :disabled="!mcpForm.token.trim()"
+                        @click="createMcpServerFromForm()"
+                      >
+                        保存 Notion MCP
+                      </el-button>
+                      <el-input v-model="mcpForm.query" placeholder="Notion 测试查询" maxlength="200" />
+                      <div v-for="server in mcpServers" :key="server.id" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <span>{{ server.name }}</span>
+                          <el-tag size="small" :type="server.lastStatus === 'ok' ? 'success' : 'info'">{{ server.lastStatus }}</el-tag>
+                        </div>
+                        <div class="agent-resource-meta">{{ server.serverType }} · {{ server.enabled ? 'enabled' : 'disabled' }}</div>
+                        <div v-if="server.lastError" class="agent-step-error">{{ server.lastError }}</div>
+                        <el-button size="small" text :loading="mcpTesting" @click="testMcpServer(server.id)">测试连接</el-button>
+                      </div>
+                      <el-empty v-if="mcpServers.length === 0" description="暂无 MCP Server" :image-size="72" />
+                    </div>
+                  </el-scrollbar>
+                </el-tab-pane>
+
+                <el-tab-pane label="评测" name="eval">
+                  <el-scrollbar class="agent-resource-scroll">
+                    <div class="agent-resource-stack">
+                      <div class="agent-eval-grid">
+                        <div class="agent-eval-stat">
+                          <strong>{{ agentStats ? Math.round(agentStats.successRate * 100) : 0 }}%</strong>
+                          <span>成功率</span>
+                        </div>
+                        <div class="agent-eval-stat">
+                          <strong>{{ agentStats?.averageScore || 0 }}</strong>
+                          <span>平均分</span>
+                        </div>
+                        <div class="agent-eval-stat">
+                          <strong>{{ agentStats?.averageLatencyMs || 0 }}</strong>
+                          <span>ms</span>
+                        </div>
+                        <div class="agent-eval-stat">
+                          <strong>{{ agentStats?.averageTokens || 0 }}</strong>
+                          <span>tokens</span>
+                        </div>
+                      </div>
+
+                      <el-input
+                        v-model="evaluationForm.expectedOutput"
+                        type="textarea"
+                        :rows="3"
+                        resize="vertical"
+                        placeholder="可选：期望答案或关键点"
+                      />
+                      <el-input
+                        v-model="evaluationForm.rubric"
+                        type="textarea"
+                        :rows="3"
+                        resize="vertical"
+                        placeholder="可选：自定义评测标准"
+                      />
+                      <el-button
+                        type="primary"
+                        plain
+                        :loading="agentEvaluationSaving"
+                        :disabled="!activeAgentRun"
+                        @click="evaluateActiveAgentRun()"
+                      >
+                        评测当前运行
+                      </el-button>
+
+                      <el-divider />
+                      <div v-for="evaluation in agentEvaluations" :key="evaluation.id" class="agent-resource-item">
+                        <div class="agent-resource-title">
+                          <el-tag size="small" :type="agentEvalTagType(evaluation.grade)">{{ evaluation.grade }}</el-tag>
+                          <span>{{ evaluation.score }}/100</span>
+                        </div>
+                        <div class="agent-resource-content">{{ evaluation.summary }}</div>
+                        <div class="agent-resource-meta">{{ formatAgentDate(evaluation.createdAt) }}</div>
+                      </div>
+                      <el-empty v-if="!agentEvaluationLoading && agentEvaluations.length === 0" description="暂无评测记录" :image-size="72" />
                     </div>
                   </el-scrollbar>
                 </el-tab-pane>

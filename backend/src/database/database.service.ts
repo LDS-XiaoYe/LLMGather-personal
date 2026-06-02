@@ -31,6 +31,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.createTables();
     await this.migrateColumnsIfNeeded();
     await this.seedBuiltinTools();
+    await this.seedDefaultAgentSkills();
     await this.seedProviderConfigs();
     await this.seedSystemSettings();
     await this.seedRouterRules();
@@ -220,12 +221,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         max_tokens INT NOT NULL DEFAULT 1024,
         status VARCHAR(16) NOT NULL DEFAULT 'active',
         memory_enabled INT NOT NULL DEFAULT 1,
+        published INT NOT NULL DEFAULT 0,
+        api_enabled INT NOT NULL DEFAULT 0,
+        public_slug VARCHAR(80) DEFAULT NULL,
         metadata TEXT,
         created_at ${ts},
         updated_at ${ts},
         deleted_at DATETIME(3) DEFAULT NULL,
         INDEX idx_agents_user (user_id),
-        INDEX idx_agents_status (status)
+        INDEX idx_agents_status (status),
+        UNIQUE KEY uniq_agents_public_slug (public_slug),
+        INDEX idx_agents_published (published, api_enabled)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -267,6 +273,82 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         metadata TEXT,
         INDEX idx_agent_run_steps_run (run_id),
         INDEX idx_agent_run_steps_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_evaluations (
+        id ${pk},
+        agent_id VARCHAR(36) NOT NULL,
+        run_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        score INT NOT NULL DEFAULT 0,
+        grade VARCHAR(16) NOT NULL DEFAULT 'unknown',
+        summary TEXT NOT NULL,
+        rubric_json TEXT NOT NULL,
+        created_at ${ts},
+        INDEX idx_agent_evaluations_agent (agent_id, created_at),
+        INDEX idx_agent_evaluations_run (run_id),
+        INDEX idx_agent_evaluations_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_skills (
+        id ${pk},
+        user_id VARCHAR(36) DEFAULT NULL,
+        name VARCHAR(80) NOT NULL,
+        description TEXT NOT NULL,
+        content TEXT NOT NULL,
+        category VARCHAR(64) NOT NULL DEFAULT 'custom',
+        enabled INT NOT NULL DEFAULT 1,
+        created_at ${ts},
+        updated_at ${ts},
+        UNIQUE KEY uniq_agent_skills_user_name (user_id, name),
+        INDEX idx_agent_skills_enabled (enabled),
+        INDEX idx_agent_skills_category (category)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_skill_bindings (
+        agent_id VARCHAR(36) NOT NULL,
+        skill_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        created_at ${ts},
+        PRIMARY KEY (agent_id, skill_id),
+        INDEX idx_agent_skill_bindings_user (user_id),
+        INDEX idx_agent_skill_bindings_skill (skill_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_teams (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(80) NOT NULL,
+        description TEXT NOT NULL,
+        strategy VARCHAR(24) NOT NULL DEFAULT 'sequential',
+        members_json TEXT NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_agent_teams_user (user_id),
+        INDEX idx_agent_teams_status (status)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_team_runs (
+        id ${pk},
+        team_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        error TEXT NOT NULL,
+        member_outputs_json TEXT NOT NULL,
+        latency_ms INT NOT NULL DEFAULT 0,
+        created_at ${ts},
+        completed_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_agent_team_runs_team (team_id),
+        INDEX idx_agent_team_runs_user_created (user_id, created_at)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -347,11 +429,88 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         user_id VARCHAR(36) NOT NULL,
         chunk_index INT NOT NULL DEFAULT 0,
         content TEXT NOT NULL,
+        embedding_json TEXT,
         token_estimate INT NOT NULL DEFAULT 0,
         created_at ${ts},
         INDEX idx_kb_chunks_kb (kb_id),
         INDEX idx_kb_chunks_doc (document_id),
         FULLTEXT INDEX ft_kb_chunks_content (content)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS mcp_servers (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(80) NOT NULL,
+        server_type VARCHAR(32) NOT NULL,
+        config_json TEXT NOT NULL,
+        enabled INT NOT NULL DEFAULT 1,
+        last_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+        last_error TEXT NOT NULL,
+        created_at ${ts},
+        updated_at ${ts},
+        INDEX idx_mcp_servers_user (user_id),
+        INDEX idx_mcp_servers_type (server_type)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_versions (
+        id ${pk},
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        version_number INT NOT NULL,
+        label VARCHAR(120) NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at ${ts},
+        UNIQUE KEY uniq_agent_versions_number (agent_id, version_number),
+        INDEX idx_agent_versions_agent (agent_id),
+        INDEX idx_agent_versions_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_test_suites (
+        id ${pk},
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(120) NOT NULL,
+        description TEXT NOT NULL,
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_agent_test_suites_agent (agent_id),
+        INDEX idx_agent_test_suites_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_test_cases (
+        id ${pk},
+        suite_id VARCHAR(36) NOT NULL,
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(120) NOT NULL,
+        input TEXT NOT NULL,
+        expected_output TEXT NOT NULL,
+        rubric TEXT NOT NULL,
+        created_at ${ts},
+        updated_at ${ts},
+        INDEX idx_agent_test_cases_suite (suite_id),
+        INDEX idx_agent_test_cases_agent (agent_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_test_runs (
+        id ${pk},
+        suite_id VARCHAR(36) NOT NULL,
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        summary_json TEXT NOT NULL,
+        case_results_json LONGTEXT NOT NULL,
+        created_at ${ts},
+        completed_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_agent_test_runs_suite (suite_id),
+        INDEX idx_agent_test_runs_agent (agent_id),
+        INDEX idx_agent_test_runs_user (user_id)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -445,7 +604,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
-    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'tools', 'agent_tools', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
+    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
         await this.adapter.exec(
@@ -572,6 +731,46 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     } catch {
       // column already exists
     }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agents ADD COLUMN published INT NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agents ADD COLUMN api_enabled INT NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agents ADD COLUMN public_slug VARCHAR(80) DEFAULT NULL`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agents ADD UNIQUE KEY uniq_agents_public_slug (public_slug)`,
+      );
+    } catch {
+      // index already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE knowledge_chunks ADD COLUMN embedding_json TEXT`,
+      );
+    } catch {
+      // column already exists
+    }
   }
 
   private async seedBuiltinTools(): Promise<void> {
@@ -594,6 +793,45 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         displayName: '安全计算器',
         description: '执行简单数学表达式计算，仅支持数字和 + - * / % ^ ( ) . 运算符。',
         schema: { type: 'object', required: ['expression'], properties: { expression: { type: 'string' } } },
+      },
+      {
+        name: 'javascript_runner',
+        displayName: '受限 JS 代码执行',
+        description: '在受限沙箱中运行短 JavaScript 片段，适合 Agent 做数据转换、轻量计算和调试验证。',
+        schema: {
+          type: 'object',
+          required: ['code'],
+          properties: {
+            code: { type: 'string', description: 'JavaScript 代码，最后一个表达式会作为 result 返回。' },
+            input: { type: 'object', description: '传入代码的 JSON 输入，可通过 input 变量访问。' },
+          },
+        },
+      },
+      {
+        name: 'container_javascript_runner',
+        displayName: '容器 JS 沙箱',
+        description: '通过独立 code-runner 容器运行短 JavaScript 片段，用于更隔离的代码执行。',
+        schema: {
+          type: 'object',
+          required: ['code'],
+          properties: {
+            code: { type: 'string' },
+            input: { type: 'object' },
+          },
+        },
+      },
+      {
+        name: 'notion_search',
+        displayName: 'Notion 搜索',
+        description: '通过已配置的 Notion MCP Server 搜索页面和数据库标题。',
+        schema: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string' },
+            limit: { type: 'number', default: 5 },
+          },
+        },
       },
       {
         name: 'text_stats',
@@ -625,6 +863,72 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           `INSERT INTO tools (id, user_id, name, display_name, description, schema_json, implementation_type, enabled, created_at, updated_at)
            VALUES (?, NULL, ?, ?, ?, ?, 'builtin', 1, ?, ?)`,
         ).run(randomUUID(), tool.name, tool.displayName, tool.description, JSON.stringify(tool.schema), now, now);
+      }
+    }
+  }
+
+  private async seedDefaultAgentSkills(): Promise<void> {
+    const now = dbNow();
+    const randomUUID = (await import('crypto')).randomUUID;
+    const skills: Array<{ name: string; description: string; content: string; category: string }> = [
+      {
+        name: 'Research Planner',
+        description: '将开放式研究问题拆解为检索、证据评估、结论综合和不确定性标注。',
+        category: 'research',
+        content: [
+          '你具备 Research Agent 能力。',
+          '处理研究任务时先拆解问题、列出信息缺口，再基于可用知识库/工具给出证据链。',
+          '必须区分事实、推断和建议；遇到证据不足时标注不确定性。',
+        ].join('\n'),
+      },
+      {
+        name: 'Code Operator',
+        description: '让 Agent 更适合阅读代码、生成代码、调用代码执行工具并解释调试结果。',
+        category: 'code',
+        content: [
+          '你具备 Code Agent 能力。',
+          '涉及代码任务时先说明假设，再给出可运行片段或修改建议。',
+          '可以使用代码执行工具验证轻量逻辑；输出时包含输入、关键步骤、结果和边界情况。',
+        ].join('\n'),
+      },
+      {
+        name: 'Data Analyst',
+        description: '面向数据分析任务，强调指标定义、数据清洗、计算验证和业务解释。',
+        category: 'analysis',
+        content: [
+          '你具备 Data Analysis Agent 能力。',
+          '先明确指标口径和数据字段，再进行计算、对比和异常解释。',
+          '如果使用工具得到中间结果，需要把结果转化为业务可理解的结论。',
+        ].join('\n'),
+      },
+      {
+        name: 'Workflow Orchestrator',
+        description: '帮助 Agent 面向复杂任务进行阶段规划、工具/RAG/记忆协同和复盘。',
+        category: 'workflow',
+        content: [
+          '你具备 Workflow Orchestration 能力。',
+          '复杂任务要拆成计划、执行、校验、总结四个阶段。',
+          '优先复用可用工具、知识库和长期记忆；最后输出可复盘的执行轨迹。',
+        ].join('\n'),
+      },
+    ];
+
+    for (const skill of skills) {
+      const existing = await this.adapter.prepare(
+        'SELECT id FROM agent_skills WHERE user_id IS NULL AND name = ? LIMIT 1',
+      ).get(skill.name) as { id: string } | undefined;
+
+      if (existing) {
+        await this.adapter.prepare(
+          `UPDATE agent_skills
+           SET description = ?, content = ?, category = ?, enabled = 1, updated_at = ?
+           WHERE id = ?`,
+        ).run(skill.description, skill.content, skill.category, now, existing.id);
+      } else {
+        await this.adapter.prepare(
+          `INSERT INTO agent_skills (id, user_id, name, description, content, category, enabled, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, ?, ?, 1, ?, ?)`,
+        ).run(randomUUID(), skill.name, skill.description, skill.content, skill.category, now, now);
       }
     }
   }

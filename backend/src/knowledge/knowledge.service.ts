@@ -90,11 +90,21 @@ export class KnowledgeService {
 
     const chunks = this.chunkText(dto.content);
     const stmt = this.databaseService.connection.prepare(
-      `INSERT INTO knowledge_chunks (id, kb_id, document_id, user_id, chunk_index, content, token_estimate, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO knowledge_chunks (id, kb_id, document_id, user_id, chunk_index, content, embedding_json, token_estimate, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (let i = 0; i < chunks.length; i++) {
-      await stmt.run(randomUUID(), kbId, docId, userId, i, chunks[i], this.estimateTokens(chunks[i]), now);
+      await stmt.run(
+        randomUUID(),
+        kbId,
+        docId,
+        userId,
+        i,
+        chunks[i],
+        JSON.stringify(this.embed(chunks[i])),
+        this.estimateTokens(chunks[i]),
+        now,
+      );
     }
 
     return { id: docId, kbId, title: dto.title.trim(), chunkCount: chunks.length };
@@ -110,17 +120,29 @@ export class KnowledgeService {
 
     const placeholders = uniqueKbIds.map(() => '?').join(',');
     const rows = await this.databaseService.connection.prepare(
-      `SELECT c.id, c.kb_id as kbId, c.document_id as documentId, d.title, c.content
+      `SELECT c.id, c.kb_id as kbId, c.document_id as documentId, d.title, c.content, c.embedding_json as embeddingJson
        FROM knowledge_chunks c
        JOIN knowledge_documents d ON d.id = c.document_id
        WHERE c.user_id = ? AND c.kb_id IN (${placeholders}) AND d.deleted_at IS NULL
        ORDER BY c.created_at DESC
        LIMIT 300`,
-    ).all(userId, ...uniqueKbIds) as unknown as Array<Omit<KnowledgeSearchResult, 'score'>>;
+    ).all(userId, ...uniqueKbIds) as unknown as Array<Omit<KnowledgeSearchResult, 'score'> & { embeddingJson?: string }>;
 
     const terms = this.terms(query);
+    const queryVector = this.embed(query);
     return rows
-      .map((row) => ({ ...row, score: this.score(row.content + '\n' + row.title, terms) }))
+      .map((row) => {
+        const keywordScore = this.score(row.content + '\n' + row.title, terms);
+        const vectorScore = this.cosine(queryVector, this.parseVector(row.embeddingJson));
+        return {
+          id: row.id,
+          kbId: row.kbId,
+          documentId: row.documentId,
+          title: row.title,
+          content: row.content,
+          score: Number((keywordScore + vectorScore * 100).toFixed(4)),
+        };
+      })
       .filter((row) => row.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
@@ -193,5 +215,48 @@ export class KnowledgeService {
       score += count * Math.min(10, term.length);
     }
     return score;
+  }
+
+  private embed(text: string): number[] {
+    const vector = Array.from({ length: 64 }, () => 0);
+    const terms = this.terms(text);
+    const chars = Array.from(text.replace(/\s+/g, '').slice(0, 2000));
+    for (const term of terms) {
+      const idx = this.hash(term) % vector.length;
+      vector[idx] += Math.min(4, term.length);
+    }
+    for (let i = 0; i < chars.length - 1; i++) {
+      const gram = chars[i] + chars[i + 1];
+      const idx = this.hash(gram) % vector.length;
+      vector[idx] += 0.25;
+    }
+    const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+    return vector.map((value) => Number((value / norm).toFixed(6)));
+  }
+
+  private parseVector(raw?: string): number[] {
+    try {
+      const parsed = JSON.parse(raw || '[]') as unknown;
+      return Array.isArray(parsed) ? parsed.map(Number) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private cosine(left: number[], right: number[]): number {
+    if (!left.length || !right.length) return 0;
+    const size = Math.min(left.length, right.length);
+    let sum = 0;
+    for (let i = 0; i < size; i++) sum += left[i] * right[i];
+    return Math.max(0, sum);
+  }
+
+  private hash(value: string): number {
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i++) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return Math.abs(hash >>> 0);
   }
 }

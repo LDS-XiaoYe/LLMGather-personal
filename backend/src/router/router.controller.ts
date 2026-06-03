@@ -9,6 +9,28 @@ import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { extractContentDelta } from '../common/stream-utils';
 import { RouterService } from './router.service';
 
+function flushSse(res: Response): void {
+  (res as Response & { flush?: () => void }).flush?.();
+}
+
+function writeSse(res: Response, payload: unknown): void {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  flushSse(res);
+}
+
+function writeStreamError(res: Response, model: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  writeSse(res, {
+    id: `stream-error-${Date.now()}`,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta: { content: `请求失败：${message}` }, finish_reason: 'error' }],
+  });
+  res.write('data: [DONE]\n\n');
+  flushSse(res);
+}
+
 @Controller('router')
 @UseGuards(ApiKeyOrJwtGuard)
 export class RouterController {
@@ -64,23 +86,25 @@ export class RouterController {
     if (payload.stream) {
       const usageEstimate = this.billingService.reserveForStream(user.id, routedPayload);
       const upstream = await this.chatService.createCompletionStream(routedPayload);
-
-      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache, no-transform');
-      res.setHeader('Connection', 'keep-alive');
-      // Inject routing decision as custom header
-      res.setHeader('x-router-intent', decision.intent);
-      res.setHeader('x-router-model', decision.selectedModel);
-      res.setHeader('x-router-reason', encodeURIComponent(decision.reason));
-
-      // Send routing info as first SSE event
-      res.write(`data: ${JSON.stringify({ router_decision: decision })}\n\n`);
-
       const reader = upstream.body?.getReader();
       if (!reader) {
         res.status(502).json({ error: { message: 'Upstream stream unavailable' } });
         return;
       }
+
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      // Inject routing decision as custom header
+      res.setHeader('x-router-intent', decision.intent);
+      res.setHeader('x-router-model', decision.selectedModel);
+      res.setHeader('x-router-reason', encodeURIComponent(decision.reason));
+      res.flushHeaders?.();
+
+      // Send routing info as first SSE event
+      res.write(`data: ${JSON.stringify({ router_decision: decision })}\n\n`);
+      flushSse(res);
 
       const decoder = new TextDecoder();
       let generatedText = '';
@@ -92,7 +116,12 @@ export class RouterController {
           const chunkText = decoder.decode(value, { stream: true });
           generatedText += extractContentDelta(chunkText);
           res.write(chunkText);
+          flushSse(res);
         }
+      } catch (error) {
+        writeStreamError(res, routedPayload.model, error);
+        res.end();
+        return;
       } finally {
         reader.releaseLock();
       }
@@ -107,7 +136,7 @@ export class RouterController {
       const updatedUser = await this.billingService.chargeForCompletion(
         user.id, routedPayload, finalUsage, 'chat',
       );
-      res.setHeader('x-credit-balance', updatedUser.credits.toFixed(6));
+      writeSse(res, { billing: { creditBalance: updatedUser.credits.toFixed(6) } });
 
       // Record routing metric
       const latencyMs = Date.now() - startedAt;

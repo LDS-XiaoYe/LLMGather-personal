@@ -500,9 +500,10 @@ export class AdminService {
   async updateSystemSetting(key: string, value: string): Promise<void> {
     const db = this.databaseService.connection;
     const now = this.databaseService.now();
+    const sanitizedValue = this.sanitizeSystemSettingValue(key, value);
     await db.prepare(
       'UPDATE system_settings SET value = ?, updated_at = ? WHERE `key` = ?',
-    ).run(value, now, key);
+    ).run(sanitizedValue, now, key);
     await this.settings.reloadAll();
   }
 
@@ -514,7 +515,7 @@ export class AdminService {
     const tierRow = await db.prepare(
       'SELECT value FROM system_settings WHERE `key` = ?',
     ).get('model_tier_mapping') as { value: string } | undefined;
-    const tiers: Record<string, string[]> = tierRow ? JSON.parse(tierRow.value) : {};
+    const tiers = this.sanitizeModelTierMapping(tierRow ? JSON.parse(tierRow.value) : {});
 
     const labelRow = await db.prepare(
       'SELECT value FROM system_settings WHERE `key` = ?',
@@ -531,16 +532,24 @@ export class AdminService {
       prices[tier] = { prompt: p.prompt, completion: p.completion, description: `【${tier}】` };
     }
 
+    if (tierRow && tierRow.value !== JSON.stringify(tiers)) {
+      await db.prepare(
+        'UPDATE system_settings SET value = ?, updated_at = ? WHERE `key` = ?',
+      ).run(JSON.stringify(tiers), this.databaseService.now(), 'model_tier_mapping');
+      await this.settings.reloadAll();
+    }
+
     return { tiers, prices, labels };
   }
 
   async updateModelTiers(body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string> }): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string> }> {
     const db = this.databaseService.connection;
     const now = this.databaseService.now();
+    const tiers = this.sanitizeModelTierMapping(body.tiers);
 
     await db.prepare(
       'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
-    ).run('model_tier_mapping', JSON.stringify(body.tiers), '模型到计费档位的映射（JSON）', now);
+    ).run('model_tier_mapping', JSON.stringify(tiers), '模型到计费档位的映射（JSON）', now);
 
     if (body.labels) {
       await db.prepare(
@@ -565,6 +574,7 @@ export class AdminService {
     ).get('model_tier_mapping') as { value: string } | undefined;
     const tiers: Record<string, string[]> = row ? JSON.parse(row.value) : {};
 
+    if (models.includes('auto')) models = models.filter((model) => model !== 'auto');
     if (!tiers[tierKey]) tiers[tierKey] = [];
     for (const m of models) {
       if (!tiers[tierKey].includes(m)) tiers[tierKey].push(m);
@@ -600,5 +610,53 @@ export class AdminService {
 
     await this.settings.reloadAll();
     return { tiers };
+  }
+
+  private sanitizeModelTierMapping(tiers: Record<string, string[]>): Record<string, string[]> {
+    const allowedGeminiModels = new Set(['gemini-3.5-flash']);
+    const cleaned: Record<string, string[]> = {};
+    for (const [tier, models] of Object.entries(tiers || {})) {
+      cleaned[tier] = Array.from(new Set((models || []).filter((model) => (
+        model &&
+        model !== 'auto' &&
+        (!model.startsWith('gemini-') || allowedGeminiModels.has(model))
+      ))));
+    }
+    return cleaned;
+  }
+
+  private sanitizeSystemSettingValue(key: string, value: string): string {
+    if (key === 'model_tags') {
+      return JSON.stringify(this.sanitizeModelTags(value));
+    }
+    if (key.startsWith('page_models_')) {
+      return this.sanitizeModelCsv(value);
+    }
+    if (key === 'model_tier_mapping') {
+      try {
+        return JSON.stringify(this.sanitizeModelTierMapping(JSON.parse(value) as Record<string, string[]>));
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+
+  private sanitizeModelTags(value: string): Record<string, string[]> {
+    const allowedTags = new Set(['language', 'vision', 'audio']);
+    const parsed = JSON.parse(value) as Record<string, string[]>;
+    const cleaned: Record<string, string[]> = {};
+    for (const [model, tags] of Object.entries(parsed || {})) {
+      if (!model || model === 'auto') continue;
+      const next = Array.from(new Set((tags || []).filter((tag) => allowedTags.has(tag))));
+      if (next.length > 0) cleaned[model] = next;
+    }
+    return cleaned;
+  }
+
+  private sanitizeModelCsv(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '*') return trimmed || '*';
+    return Array.from(new Set(trimmed.split(',').map((model) => model.trim()).filter((model) => model && model !== 'auto'))).join(',');
   }
 }

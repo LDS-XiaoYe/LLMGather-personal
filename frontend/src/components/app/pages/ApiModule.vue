@@ -19,6 +19,7 @@ const formatTime = bind(app, 'formatTime');
 const isAuthDialogOpen = bind(app, 'isAuthDialogOpen');
 const authUser = bind(app, 'authUser');
 const userInvitationCode = bind(app, 'userInvitationCode');
+const agents = bind(app, 'agents');
 const apiKeys = bind(app, 'apiKeys');
 const apiKeyLoading = bind(app, 'apiKeyLoading');
 const apiKeyCreateDialog = bind(app, 'apiKeyCreateDialog');
@@ -130,6 +131,55 @@ resp = client.chat.completions.create(
     messages=[{"role": "user", "content": "你好"}],
 )
 print(resp.choices[0].message.content)</pre>
+          </el-card>
+
+          <el-card shadow="never" class="api-section">
+            <template #header>
+              <div style="display:flex;align-items:center;gap:8px"><strong>Agent API</strong><el-tag size="small" type="primary">开发 / 调用</el-tag></div>
+            </template>
+            <div class="api-sub-title">开发管理接口使用登录 JWT；调用接口支持 API Key；公开调用不需要认证，但 Agent 必须开启公开发布和 API 接入。</div>
+            <div class="api-endpoint">GET /v1/agents</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">POST /v1/agents</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "name": "客服助手",
+    "description": "回答产品和售后问题",
+    "model": "glm-5.1",
+    "systemPrompt": "你是专业客服助手。",
+    "temperature": 0.4,
+    "maxTokens": 1024,
+    "memoryEnabled": true,
+    "toolIds": [],
+    "knowledgeBaseIds": [],
+    "skillIds": []
+  }'</pre>
+            <div class="api-endpoint">PATCH /v1/agents/:id/publication</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/publication \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "published": true,
+    "apiEnabled": true,
+    "publicSlug": "support-agent"
+  }'</pre>
+            <div class="api-endpoint">POST /v1/agents/:id/invoke</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/invoke \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -d '{
+    "input": "请根据知识库回答：如何申请退款？",
+    "messages": []
+  }'</pre>
+            <div class="api-endpoint">POST /v1/public/agents/:slug/runs</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/public/agents/support-agent/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "公开调用这个 Agent"
+  }'</pre>
           </el-card>
 
           <el-card shadow="never" class="api-section">

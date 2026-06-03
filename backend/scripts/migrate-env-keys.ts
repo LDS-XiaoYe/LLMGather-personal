@@ -4,7 +4,7 @@
  * 用法（在 backend 目录下）:
  *   npx ts-node scripts/migrate-env-keys.ts
  *
- * 脚本会读取 .env 中的 QWEN_API_KEY / GLM_API_KEY / DEEPSEEK_API_KEY / XIAOMI_API_KEY，
+ * 脚本会读取 .env 中的 QWEN_API_KEY / GLM_API_KEY / DEEPSEEK_API_KEY / XIAOMI_API_KEY / GEMINI_API_KEY，
  * 然后插入到 provider_api_keys 表（MySQL）。已存在的 key（按 provider_name 去重）不会重复插入。
  */
 
@@ -23,6 +23,7 @@ async function main() {
     { provider: 'glm', envVar: 'GLM_API_KEY', value: process.env.GLM_API_KEY },
     { provider: 'deepseek', envVar: 'DEEPSEEK_API_KEY', value: process.env.DEEPSEEK_API_KEY },
     { provider: 'xiaomi-mimo', envVar: 'XIAOMI_API_KEY', value: process.env.XIAOMI_API_KEY },
+    { provider: 'gemini', envVar: 'GEMINI_API_KEY', value: process.env.GEMINI_API_KEY },
   ];
 
   // Filter to only keys that have a value

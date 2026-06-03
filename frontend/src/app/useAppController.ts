@@ -236,7 +236,8 @@ export function useAppController() {
   const agentImageUrlInput = ref('');
   const agentRuns = ref<AgentRun[]>([]);
   const activeAgentRun = ref<AgentRun | null>(null);
-  const agentPageTab = ref<'overview' | 'basic' | 'capabilities' | 'collab' | 'integration' | 'prompt' | 'tools' | 'marketplace'>('basic');
+  const agentWorkspaceMode = ref<'develop' | 'invoke'>('develop');
+  const agentPageTab = ref<'overview' | 'basic' | 'capabilities' | 'tools' | 'workflow' | 'collab' | 'integration' | 'publish' | 'prompt' | 'marketplace'>('basic');
   const agentConsoleTab = ref<'history' | 'memory' | 'team' | 'workflow' | 'versions' | 'tests' | 'mcp' | 'eval'>('memory');
 
   // 使用DAG节点composable
@@ -265,6 +266,10 @@ export function useAppController() {
   const skillCreating = ref(false);
   const showSkillCreateDialog = ref(false);
   const skillPreviewOpen = ref(false);
+  const showTeamCreateDialog = ref(false);
+  const showMcpCreateDialog = ref(false);
+  const showTestSuiteCreateDialog = ref(false);
+  const showTestCaseCreateDialog = ref(false);
   const skillTesting = ref(false);
   const activeSkill = ref<SkillDefinition | null>(null);
   const activeSkillTestResult = ref<SkillTestResult | null>(null);
@@ -439,9 +444,13 @@ export function useAppController() {
   });
   const mcpForm = ref({
     name: 'Notion',
+    serverType: 'notion' as 'notion',
     token: '',
     query: '',
   });
+  const mcpServerOptions = [
+    { label: 'Notion', value: 'notion' as const, tokenPlaceholder: 'Notion Integration Token' },
+  ];
   const versionForm = ref({
     label: '',
   });
@@ -2062,7 +2071,7 @@ export function useAppController() {
   ## 示例
 
   ### 输入
-  ${skillexampleInput || '暂无示例输入'}
+  ${skill.exampleInput || '暂无示例输入'}
 
   ### 输出
   ${skill.exampleOutput || '暂无示例输出'}
@@ -2476,6 +2485,7 @@ export function useAppController() {
       teamForm.value.name = '';
       teamForm.value.description = '';
       teamForm.value.memberIds = [];
+      showTeamCreateDialog.value = false;
       status.value = 'Agent Team 已创建';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '创建 Agent Team 失败';
@@ -2541,6 +2551,7 @@ export function useAppController() {
       activeTestSuiteId.value = suite.id;
       testSuiteForm.value = { name: '', description: '' };
       agentTestCases.value = [];
+      showTestSuiteCreateDialog.value = false;
       status.value = '测试集已创建';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '创建测试集失败';
@@ -2562,6 +2573,7 @@ export function useAppController() {
       agentTestCases.value = [...agentTestCases.value, testCase];
       testCaseForm.value = { name: '', input: '', expectedOutput: '', rubric: '' };
       await loadAgentTestSuites();
+      showTestCaseCreateDialog.value = false;
       status.value = '测试用例已添加';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '添加测试用例失败';
@@ -2599,14 +2611,17 @@ export function useAppController() {
     if (!mcpForm.value.token.trim() || mcpSaving.value) return;
     mcpSaving.value = true;
     try {
+      const selectedServer = mcpServerOptions.find((item) => item.value === mcpForm.value.serverType);
       const server = await apiCreateMcpServer({
-        name: mcpForm.value.name.trim() || 'Notion',
-        serverType: 'notion',
+        name: mcpForm.value.name.trim() || selectedServer?.label || 'Notion',
+        serverType: mcpForm.value.serverType,
         config: { token: mcpForm.value.token.trim() },
         enabled: true,
       }, backendBaseUrl.value);
       mcpServers.value = [server, ...mcpServers.value.filter((item) => item.id !== server.id)];
+      mcpForm.value.name = selectedServer?.label || 'Notion';
       mcpForm.value.token = '';
+      showMcpCreateDialog.value = false;
       status.value = 'Notion MCP Server 已保存';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '保存 MCP Server 失败';
@@ -2670,23 +2685,26 @@ export function useAppController() {
 
   function dropDagNode(event: DragEvent) {
     if (!dagNodeDragging) return;
+    const draggedNode = dagNodeDragging;
     const canvas = event.currentTarget as HTMLElement;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left - 80;
-    const y = event.clientY - rect.top - 30;
+    const x = event.clientX - rect.left + canvas.scrollLeft - 95;
+    const y = event.clientY - rect.top + canvas.scrollTop - 36;
+    const maxX = Math.max(8, canvas.clientWidth - 210);
+    const maxY = Math.max(8, canvas.clientHeight - 120);
     
     const count = workflowCanvasNodes.value.length;
     workflowCanvasNodes.value.push({
-      id: createId(`dag-${dagNodeDragging.type}`),
-      type: dagNodeDragging.type as any,
-      name: dagNodeDragging.label,
+      id: createId(`dag-${draggedNode.type}`),
+      type: draggedNode.type as any,
+      name: draggedNode.label,
       config: {},
-      x: Math.max(8, Math.min(760, x)),
-      y: Math.max(8, Math.min(430, y)),
+      x: Math.max(8, Math.min(maxX, x || 48 + (count % 4) * 230)),
+      y: Math.max(8, Math.min(maxY, y || 72 + Math.floor(count / 4) * 136)),
     });
     
     dagNodeDragging = null;
-    status.value = `已添加节点: ${dagNodeDragging?.label}`;
+    status.value = `已添加节点: ${draggedNode.label}`;
   }
 
   function addWorkflowCanvasNode(type: WorkflowNode['type']) {
@@ -2716,10 +2734,11 @@ export function useAppController() {
     const drag = workflowCanvasDrag.value;
     if (!drag) return;
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const canvas = event.currentTarget as HTMLElement;
     const node = workflowCanvasNodes.value.find((item) => item.id === drag.id);
     if (!node) return;
-    node.x = Math.max(8, Math.min(760, event.clientX - rect.left - drag.offsetX));
-    node.y = Math.max(8, Math.min(430, event.clientY - rect.top - drag.offsetY));
+    node.x = Math.max(8, Math.min(Math.max(8, canvas.clientWidth - 210), event.clientX - rect.left - drag.offsetX));
+    node.y = Math.max(8, Math.min(Math.max(8, canvas.clientHeight - 120), event.clientY - rect.top - drag.offsetY));
   }
 
   function stopWorkflowNodeDrag() {
@@ -3681,7 +3700,10 @@ export function useAppController() {
   }
 
   function openAddProviderKey() {
-    adminNewKeyProvider.value = 'qwen';
+    adminNewKeyProvider.value =
+      adminApiKeyProviderFilter.value ||
+      adminProviderConfigs.value[0]?.providerName ||
+      'qwen';
     adminNewKeyName.value = '';
     adminNewKeyValue.value = '';
     adminAddKeyDialog.value = true;
@@ -3979,7 +4001,7 @@ export function useAppController() {
   interface ModelTierRow { modelId: string; tierKey: string; promptPrice: number; completionPrice: number }
 
   const allModelTierRows = computed<ModelTierRow[]>(() => {
-    return models.value.map((m) => {
+    return models.value.filter((m) => m.id !== 'auto').map((m) => {
       const tierKey = modelTierMap.value.get(m.id) || '';
       const price = adminModelTiers.value.prices[tierKey];
       return {
@@ -5977,6 +5999,7 @@ export function useAppController() {
     agentImageUrlInput,
     agentRuns,
     activeAgentRun,
+    agentWorkspaceMode,
     agentPageTab,
     agentConsoleTab,
     dagNodeCategories,
@@ -6006,6 +6029,10 @@ export function useAppController() {
     skillCreating,
     showSkillCreateDialog,
     skillPreviewOpen,
+    showTeamCreateDialog,
+    showMcpCreateDialog,
+    showTestSuiteCreateDialog,
+    showTestCaseCreateDialog,
     skillTesting,
     activeSkill,
     activeSkillTestResult,
@@ -6062,6 +6089,7 @@ export function useAppController() {
     skillForm,
     teamForm,
     mcpForm,
+    mcpServerOptions,
     versionForm,
     testSuiteForm,
     testCaseForm,

@@ -52,7 +52,7 @@ function maskApiKey(key: string): string {
 
 /* -------- Hardcoded fallback (used when DB has no configs yet) -------- */
 
-const DEFAULT_PROVIDER_NAMES = ['qwen', 'glm', 'deepseek', 'xiaomi-mimo', 'minimax', 'kimi', 'gui'];
+const DEFAULT_PROVIDER_NAMES = ['qwen', 'glm', 'deepseek', 'xiaomi-mimo', 'minimax', 'kimi', 'gui', 'gemini'];
 
 const PROVIDER_ENV_MAP: Record<string, { keysEnv: string; keyEnv: string }> = {
   qwen: { keysEnv: 'QWEN_API_KEYS', keyEnv: 'QWEN_API_KEY' },
@@ -62,7 +62,17 @@ const PROVIDER_ENV_MAP: Record<string, { keysEnv: string; keyEnv: string }> = {
   minimax: { keysEnv: 'MINIMAX_API_KEYS', keyEnv: 'MINIMAX_API_KEY' },
   kimi: { keysEnv: 'KIMI_API_KEYS', keyEnv: 'KIMI_API_KEY' },
   gui: { keysEnv: 'GUI_API_KEYS', keyEnv: 'GUI_API_KEY' },
+  gemini: { keysEnv: 'GEMINI_API_KEYS', keyEnv: 'GEMINI_API_KEY' },
 };
+
+const DASHSCOPE_FALLBACK_PROVIDER_NAMES = new Set([
+  'qwen',
+  'glm',
+  'deepseek',
+  'minimax',
+  'kimi',
+  'gui',
+]);
 
 /* -------- Service -------- */
 
@@ -122,12 +132,14 @@ export class ProviderApiKeyStore implements OnModuleInit {
     if (envConfig) {
       const primaryKeys = parseKeysFromEnv(envConfig.keysEnv);
       for (const k of primaryKeys) envKeys.push(k);
-      const dashscopeKeys = parseKeysFromEnv('DASHSCOPE_API_KEYS');
-      for (const k of dashscopeKeys) {
-        if (!envKeys.includes(k)) envKeys.push(k);
+      if (DASHSCOPE_FALLBACK_PROVIDER_NAMES.has(providerName)) {
+        const dashscopeKeys = parseKeysFromEnv('DASHSCOPE_API_KEYS');
+        for (const k of dashscopeKeys) {
+          if (!envKeys.includes(k)) envKeys.push(k);
+        }
+        const dashscopeKey = process.env.DASHSCOPE_API_KEY || '';
+        if (dashscopeKey && !envKeys.includes(dashscopeKey)) envKeys.push(dashscopeKey);
       }
-      const dashscopeKey = process.env.DASHSCOPE_API_KEY || '';
-      if (dashscopeKey && !envKeys.includes(dashscopeKey)) envKeys.push(dashscopeKey);
       const singleKey = process.env[envConfig.keyEnv] || '';
       if (singleKey && !envKeys.includes(singleKey)) envKeys.push(singleKey);
     }

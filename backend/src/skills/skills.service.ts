@@ -137,6 +137,8 @@ export class SkillsService {
   }
 
   async setAgentSkills(userId: string, agentId: string, skillIds: string[]): Promise<void> {
+    await this.assertAgentOwnedByUser(userId, agentId);
+
     await this.databaseService.connection.prepare(
       'DELETE FROM agent_skill_bindings WHERE user_id = ? AND agent_id = ?',
     ).run(userId, agentId);
@@ -151,6 +153,7 @@ export class SkillsService {
   }
 
   async bindAgentSkill(userId: string, agentId: string, skillId: string): Promise<void> {
+    await this.assertAgentOwnedByUser(userId, agentId);
     await this.getById(userId, skillId);
     await this.databaseService.connection.prepare(
       `INSERT IGNORE INTO agent_skill_bindings (agent_id, skill_id, user_id, created_at)
@@ -309,5 +312,12 @@ export class SkillsService {
       return skill.exampleOutput.replaceAll('{{input}}', input);
     }
     return `已根据「${skill.name}」处理输入，并生成结构化建议。`;
+  }
+
+  private async assertAgentOwnedByUser(userId: string, agentId: string): Promise<void> {
+    const row = await this.databaseService.connection.prepare(
+      'SELECT id FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL LIMIT 1',
+    ).get(agentId, userId) as unknown as { id: string } | undefined;
+    if (!row) throw new ForbiddenException('Agent 不存在或无权访问');
   }
 }

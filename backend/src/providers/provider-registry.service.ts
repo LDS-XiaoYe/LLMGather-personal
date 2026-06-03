@@ -10,6 +10,12 @@ import {
   OpenAiCompatibleProvider,
   OpenAiCompatibleConfig,
 } from './openai-compatible.provider';
+import { GeminiProvider } from './gemini.provider';
+import { ApiKeyPool } from './api-key-pool';
+
+type ProviderWithKeyPool = ProviderAdapter & {
+  setKeyPool?: (pool: ApiKeyPool) => void;
+};
 
 @Injectable()
 export class ProviderRegistryService implements OnModuleInit {
@@ -72,8 +78,8 @@ export class ProviderRegistryService implements OnModuleInit {
         authPrefix: cfg.authPrefix,
       };
 
-      const provider = new OpenAiCompatibleProvider(providerConfig);
-      provider.setKeyPool(pool);
+      const provider = this.createProvider(providerConfig, cfg.baseUrl);
+      (provider as ProviderWithKeyPool).setKeyPool?.(pool);
       this.providers.push(provider);
 
       console.log(
@@ -138,12 +144,27 @@ export class ProviderRegistryService implements OnModuleInit {
       authPrefix: cfg.authPrefix,
     };
 
-    const provider = new OpenAiCompatibleProvider(providerConfig);
-    provider.setKeyPool(pool);
+    const provider = this.createProvider(providerConfig, cfg.baseUrl);
+    (provider as ProviderWithKeyPool).setKeyPool?.(pool);
     this.providers.push(provider);
 
     console.log(
       `[ProviderRegistry] Reloaded "${cfg.displayName}" (${cfg.providerName}): ${models.length} models, ${pool.size()} keys`,
     );
+  }
+
+  private createProvider(config: OpenAiCompatibleConfig, baseUrl: string): ProviderAdapter {
+    const normalizedName = config.providerName.toLowerCase();
+    const normalizedBaseUrl = baseUrl.toLowerCase();
+    if (normalizedName === 'gemini' || normalizedName === 'google-gemini' || normalizedBaseUrl.includes('generativelanguage.googleapis.com')) {
+      return new GeminiProvider({
+        providerName: config.providerName,
+        baseUrl: config.baseUrl,
+        models: config.models,
+        timeoutMs: config.timeoutMs,
+        retryCount: config.retryCount,
+      });
+    }
+    return new OpenAiCompatibleProvider(config);
   }
 }

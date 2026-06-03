@@ -319,11 +319,11 @@ html, body, #app {
 }
 
 .agent-workspace-switch {
-  padding: 12px 16px;
+  padding: 10px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   border-bottom: 1px solid #e5e7eb;
   background: #fff;
 }
@@ -360,6 +360,66 @@ html, body, #app {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.agent-workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.agent-mode-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.agent-workspace-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.agent-workspace-tab {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 64px;
+  padding: 8px 14px;
+  position: relative;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+}
+
+.agent-workspace-tab:hover {
+  background: #f1f5f9;
+  color: #1f2937;
+}
+
+.agent-workspace-tab.active {
+  background: #2563eb;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .22);
+  color: #fff;
+}
+
+.agent-page-tabs {
+  min-width: max-content;
 }
 
 /* Agent Guide Mini */
@@ -440,35 +500,57 @@ html, body, #app {
 .agent-page.agent-mode-overview .agent-overview-panel { grid-area: content; }
 .agent-page.agent-mode-basic .agent-basic-panel { grid-area: content; }
 .agent-page.agent-mode-capabilities .agent-capabilities-panel { grid-area: content; }
+.agent-page.agent-mode-workflow .agent-workflow-panel { grid-area: content; }
 .agent-page.agent-mode-collab .agent-collab-panel { grid-area: content; }
 .agent-page.agent-mode-integration .agent-integration-panel { grid-area: content; }
+.agent-page.agent-mode-publish .agent-publish-panel { grid-area: content; }
 .agent-page.agent-mode-prompt .agent-prompt-panel { grid-area: content; }
 .agent-page.agent-mode-tools .agent-tools-panel { grid-area: content; }
 .agent-page.agent-mode-marketplace .agent-marketplace-panel { grid-area: content; }
+.agent-page.agent-mode-invoke .agent-invoke-panel { grid-area: content; }
 
 .agent-page .agent-panel {
   display: none;
 }
 
+.agent-page.agent-mode-collab,
+.agent-page.agent-mode-workflow {
+  padding: 0;
+}
+
+.agent-page.agent-mode-collab {
+  overflow-y: auto;
+}
+
+.agent-page.agent-mode-workflow {
+  overflow: hidden;
+}
+
 .agent-page.agent-mode-overview .agent-overview-panel,
 .agent-page.agent-mode-basic .agent-basic-panel,
 .agent-page.agent-mode-capabilities .agent-capabilities-panel,
+.agent-page.agent-mode-workflow .agent-workflow-panel,
 .agent-page.agent-mode-collab .agent-collab-panel,
 .agent-page.agent-mode-integration .agent-integration-panel,
+.agent-page.agent-mode-publish .agent-publish-panel,
 .agent-page.agent-mode-prompt .agent-prompt-panel,
 .agent-page.agent-mode-tools .agent-tools-panel,
-.agent-page.agent-mode-marketplace .agent-marketplace-panel {
+.agent-page.agent-mode-marketplace .agent-marketplace-panel,
+.agent-page.agent-mode-invoke .agent-invoke-panel {
   display: flex;
 }
 
 .agent-overview-panel,
 .agent-basic-panel,
 .agent-capabilities-panel,
+.agent-workflow-panel,
 .agent-collab-panel,
 .agent-integration-panel,
+.agent-publish-panel,
 .agent-prompt-panel,
 .agent-tools-panel,
-.agent-marketplace-panel {
+.agent-marketplace-panel,
+.agent-invoke-panel {
   grid-area: content;
 }
 
@@ -489,7 +571,11 @@ html, body, #app {
 .agent-basic-panel,
 .agent-capabilities-panel,
 .agent-advanced-panel,
-.agent-prompt-panel {
+.agent-workflow-panel,
+.agent-collab-panel,
+.agent-publish-panel,
+.agent-prompt-panel,
+.agent-invoke-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -497,8 +583,30 @@ html, body, #app {
 
 .agent-overview-panel .el-card__body,
 .agent-basic-panel .el-card__body,
-.agent-prompt-panel .el-card__body {
+.agent-collab-panel .el-card__body,
+.agent-publish-panel .el-card__body,
+.agent-workflow-panel .el-card__body,
+.agent-prompt-panel .el-card__body,
+.agent-invoke-panel .el-card__body {
   overflow-y: auto;
+}
+
+.agent-collab-panel .el-card__body {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.agent-workflow-panel .el-card__body {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.agent-publish-page {
+  width: min(920px, 100%);
 }
 
 .agent-capabilities-panel .el-card__body,
@@ -534,10 +642,107 @@ html, body, #app {
 
 .agent-collab-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  gap: 0;
   flex: 1;
   min-height: 0;
+  height: auto;
+}
+
+.agent-workflow-panel .dag-section {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.agent-team-section {
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #fff;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.agent-team-section .agent-section-title,
+.dag-workbench-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.agent-team-section .agent-section-title {
+  margin-bottom: 0;
+}
+
+.agent-team-section .agent-section-title > span,
+.dag-workbench-head > div:first-child {
+  min-width: 0;
+}
+
+.agent-team-section .agent-section-title .el-button,
+.dag-actions {
+  flex-shrink: 0;
+}
+
+.agent-team-runbar {
+  display: grid;
+  grid-template-columns: 220px minmax(240px, 420px) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.agent-team-runbar .el-select,
+.agent-team-runbar .el-textarea,
+.agent-team-runbar .el-button {
+  min-width: 0;
+}
+
+.agent-team-runbar .el-textarea {
+  max-width: 420px;
+}
+
+.agent-team-runbar .el-button {
+  width: 72px;
+}
+
+.agent-team-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.agent-team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 6px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.agent-team-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.agent-team-chip small {
+  color: #6b7280;
+  white-space: nowrap;
 }
 
 .agent-integration-grid {
@@ -1185,30 +1390,74 @@ html, body, #app {
 .dag-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
+  min-height: 900px;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  overflow: hidden;
+}
+
+.dag-workbench-head {
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.dag-workbench-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dag-workbench-head strong {
+  font-size: 15px;
+  color: #111827;
+}
+
+.dag-workbench-head span {
+  font-size: 12px;
+  color: #6b7280;
 }
 
 .dag-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
+.dag-workbench,
 .dag-builder {
   display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 12px;
-  min-height: 400px;
+  grid-template-columns: 184px minmax(0, 1fr);
+  min-height: 760px;
+  flex: 1;
 }
 
 .dag-node-palette {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  background: #f8fafc;
+  border-right: 1px solid #e5e7eb;
   overflow: hidden;
+  min-height: 0;
+}
+
+.dag-palette-title {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
 }
 
 .dag-category {
-  padding: 8px;
+  padding: 6px;
   border-bottom: 1px solid #e5e7eb;
 }
 
@@ -1223,25 +1472,26 @@ html, body, #app {
   font-size: 12px;
   font-weight: 600;
   color: #374151;
-  margin-bottom: 6px;
-  padding: 4px 0;
+  margin-bottom: 4px;
+  padding: 2px 0;
 }
 
 .dag-category-nodes {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .dag-node-item {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  justify-content: flex-start;
+  padding: 7px 8px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   cursor: grab;
   transition: all 0.2s;
 }
@@ -1263,15 +1513,28 @@ html, body, #app {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100px;
+  max-width: 124px;
+}
+
+.dag-canvas-stage {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background:
+    linear-gradient(#e5e7eb 1px, transparent 1px),
+    linear-gradient(90deg, #e5e7eb 1px, transparent 1px),
+    #f8fafc;
+  background-size: 24px 24px;
+  min-height: 760px;
 }
 
 .dag-canvas {
   position: relative;
-  min-height: 400px;
-  border: 2px dashed #d1d5db;
-  border-radius: 8px;
-  background: #fff;
+  width: 2400px;
+  height: 1400px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
 }
 
@@ -1286,9 +1549,9 @@ html, body, #app {
 
 .dag-canvas-node {
   position: absolute;
-  width: 160px;
+  width: 190px;
   background: #fff;
-  border: 2px solid #e5e7eb;
+  border: 1px solid #d1d5db;
   border-radius: 8px;
   cursor: move;
   transition: box-shadow 0.2s;
@@ -1296,7 +1559,7 @@ html, body, #app {
 }
 
 .dag-canvas-node:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
 }
 
 .dag-canvas-node.connecting {
@@ -1387,6 +1650,7 @@ html, body, #app {
   gap: 8px;
   height: 100%;
   color: #9ca3af;
+  pointer-events: none;
 }
 
 .dag-canvas-empty span {
@@ -1401,6 +1665,20 @@ html, body, #app {
 .dag-toolbar {
   display: flex;
   gap: 8px;
+}
+
+.dag-runner {
+  display: grid;
+  grid-template-columns: minmax(260px, 520px) auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.dag-runner .el-textarea {
+  max-width: 520px;
 }
 
 .dag-node-config-header {
@@ -1559,9 +1837,24 @@ html, body, #app {
 }
 
 .agent-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   font-weight: 700;
   color: #111827;
   margin-bottom: 8px;
+}
+
+.agent-section-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-section-title .el-button {
+  flex-shrink: 0;
 }
 
 .agent-placeholder {
@@ -2988,6 +3281,25 @@ html.dark .agent-workspace-switch {
   background: #1e293b;
   border-bottom-color: #334155;
 }
+html.dark .agent-mode-nav {
+  background: #0f172a;
+  border-bottom-color: #334155;
+}
+html.dark .agent-workspace-tabs {
+  background: #1e293b;
+  border-color: #334155;
+}
+html.dark .agent-workspace-tab {
+  color: #cbd5e1;
+}
+html.dark .agent-workspace-tab:hover {
+  background: #334155;
+  color: #f8fafc;
+}
+html.dark .agent-workspace-tab.active {
+  background: #3b82f6;
+  color: #fff;
+}
 html.dark .agent-current-name {
   color: #f1f5f9;
 }
@@ -4125,6 +4437,10 @@ html.dark .agent-history-item.active {
     overflow-x: auto;
   }
 
+  .agent-workspace-actions {
+    flex-shrink: 0;
+  }
+
   .agent-page {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
@@ -4139,8 +4455,10 @@ html.dark .agent-history-item.active {
   .agent-page.agent-mode-overview,
   .agent-page.agent-mode-basic,
   .agent-page.agent-mode-capabilities,
+  .agent-page.agent-mode-workflow,
   .agent-page.agent-mode-collab,
   .agent-page.agent-mode-integration,
+  .agent-page.agent-mode-publish,
   .agent-page.agent-mode-prompt,
   .agent-page.agent-mode-tools,
   .agent-page.agent-mode-marketplace {
@@ -4153,6 +4471,7 @@ html.dark .agent-history-item.active {
   .agent-collab-grid,
   .agent-integration-grid {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .agent-history-list {
@@ -4200,6 +4519,14 @@ html.dark .agent-history-item.active {
 
   .dag-builder {
     grid-template-columns: 1fr;
+  }
+
+  .dag-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .dag-section {
+    height: 760px;
   }
   
 }

@@ -33,8 +33,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.seedBuiltinTools();
     await this.seedDefaultAgentSkills();
     await this.seedProviderConfigs();
+    await this.ensureGeminiProviderConfig();
     await this.seedSystemSettings();
+    await this.ensureGeminiSystemSettings();
     await this.seedRouterRules();
+    await this.ensureGeminiRouterRules();
     console.log('[Database] Tables & seed data ready.');
   }
 
@@ -1152,6 +1155,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         timeoutMs: 25000,
         retryCount: 2,
       },
+      {
+        id: randomUUID(),
+        providerName: 'gemini',
+        displayName: 'Gemini (Google)',
+        baseUrl: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta',
+        models: 'gemini-3.5-flash',
+        modelPrefix: null,
+        timeoutMs: Number(process.env.GEMINI_TIMEOUT_MS || 30000),
+        retryCount: Number(process.env.GEMINI_RETRY_COUNT || 2),
+      },
     ];
 
     const stmt = this.adapter.prepare(
@@ -1165,6 +1178,38 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
     }
     console.log(`[Database] Seeded ${defaults.length} default provider configs.`);
+  }
+
+  private async ensureGeminiProviderConfig(): Promise<void> {
+    const existing = (await this.adapter
+      .prepare('SELECT id, models FROM provider_configs WHERE provider_name = ?')
+      .get('gemini')) as { id: string } | undefined;
+    if (existing) {
+      await this.adapter
+        .prepare('UPDATE provider_configs SET models = ?, updated_at = ? WHERE provider_name = ?')
+        .run('gemini-3.5-flash', dbNow(), 'gemini');
+      return;
+    }
+
+    const randomUUID = (await import('crypto')).randomUUID;
+    const now = dbNow();
+    await this.adapter
+      .prepare(
+        `INSERT INTO provider_configs (id, provider_name, display_name, base_url, models, model_prefix, auth_header, auth_prefix, timeout_ms, retry_count, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'Authorization', 'Bearer', ?, ?, 1, ?, ?)`,
+      )
+      .run(
+        randomUUID(),
+        'gemini',
+        'Gemini (Google)',
+        process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta',
+        'gemini-3.5-flash',
+        null,
+        Number(process.env.GEMINI_TIMEOUT_MS || 30000),
+        Number(process.env.GEMINI_RETRY_COUNT || 2),
+        now,
+        now,
+      );
+    console.log('[Database] Added missing Gemini provider config.');
   }
 
   private async seedSystemSettings(): Promise<void> {
@@ -1191,6 +1236,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       'MiniMax-M2.5': ['language'],
       'kimi-k2.6': ['language', 'vision'],
       'gui-plus': ['language', 'vision'],
+      'gemini-3.5-flash': ['language', 'vision'],
       'mimo-latest': ['language'],
       'mimo-v2.5-tts': ['audio'],
       'mimo-v2.5-tts-voicedesign': ['audio'],
@@ -1201,7 +1247,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ['page_models_chat', '*', '聊天页面可用模型（* 表示全部，或逗号分隔模型 ID）'],
       ['page_models_battle', '*', 'Battle 页面可用模型'],
       ['page_models_group', '*', '群组讨论参与模型（* 表示全部，或逗号分隔模型 ID）'],
-      ['page_models_vision', 'qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,qwen3.6-plus,kimi-k2.6,gui-plus', '视觉理解页面可用模型'],
+      ['page_models_vision', 'qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,qwen3.6-plus,kimi-k2.6,gui-plus,gemini-3.5-flash', '视觉理解页面可用模型'],
       ['page_models_tts', 'mimo-v2.5-tts,mimo-v2.5-tts-voicedesign,mimo-v2.5-tts-voiceclone', '语音生成页面可用模型'],
       ['model_tags', JSON.stringify(modelTags), '模型能力标签（JSON）：language=语言, vision=视觉, audio=音频'],
       // Runtime configuration keys (can be edited via管理后台)
@@ -1216,7 +1262,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         tier_flagship: ['qwen-max','qwen3.6-plus','glm-5','glm-5.1','deepseek-r1','deepseek-v4-pro','kimi-k2.6'],
         tier_super_flagship: [] as string[],
         tier_ultra: [] as string[],
-        tier_vision: ['qwen-vl-plus-latest','qwen-vl-max-latest','qwen-vl-ocr-latest','qwen2.5-vl-7b-instruct','qwen2.5-vl-72b-instruct'],
+        tier_vision: ['qwen-vl-plus-latest','qwen-vl-max-latest','qwen-vl-ocr-latest','qwen2.5-vl-7b-instruct','qwen2.5-vl-72b-instruct','gemini-3.5-flash'],
         tier_audio: ['mimo-v2.5-tts','mimo-v2.5-tts-voicedesign','mimo-v2.5-tts-voiceclone']
       }), '模型到计费档位的映射（JSON）'],
       ['rate_limit_login', '10', '登录接口单位 ttl 的最大请求数（默认 10）'],
@@ -1245,6 +1291,61 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async ensureGeminiSystemSettings(): Promise<void> {
+    const geminiModels = ['gemini-3.5-flash'];
+    await this.removeModelFromCsvSettings('auto');
+    await this.replaceGeminiModelsInCsvSetting('page_models_vision', geminiModels);
+
+    const tagRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('model_tags')) as { value: string } | undefined;
+    if (tagRow?.value) {
+      try {
+        const tags = JSON.parse(tagRow.value) as Record<string, string[]>;
+        let changed = false;
+        const allowedTags = new Set(['language', 'vision', 'audio']);
+        for (const model of Object.keys(tags)) {
+          if (model === 'auto' || (model.startsWith('gemini-') && !geminiModels.includes(model))) {
+            delete tags[model];
+            changed = true;
+            continue;
+          }
+          const next = Array.from(new Set((tags[model] || []).filter((tag) => allowedTags.has(tag))));
+          if (JSON.stringify(tags[model] || []) !== JSON.stringify(next)) {
+            changed = true;
+            if (next.length > 0) tags[model] = next;
+            else delete tags[model];
+          }
+        }
+        for (const model of geminiModels) {
+          const next = Array.from(new Set([...(tags[model] || []), 'language', 'vision']));
+          if (JSON.stringify(tags[model] || []) !== JSON.stringify(next)) changed = true;
+          tags[model] = next;
+        }
+        if (changed) await this.updateSystemSetting('model_tags', JSON.stringify(tags));
+      } catch {}
+    }
+
+    const tierRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('model_tier_mapping')) as { value: string } | undefined;
+    if (tierRow?.value) {
+      try {
+        const tiers = JSON.parse(tierRow.value) as Record<string, string[]>;
+        let changed = false;
+        for (const [tier, models] of Object.entries(tiers)) {
+          const next = Array.from(new Set((models || []).filter((model) => model && model !== 'auto' && (!model.startsWith('gemini-') || geminiModels.includes(model)))));
+          if (next.length !== (models || []).length) changed = true;
+          tiers[tier] = next;
+        }
+        changed = [
+          this.appendUnique(tiers, 'tier_vision', geminiModels),
+        ].some(Boolean) || changed;
+        if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
+      } catch {}
+    }
+  }
+
   private async seedRouterRules(): Promise<void> {
     const { count } = (await this.adapter
       .prepare('SELECT COUNT(*) as count FROM router_rules')
@@ -1256,7 +1357,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       translation: ['qwen-max', 'qwen-plus', 'glm-5'],
       creative: ['qwen-max', 'kimi-k2.6', 'MiniMax-M2.5'],
       reasoning: ['deepseek-r1', 'qwen3.6-plus', 'glm-5.1'],
-      vision: ['qwen-vl-max-latest', 'qwen-vl-plus-latest'],
+      vision: ['gemini-3.5-flash', 'qwen-vl-max-latest', 'qwen-vl-plus-latest'],
       summary: ['qwen-plus', 'glm-4.5-air', 'deepseek-v4-flash'],
       data: ['deepseek-v4-pro', 'qwen3.6-plus', 'glm-5'],
       general: ['qwen-plus', 'deepseek-v4-flash', 'glm-4.5-air'],
@@ -1268,5 +1369,74 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     for (const [intent, models] of Object.entries(rules)) {
       await stmt.run(intent, JSON.stringify(models));
     }
+  }
+
+  private async ensureGeminiRouterRules(): Promise<void> {
+    const row = (await this.adapter
+      .prepare('SELECT models FROM router_rules WHERE intent = ?')
+      .get('vision')) as { models: string } | undefined;
+    if (!row?.models) return;
+
+    try {
+      const models = JSON.parse(row.models) as string[];
+      const next = Array.from(new Set(['gemini-3.5-flash', ...models.filter((model) => !model.startsWith('gemini-'))]));
+      if (JSON.stringify(next) === JSON.stringify(models)) return;
+      await this.adapter
+        .prepare('UPDATE router_rules SET models = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE intent = ?')
+        .run(JSON.stringify(next), 'vision');
+    } catch {}
+  }
+
+  private async appendModelsToCsvSetting(key: string, models: string[]): Promise<void> {
+    const row = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get(key)) as { value: string } | undefined;
+    if (!row?.value || row.value.trim() === '*') return;
+
+    const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
+    const next = Array.from(new Set([...values, ...models]));
+    if (next.length === values.length) return;
+    await this.updateSystemSetting(key, next.join(','));
+  }
+
+  private async replaceGeminiModelsInCsvSetting(key: string, models: string[]): Promise<void> {
+    const row = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get(key)) as { value: string } | undefined;
+    if (!row?.value || row.value.trim() === '*') return;
+
+    const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
+    const next = Array.from(new Set([...values.filter((model) => !model.startsWith('gemini-')), ...models]));
+    if (next.join(',') === values.join(',')) return;
+    await this.updateSystemSetting(key, next.join(','));
+  }
+
+  private async removeModelFromCsvSettings(modelId: string): Promise<void> {
+    const rows = (await this.adapter
+      .prepare('SELECT `key`, value FROM system_settings WHERE `key` LIKE ?')
+      .all('page_models_%')) as Array<{ key: string; value: string }>;
+
+    for (const row of rows) {
+      const value = row.value?.trim();
+      if (!value || value === '*') continue;
+      const models = value.split(',').map((item) => item.trim()).filter(Boolean);
+      const next = models.filter((model) => model !== modelId);
+      if (next.length !== models.length) {
+        await this.updateSystemSetting(row.key, next.length > 0 ? next.join(',') : '*');
+      }
+    }
+  }
+
+  private appendUnique(target: Record<string, string[]>, key: string, values: string[]): boolean {
+    const current = target[key] || [];
+    const next = Array.from(new Set([...current, ...values]));
+    target[key] = next;
+    return next.length !== current.length;
+  }
+
+  private async updateSystemSetting(key: string, value: string): Promise<void> {
+    await this.adapter
+      .prepare('UPDATE system_settings SET value = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE `key` = ?')
+      .run(value, key);
   }
 }

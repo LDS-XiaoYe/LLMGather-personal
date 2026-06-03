@@ -93,18 +93,19 @@ export class RouterService implements OnModuleInit {
       .prepare('SELECT intent, models FROM router_rules ORDER BY intent')
       .all()) as Array<{ intent: string; models: string }>;
     return rows.map((r) => {
-      try { return { intent: r.intent, models: JSON.parse(r.models) }; }
+      try { return { intent: r.intent, models: this.sanitizeRuleModels(JSON.parse(r.models)) }; }
       catch { return { intent: r.intent, models: [] }; }
     });
   }
 
   /** Update routing rules */
   async updateRule(intent: string, models: string[]): Promise<void> {
+    const sanitizedModels = this.sanitizeRuleModels(models);
     await this.db.connection
       .prepare(
         'INSERT INTO router_rules (intent, models, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE models = VALUES(models), updated_at = VALUES(updated_at)',
       )
-      .run(intent, JSON.stringify(models));
+      .run(intent, JSON.stringify(sanitizedModels));
   }
 
   /** Delete a routing rule */
@@ -194,5 +195,9 @@ export class RouterService implements OnModuleInit {
       .prepare('SELECT model, latency_ms as latencyMs, success, intent, created_at as createdAt FROM model_metrics ORDER BY created_at DESC LIMIT ?')
       .all(limit)) as any[];
     return rows.map((r: any) => ({ ...r, success: !!r.success }));
+  }
+
+  private sanitizeRuleModels(models: string[]): string[] {
+    return Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
   }
 }

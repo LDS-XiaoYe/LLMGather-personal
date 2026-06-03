@@ -11,6 +11,28 @@ import { SystemSettingsService } from '../common/system-settings.service';
 import { SettingsThrottle } from '../common/settings-throttle.decorator';
 import { SettingsThrottleGuard } from '../common/settings-throttle.guard';
 
+function flushSse(res: Response): void {
+  (res as Response & { flush?: () => void }).flush?.();
+}
+
+function writeSse(res: Response, payload: unknown): void {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  flushSse(res);
+}
+
+function writeStreamError(res: Response, model: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  writeSse(res, {
+    id: `stream-error-${Date.now()}`,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta: { content: `Stream failed: ${message}` }, finish_reason: 'error' }],
+  });
+  res.write('data: [DONE]\n\n');
+  flushSse(res);
+}
+
 interface AnthropicMessageBlock {
   type: 'text';
   text: string;
@@ -52,26 +74,36 @@ export class RelayController {
     if (payload.stream) {
       const usageEstimate = this.billingService.reserveForStream(user.id, payload);
       const upstream = await this.chatService.createCompletionStream(payload);
-
-      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache, no-transform');
-      res.setHeader('Connection', 'keep-alive');
-
       const reader = upstream.body?.getReader();
       if (!reader) {
         res.status(502).json({ error: { message: 'Upstream stream unavailable' } });
         return;
       }
 
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders?.();
+
       const decoder = new TextDecoder();
       let generatedText = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunkText = decoder.decode(value, { stream: true });
-        generatedText += extractContentDelta(chunkText);
-        res.write(chunkText);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunkText = decoder.decode(value, { stream: true });
+          generatedText += extractContentDelta(chunkText);
+          res.write(chunkText);
+          flushSse(res);
+        }
+      } catch (error) {
+        writeStreamError(res, payload.model, error);
+        res.end();
+        return;
+      } finally {
+        reader.releaseLock();
       }
 
       const finalUsage = {
@@ -87,7 +119,7 @@ export class RelayController {
         finalUsage,
         'openai',
       );
-      res.setHeader('x-credit-balance', updatedUser.credits.toFixed(6));
+      writeSse(res, { billing: { creditBalance: updatedUser.credits.toFixed(6) } });
       res.end();
       return;
     }

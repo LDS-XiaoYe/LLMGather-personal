@@ -118,6 +118,8 @@ function buildHeaders(): HeadersInit {
   };
 }
 
+const noStore: RequestCache = 'no-store';
+
 /** Shared fetch options for credentials (cookies) */
 const credOpts: RequestInit = { credentials: 'include' };
 
@@ -150,7 +152,7 @@ export async function fetchModels(baseUrl = defaultBaseUrl): Promise<ModelDescri
   let response: Response;
 
   try {
-    response = await fetch(`${baseUrl}/models`, { headers: buildHeaders(), signal, ...credOpts });
+    response = await fetch(`${baseUrl}/models`, { headers: buildHeaders(), signal, cache: noStore, ...credOpts });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('加载模型超时，请检查后端或网络连接');
@@ -305,6 +307,7 @@ export async function fetchBillingLedger(baseUrl = defaultBaseUrl): Promise<Bill
 export async function fetchPageModels(baseUrl = defaultBaseUrl): Promise<Record<string, string>> {
   const response = await fetch(`${baseUrl}/billing/page-models`, {
     headers: buildHeaders(),
+    cache: noStore,
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -1576,7 +1579,7 @@ export interface SystemSetting {
 }
 
 export async function fetchAdminSettings(baseUrl = defaultBaseUrl): Promise<SystemSetting[]> {
-  const response = await fetch(`${baseUrl}/admin/settings`, { headers: buildHeaders(), ...credOpts });
+  const response = await fetch(`${baseUrl}/admin/settings`, { headers: buildHeaders(), cache: noStore, ...credOpts });
   if (!response.ok) throw new Error(await readError(response));
   const payload = (await response.json()) as { data: SystemSetting[] };
   return payload.data ?? [];
@@ -1612,6 +1615,7 @@ export async function fetchAdminProviderKeys(
   const qs = params.toString();
   const response = await fetch(`${baseUrl}/admin/provider-keys${qs ? '?' + qs : ''}`, {
     headers: buildHeaders(),
+    cache: noStore,
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -1681,6 +1685,7 @@ export async function fetchAdminProviderConfigs(
 ): Promise<ProviderConfigRow[]> {
   const response = await fetch(`${baseUrl}/admin/provider-configs`, {
     headers: buildHeaders(),
+    cache: noStore,
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -1754,6 +1759,7 @@ export interface ModelTiersData {
 export async function fetchAdminModelTiers(baseUrl = defaultBaseUrl): Promise<ModelTiersData> {
   const response = await fetch(`${baseUrl}/admin/model-tiers`, {
     headers: buildHeaders(),
+    cache: noStore,
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));

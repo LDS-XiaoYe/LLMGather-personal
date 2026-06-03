@@ -6529,5 +6529,5 @@ export function useAppController() {
     revokeApiKey,
     copyToClipboard,
     openVideoUploadInput,
-  };
+  }
 }

@@ -9,9 +9,9 @@ export class WorkflowNodeDto {
 
   @IsString()
   @IsNotEmpty()
-  @IsIn(['prompt', 'agent', 'tool', 'knowledge', 'memory'])
+  @IsIn(['prompt', 'agent', 'tool', 'knowledge', 'memory', 'skill'])
   @MaxLength(32)
-  type!: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory';
+  type!: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory' | 'skill';
 
   @IsOptional()
   @IsString()

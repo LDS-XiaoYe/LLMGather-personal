@@ -506,6 +506,19 @@ export interface AgentDefinition {
   runCount: number;
 }
 
+export interface AgentMarketplaceTemplate {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  toolNames?: string[];
+  skillNames?: string[];
+  toolIds?: string[];
+  skillIds?: string[];
+  knowledgeBaseIds?: string[];
+  source?: 'builtin' | 'custom' | string;
+}
+
 export interface AgentInput {
   name: string;
   description?: string;
@@ -774,14 +787,25 @@ export interface SkillDefinition {
   description: string;
   content: string;
   category: string;
+  icon: string;
+  source: 'builtin' | 'custom';
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  permissions: Record<string, unknown>;
+  exampleInput: string;
+  exampleOutput: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  version: number;
   enabled: boolean;
+  bindingCount: number;
+  boundAgents?: Array<{ id: string; name: string }>;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface WorkflowNode {
   id: string;
-  type: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory';
+  type: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory' | 'skill';
   name?: string;
   config: Record<string, unknown>;
 }
@@ -919,7 +943,7 @@ export async function fetchSkills(baseUrl = defaultBaseUrl): Promise<SkillDefini
 }
 
 export async function createSkill(
-  payload: { name: string; description?: string; content: string; category?: string },
+  payload: Partial<SkillDefinition> & { name: string; content: string },
   baseUrl = defaultBaseUrl,
 ): Promise<SkillDefinition> {
   const response = await fetch(`${baseUrl}/skills`, {
@@ -930,6 +954,72 @@ export async function createSkill(
   });
   if (!response.ok) throw new Error(await readError(response));
   const data = (await response.json()) as { data: SkillDefinition };
+  return data.data;
+}
+
+export async function fetchSkillDetail(id: string, baseUrl = defaultBaseUrl): Promise<SkillDefinition> {
+  const response = await fetch(`${baseUrl}/skills/${encodeURIComponent(id)}`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: SkillDefinition };
+  return payload.data;
+}
+
+export async function updateSkill(
+  id: string,
+  payload: Partial<SkillDefinition> & { name?: string; content?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<SkillDefinition> {
+  const response = await fetch(`${baseUrl}/skills/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: SkillDefinition };
+  return data.data;
+}
+
+export async function deleteSkill(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/skills/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function copySkill(id: string, baseUrl = defaultBaseUrl): Promise<SkillDefinition> {
+  const response = await fetch(`${baseUrl}/skills/${encodeURIComponent(id)}/copy`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: SkillDefinition };
+  return data.data;
+}
+
+export interface SkillTestResult {
+  skillId: string;
+  output: string;
+  latencyMs: number;
+  error: string;
+  logs: Array<{ type: string; message: string; createdAt: string }>;
+  toolCalls: Array<Record<string, unknown>>;
+  knowledgeAccessed: boolean;
+  tokenUsage: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
+
+export async function testSkill(id: string, input: string, baseUrl = defaultBaseUrl): Promise<SkillTestResult> {
+  const response = await fetch(`${baseUrl}/skills/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ input }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: SkillTestResult };
   return data.data;
 }
 
@@ -967,6 +1057,43 @@ export async function generateAgent(
   });
   if (!response.ok) throw new Error(await readError(response));
   const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
+export async function fetchAgentMarketplaceTemplates(baseUrl = defaultBaseUrl): Promise<AgentMarketplaceTemplate[]> {
+  const response = await fetch(`${baseUrl}/agents/marketplace/templates`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: AgentMarketplaceTemplate[] };
+  return payload.data ?? [];
+}
+
+export async function installAgentMarketplaceTemplate(
+  payload: { templateId: string; model: string },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents/marketplace/install`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
+export async function createAgentMarketplaceTemplate(
+  payload: { name: string; description?: string; category?: string; sourceAgentId: string },
+  baseUrl = defaultBaseUrl,
+): Promise<AgentMarketplaceTemplate> {
+  const response = await fetch(`${baseUrl}/agents/marketplace/templates`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentMarketplaceTemplate };
   return data.data;
 }
 
@@ -1164,12 +1291,13 @@ export async function addKnowledgeDocument(
 export async function searchKnowledgeBase(
   kbId: string,
   query: string,
+  options: { mode?: 'hybrid' | 'keyword' | 'vector'; limit?: number } = {},
   baseUrl = defaultBaseUrl,
 ): Promise<KnowledgeSearchResult[]> {
   const response = await fetch(`${baseUrl}/knowledge/bases/${encodeURIComponent(kbId)}/search`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, ...options }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));

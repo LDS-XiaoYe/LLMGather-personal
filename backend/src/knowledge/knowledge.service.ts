@@ -110,7 +110,120 @@ export class KnowledgeService {
     return { id: docId, kbId, title: dto.title.trim(), chunkCount: chunks.length };
   }
 
-  async search(userId: string, kbIds: string[], query: string, limit = 5): Promise<KnowledgeSearchResult[]> {
+  async listDocuments(userId: string, kbId: string) {
+    await this.get(userId, kbId);
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT d.id, d.kb_id as kbId, d.title, d.content, d.created_at as createdAt,
+              COALESCE(c.chunkCount, 0) as chunkCount
+       FROM knowledge_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*) as chunkCount FROM knowledge_chunks GROUP BY document_id
+       ) c ON c.document_id = d.id
+       WHERE d.kb_id = ? AND d.user_id = ? AND d.deleted_at IS NULL
+       ORDER BY d.created_at DESC`,
+    ).all(kbId, userId) as unknown as Array<{ id: string; kbId: string; title: string; content: string; createdAt: string; chunkCount: number | string }>;
+    
+    return rows.map(row => ({
+      ...row,
+      chunkCount: Number(row.chunkCount ?? 0),
+      content: row.content.substring(0, 500) + (row.content.length > 500 ? '...' : ''),
+    }));
+  }
+
+  async deleteDocument(userId: string, docId: string) {
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE knowledge_documents SET deleted_at = ? WHERE id = ? AND user_id = ?`,
+    ).run(now, docId, userId);
+    await this.databaseService.connection.prepare(
+      `DELETE FROM knowledge_chunks WHERE document_id = ? AND user_id = ?`,
+    ).run(docId, userId);
+    return { success: true };
+  }
+
+  async parseFile(fileBase64: string, filename: string): Promise<{ content: string }> {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    
+    // 从base64提取内容
+    const base64Data = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+    const buffer = Buffer.from(base64Data, 'base64');
+    
+    let content = '';
+    
+    switch (ext) {
+      case 'txt':
+      case 'md':
+      case 'csv':
+      case 'json':
+        content = buffer.toString('utf-8');
+        break;
+        
+      case 'pdf':
+        // 简单PDF文本提取（实际项目中应使用pdf-parse等库）
+        content = this.extractTextFromPdf(buffer);
+        break;
+        
+      case 'doc':
+      case 'docx':
+        // 简单Word文本提取（实际项目中应使用mammoth等库）
+        content = this.extractTextFromWord(buffer);
+        break;
+        
+      case 'xls':
+      case 'xlsx':
+        // 简单Excel文本提取（实际项目中应使用xlsx等库）
+        content = this.extractTextFromExcel(buffer);
+        break;
+        
+      default:
+        throw new Error(`不支持的文件格式: ${ext}`);
+    }
+    
+    return { content };
+  }
+
+  private extractTextFromPdf(buffer: Buffer): string {
+    // 简单实现：提取PDF中的文本内容
+    // 实际项目中应使用 pdf-parse 库
+    const text = buffer.toString('utf-8');
+    // 提取PDF中的文本流
+    const textMatches = text.match(/BT[\s\S]*?ET/g) || [];
+    const extractedText = textMatches
+      .map(match => {
+        const tjMatches = match.match(/\(([^)]*)\)\s*Tj/g) || [];
+        return tjMatches.map(tj => tj.replace(/\(|\)\s*Tj/g, '')).join(' ');
+      })
+      .join('\n');
+    
+    return extractedText || 'PDF内容提取需要安装pdf-parse库';
+  }
+
+  private extractTextFromWord(buffer: Buffer): string {
+    // 简单实现：提取Word中的文本内容
+    // 实际项目中应使用 mammoth 库
+    const text = buffer.toString('utf-8');
+    // 提取XML中的文本内容
+    const textMatches = text.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
+    const extractedText = textMatches
+      .map(match => match.replace(/<w:t[^>]*>|<\/w:t>/g, ''))
+      .join(' ');
+    
+    return extractedText || 'Word内容提取需要安装mammoth库';
+  }
+
+  private extractTextFromExcel(buffer: Buffer): string {
+    // 简单实现：提取Excel中的文本内容
+    // 实际项目中应使用 xlsx 库
+    return 'Excel内容提取需要安装xlsx库';
+  }
+
+  async search(
+    userId: string,
+    kbIds: string[],
+    query: string,
+    limit = 5,
+    options: { mode?: 'hybrid' | 'keyword' | 'vector' } = {},
+  ): Promise<KnowledgeSearchResult[]> {
     const uniqueKbIds = Array.from(new Set(kbIds.filter(Boolean)));
     if (uniqueKbIds.length === 0 || !query.trim()) return [];
 
@@ -130,10 +243,11 @@ export class KnowledgeService {
 
     const terms = this.terms(query);
     const queryVector = this.embed(query);
+    const mode = options.mode ?? 'hybrid';
     return rows
       .map((row) => {
-        const keywordScore = this.score(row.content + '\n' + row.title, terms);
-        const vectorScore = this.cosine(queryVector, this.parseVector(row.embeddingJson));
+        const keywordScore = mode === 'vector' ? 0 : this.score(row.content + '\n' + row.title, terms);
+        const vectorScore = mode === 'keyword' ? 0 : this.cosine(queryVector, this.parseVector(row.embeddingJson));
         return {
           id: row.id,
           kbId: row.kbId,

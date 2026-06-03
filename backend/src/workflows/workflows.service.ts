@@ -4,6 +4,7 @@ import { AgentsService } from '../agents/agents.service';
 import { DatabaseService } from '../database/database.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
 import { MemoryService } from '../memory/memory.service';
+import { SkillsService } from '../skills/skills.service';
 import { ToolsService } from '../tools/tools.service';
 import { CreateWorkflowDto, WorkflowNodeDto } from './dto/workflow.dto';
 
@@ -59,6 +60,7 @@ export class WorkflowsService {
     private readonly toolsService: ToolsService,
     private readonly knowledgeService: KnowledgeService,
     private readonly memoryService: MemoryService,
+    private readonly skillsService: SkillsService,
   ) {}
 
   async list(userId: string): Promise<Workflow[]> {
@@ -107,7 +109,7 @@ export class WorkflowsService {
     let status: 'succeeded' | 'failed' = 'succeeded';
     let error = '';
 
-    for (const node of workflow.nodes) {
+    for (const node of this.orderNodes(workflow.nodes)) {
       try {
         const output = await this.runNode(userId, node, current, originalInput);
         await this.insertStep(runId, workflowId, userId, node, current, output, 'succeeded', '');
@@ -179,6 +181,17 @@ export class WorkflowsService {
       return results.map((item, idx) => `[${idx + 1}] ${item.memoryType}: ${item.content}`).join('\n\n') || '未检索到相关记忆。';
     }
 
+    if (node.type === 'skill') {
+      const skillId = String(node.config.skillId || '');
+      if (!skillId) throw new NotFoundException('Workflow Skill 节点缺少 skillId');
+      const skillInputTemplate = typeof node.config.input === 'string' ? node.config.input : '{{input}}';
+      const result = await this.skillsService.runSkill(userId, skillId, {
+        input: this.interpolateText(skillInputTemplate, input, originalInput),
+      });
+      if (result.error) throw new Error(result.error);
+      return result.output;
+    }
+
     return input;
   }
 
@@ -195,6 +208,53 @@ export class WorkflowsService {
     return template
       .replaceAll('{{input}}', input)
       .replaceAll('{{originalInput}}', originalInput);
+  }
+
+  private orderNodes(nodes: WorkflowNodeDto[]): WorkflowNodeDto[] {
+    const hasEdges = nodes.some((node) => this.getNextIds(node).length > 0);
+    if (!hasEdges) return nodes;
+
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const indegree = new Map(nodes.map((node) => [node.id, 0]));
+    const edges = new Map<string, string[]>();
+
+    for (const node of nodes) {
+      const nextIds = this.getNextIds(node).filter((id) => byId.has(id) && id !== node.id);
+      edges.set(node.id, nextIds);
+      for (const nextId of nextIds) {
+        indegree.set(nextId, (indegree.get(nextId) ?? 0) + 1);
+      }
+    }
+
+    const queue = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0);
+    const ordered: WorkflowNodeDto[] = [];
+    const seen = new Set<string>();
+
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      if (seen.has(node.id)) continue;
+      seen.add(node.id);
+      ordered.push(node);
+      for (const nextId of edges.get(node.id) ?? []) {
+        const nextDegree = (indegree.get(nextId) ?? 0) - 1;
+        indegree.set(nextId, nextDegree);
+        if (nextDegree <= 0) {
+          const nextNode = byId.get(nextId);
+          if (nextNode) queue.push(nextNode);
+        }
+      }
+    }
+
+    if (ordered.length !== nodes.length) {
+      const remaining = nodes.filter((node) => !seen.has(node.id));
+      return [...ordered, ...remaining];
+    }
+    return ordered;
+  }
+
+  private getNextIds(node: WorkflowNodeDto): string[] {
+    const value = node.config.nextIds;
+    return Array.isArray(value) ? value.map(String) : [];
   }
 
   private async insertStep(

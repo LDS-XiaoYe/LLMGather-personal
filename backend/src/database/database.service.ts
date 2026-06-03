@@ -299,6 +299,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         description TEXT NOT NULL,
         content TEXT NOT NULL,
         category VARCHAR(64) NOT NULL DEFAULT 'custom',
+        icon VARCHAR(16) NOT NULL DEFAULT 'Star',
+        input_schema_json TEXT,
+        output_schema_json TEXT,
+        permissions_json TEXT,
+        example_input TEXT,
+        example_output TEXT,
+        risk_level VARCHAR(16) NOT NULL DEFAULT 'low',
+        version INT NOT NULL DEFAULT 1,
         enabled INT NOT NULL DEFAULT 1,
         created_at ${ts},
         updated_at ${ts},
@@ -372,9 +380,26 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         agent_id VARCHAR(36) NOT NULL,
         tool_id VARCHAR(36) NOT NULL,
         user_id VARCHAR(36) NOT NULL,
+        permission_level VARCHAR(24) NOT NULL DEFAULT 'auto',
         created_at ${ts},
         PRIMARY KEY (agent_id, tool_id),
         INDEX idx_agent_tools_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_marketplace_templates (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        source_agent_id VARCHAR(36) NOT NULL,
+        name VARCHAR(80) NOT NULL,
+        description TEXT NOT NULL,
+        category VARCHAR(64) NOT NULL DEFAULT 'custom',
+        template_json TEXT NOT NULL,
+        public_enabled INT NOT NULL DEFAULT 1,
+        created_at ${ts},
+        updated_at ${ts},
+        INDEX idx_agent_marketplace_user (user_id),
+        INDEX idx_agent_marketplace_category (category)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -604,7 +629,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
-    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
+    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
         await this.adapter.exec(
@@ -771,6 +796,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     } catch {
       // column already exists
     }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agent_tools ADD COLUMN permission_level VARCHAR(24) NOT NULL DEFAULT 'auto'`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    const skillColumns = [
+      `ALTER TABLE agent_skills ADD COLUMN icon VARCHAR(16) NOT NULL DEFAULT 'Star'`,
+      `ALTER TABLE agent_skills ADD COLUMN input_schema_json TEXT`,
+      `ALTER TABLE agent_skills ADD COLUMN output_schema_json TEXT`,
+      `ALTER TABLE agent_skills ADD COLUMN permissions_json TEXT`,
+      `ALTER TABLE agent_skills ADD COLUMN example_input TEXT`,
+      `ALTER TABLE agent_skills ADD COLUMN example_output TEXT`,
+      `ALTER TABLE agent_skills ADD COLUMN risk_level VARCHAR(16) NOT NULL DEFAULT 'low'`,
+      `ALTER TABLE agent_skills ADD COLUMN version INT NOT NULL DEFAULT 1`,
+    ];
+    for (const sql of skillColumns) {
+      try {
+        await this.adapter.exec(sql);
+      } catch {
+        // column already exists
+      }
+    }
   }
 
   private async seedBuiltinTools(): Promise<void> {
@@ -821,6 +872,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         },
       },
       {
+        name: 'python_runner',
+        displayName: 'Python 代码执行',
+        description: '在容器中运行 Python 代码片段，支持数据处理、计算和文件操作。',
+        schema: {
+          type: 'object',
+          required: ['code'],
+          properties: {
+            code: { type: 'string', description: 'Python 代码，可通过 input 变量访问输入数据。' },
+            input: { type: 'object', description: '传入代码的 JSON 输入，可通过 input 变量访问。' },
+          },
+        },
+      },
+      {
         name: 'notion_search',
         displayName: 'Notion 搜索',
         description: '通过已配置的 Notion MCP Server 搜索页面和数据库标题。',
@@ -830,6 +894,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           properties: {
             query: { type: 'string' },
             limit: { type: 'number', default: 5 },
+          },
+        },
+      },
+      {
+        name: 'browser_fetch',
+        displayName: '网页读取',
+        description: '读取公开网页的标题和正文摘要，作为 Browser Use / Computer Use 的第一版网页工具。',
+        schema: {
+          type: 'object',
+          required: ['url'],
+          properties: {
+            url: { type: 'string' },
+            maxChars: { type: 'number', default: 6000 },
           },
         },
       },
@@ -870,11 +947,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async seedDefaultAgentSkills(): Promise<void> {
     const now = dbNow();
     const randomUUID = (await import('crypto')).randomUUID;
-    const skills: Array<{ name: string; description: string; content: string; category: string }> = [
+    const skills: Array<{ name: string; description: string; content: string; category: string; icon: string; permissions: Record<string, unknown>; exampleInput: string; exampleOutput: string; riskLevel: string }> = [
       {
         name: 'Research Planner',
         description: '将开放式研究问题拆解为检索、证据评估、结论综合和不确定性标注。',
         category: 'research',
+        icon: 'Search',
+        permissions: { network: true, knowledge: true, tools: false, fileRead: false, writeData: false, externalRequest: true, userConfirm: false },
+        exampleInput: '调研某个新产品机会，并列出证据链。',
+        exampleOutput: '研究计划、信息缺口、证据摘要、不确定性和下一步建议。',
+        riskLevel: 'medium',
         content: [
           '你具备 Research Agent 能力。',
           '处理研究任务时先拆解问题、列出信息缺口，再基于可用知识库/工具给出证据链。',
@@ -885,6 +967,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         name: 'Code Operator',
         description: '让 Agent 更适合阅读代码、生成代码、调用代码执行工具并解释调试结果。',
         category: 'code',
+        icon: 'Cpu',
+        permissions: { network: false, knowledge: false, tools: true, fileRead: true, writeData: false, externalRequest: false, userConfirm: true },
+        exampleInput: '分析这段代码的 bug，并给出可运行修复。',
+        exampleOutput: '问题定位、修复代码、验证方式和边界情况。',
+        riskLevel: 'high',
         content: [
           '你具备 Code Agent 能力。',
           '涉及代码任务时先说明假设，再给出可运行片段或修改建议。',
@@ -895,6 +982,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         name: 'Data Analyst',
         description: '面向数据分析任务，强调指标定义、数据清洗、计算验证和业务解释。',
         category: 'analysis',
+        icon: 'DataAnalysis',
+        permissions: { network: false, knowledge: true, tools: true, fileRead: true, writeData: false, externalRequest: false, userConfirm: false },
+        exampleInput: '基于一组销售数据分析增长和异常。',
+        exampleOutput: '指标口径、计算结果、异常解释和业务建议。',
+        riskLevel: 'medium',
         content: [
           '你具备 Data Analysis Agent 能力。',
           '先明确指标口径和数据字段，再进行计算、对比和异常解释。',
@@ -905,6 +997,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         name: 'Workflow Orchestrator',
         description: '帮助 Agent 面向复杂任务进行阶段规划、工具/RAG/记忆协同和复盘。',
         category: 'workflow',
+        icon: 'Share',
+        permissions: { network: false, knowledge: true, tools: true, fileRead: false, writeData: false, externalRequest: false, userConfirm: false },
+        exampleInput: '把一个复杂任务拆成可执行流程。',
+        exampleOutput: '计划、节点、依赖、校验和复盘结构。',
+        riskLevel: 'low',
         content: [
           '你具备 Workflow Orchestration 能力。',
           '复杂任务要拆成计划、执行、校验、总结四个阶段。',
@@ -921,14 +1018,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (existing) {
         await this.adapter.prepare(
           `UPDATE agent_skills
-           SET description = ?, content = ?, category = ?, enabled = 1, updated_at = ?
+           SET description = ?, content = ?, category = ?, icon = ?, permissions_json = ?, example_input = ?, example_output = ?, risk_level = ?, enabled = 1, updated_at = ?
            WHERE id = ?`,
-        ).run(skill.description, skill.content, skill.category, now, existing.id);
+        ).run(skill.description, skill.content, skill.category, skill.icon, JSON.stringify(skill.permissions), skill.exampleInput, skill.exampleOutput, skill.riskLevel, now, existing.id);
       } else {
         await this.adapter.prepare(
-          `INSERT INTO agent_skills (id, user_id, name, description, content, category, enabled, created_at, updated_at)
-           VALUES (?, NULL, ?, ?, ?, ?, 1, ?, ?)`,
-        ).run(randomUUID(), skill.name, skill.description, skill.content, skill.category, now, now);
+          `INSERT INTO agent_skills
+             (id, user_id, name, description, content, category, icon, permissions_json, example_input, example_output, risk_level, enabled, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        ).run(randomUUID(), skill.name, skill.description, skill.content, skill.category, skill.icon, JSON.stringify(skill.permissions), skill.exampleInput, skill.exampleOutput, skill.riskLevel, now, now);
       }
     }
   }

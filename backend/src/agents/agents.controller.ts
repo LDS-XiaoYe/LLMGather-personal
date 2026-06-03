@@ -5,11 +5,13 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AgentsService } from './agents.service';
 import {
   CreateAgentDto,
+  CreateAgentMarketplaceTemplateDto,
   CreateAgentTestCaseDto,
   CreateAgentTestSuiteDto,
   CreateAgentVersionDto,
   EvaluateAgentRunDto,
   GenerateAgentDto,
+  InstallAgentTemplateDto,
   RunAgentDto,
   UpdateAgentDto,
   UpdateAgentPublicationDto,
@@ -39,6 +41,27 @@ export class AgentsController {
     @Body() payload: GenerateAgentDto,
   ) {
     return { data: await this.agentsService.generate(user.id, payload) };
+  }
+
+  @Get('marketplace/templates')
+  async marketplaceTemplates(@CurrentUser() user: AuthenticatedRequestUser) {
+    return { data: await this.agentsService.listMarketplaceTemplates(user.id) };
+  }
+
+  @Post('marketplace/templates')
+  async createMarketplaceTemplate(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Body() payload: CreateAgentMarketplaceTemplateDto,
+  ) {
+    return { data: await this.agentsService.createMarketplaceTemplate(user.id, payload) };
+  }
+
+  @Post('marketplace/install')
+  async installMarketplaceTemplate(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Body() payload: InstallAgentTemplateDto,
+  ) {
+    return { data: await this.agentsService.installMarketplaceTemplate(user.id, payload) };
   }
 
   @Get('runs/:runId')

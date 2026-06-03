@@ -1,0 +1,1349 @@
+<script setup lang="ts">
+// @ts-nocheck
+import { computed as vueComputed, isRef, unref } from 'vue';
+import type { PageMode } from '../../../types';
+
+const props = defineProps<{ app: Record<string, any> }>();
+const app = props.app;
+const bind = (target: Record<string, any>, key: string) => vueComputed({
+  get: () => unref(target[key]),
+  set: (value) => {
+    if (isRef(target[key])) target[key].value = value;
+    else target[key] = value;
+  },
+});
+
+const Cpu = bind(app, 'Cpu');
+const ChatDotRound = bind(app, 'ChatDotRound');
+const DataAnalysis = bind(app, 'DataAnalysis');
+const Delete = bind(app, 'Delete');
+const Document = bind(app, 'Document');
+const EditPen = bind(app, 'EditPen');
+const Headset = bind(app, 'Headset');
+const InfoFilled = bind(app, 'InfoFilled');
+const Lightning = bind(app, 'Lightning');
+const MoreFilled = bind(app, 'MoreFilled');
+const Monitor = bind(app, 'Monitor');
+const Picture = bind(app, 'Picture');
+const PictureFilled = bind(app, 'PictureFilled');
+const Plus = bind(app, 'Plus');
+const Promotion = bind(app, 'Promotion');
+const Refresh = bind(app, 'Refresh');
+const Search = bind(app, 'Search');
+const Setting = bind(app, 'Setting');
+const Star = bind(app, 'Star');
+const Sunny = bind(app, 'Sunny');
+const SwitchButton = bind(app, 'SwitchButton');
+const TrendCharts = bind(app, 'TrendCharts');
+const User = bind(app, 'User');
+const UserFilled = bind(app, 'UserFilled');
+const VideoCamera = bind(app, 'VideoCamera');
+const Coin = bind(app, 'Coin');
+const useDagNodes = bind(app, 'useDagNodes');
+const getModelLogo = bind(app, 'getModelLogo');
+const createId = bind(app, 'createId');
+const buildSessionTitle = bind(app, 'buildSessionTitle');
+const pickTwoRandomModels = bind(app, 'pickTwoRandomModels');
+const shuffleArray = bind(app, 'shuffleArray');
+const formatTime = bind(app, 'formatTime');
+const getStoredValue = bind(app, 'getStoredValue');
+const setStoredValue = bind(app, 'setStoredValue');
+const renderMarkdown = bind(app, 'renderMarkdown');
+const MagicStick = bind(app, 'MagicStick');
+const BASE_URL_KEY = bind(app, 'BASE_URL_KEY');
+const THEME_KEY = bind(app, 'THEME_KEY');
+const getPreferredTheme = bind(app, 'getPreferredTheme');
+const applyTheme = bind(app, 'applyTheme');
+const theme = bind(app, 'theme');
+const isDark = bind(app, 'isDark');
+const darkMediaQuery = bind(app, 'darkMediaQuery');
+const menuBgColor = bind(app, 'menuBgColor');
+const menuTextColor = bind(app, 'menuTextColor');
+const menuActiveColor = bind(app, 'menuActiveColor');
+const backendBaseUrl = bind(app, 'backendBaseUrl');
+const isSettingsOpen = bind(app, 'isSettingsOpen');
+const isAuthDialogOpen = bind(app, 'isAuthDialogOpen');
+const authUser = bind(app, 'authUser');
+const authMode = bind(app, 'authMode');
+const authUsername = bind(app, 'authUsername');
+const authPassword = bind(app, 'authPassword');
+const authEmail = bind(app, 'authEmail');
+const authVerificationCode = bind(app, 'authVerificationCode');
+const authInvitationCode = bind(app, 'authInvitationCode');
+const authLoading = bind(app, 'authLoading');
+const authError = bind(app, 'authError');
+const codeCountdown = bind(app, 'codeCountdown');
+const codeTimer = bind(app, 'codeTimer');
+const userInvitationCode = bind(app, 'userInvitationCode');
+const topUpAmount = bind(app, 'topUpAmount');
+const topUpLoading = bind(app, 'topUpLoading');
+const rechargeDialogVisible = bind(app, 'rechargeDialogVisible');
+const rechargeAmount = bind(app, 'rechargeAmount');
+const rechargeLoading = bind(app, 'rechargeLoading');
+const rechargeQrCode = bind(app, 'rechargeQrCode');
+const rechargeOrderId = bind(app, 'rechargeOrderId');
+const rechargeError = bind(app, 'rechargeError');
+const rechargeChecking = bind(app, 'rechargeChecking');
+const rechargePollTimer = bind(app, 'rechargePollTimer');
+const rechargeOrders = bind(app, 'rechargeOrders');
+const rechargeOrdersLoading = bind(app, 'rechargeOrdersLoading');
+const billingRules = bind(app, 'billingRules');
+const billingLedger = bind(app, 'billingLedger');
+const agents = bind(app, 'agents');
+const activeAgentId = bind(app, 'activeAgentId');
+const agentLoading = bind(app, 'agentLoading');
+const agentSaving = bind(app, 'agentSaving');
+const agentPublishing = bind(app, 'agentPublishing');
+const agentRunning = bind(app, 'agentRunning');
+const agentGenerating = bind(app, 'agentGenerating');
+const agentPrompt = bind(app, 'agentPrompt');
+const agentImageUrlInput = bind(app, 'agentImageUrlInput');
+const agentRuns = bind(app, 'agentRuns');
+const activeAgentRun = bind(app, 'activeAgentRun');
+const agentPageTab = bind(app, 'agentPageTab');
+const agentConsoleTab = bind(app, 'agentConsoleTab');
+const dagNodeCategories = bind(app, 'dagNodeCategories');
+const dagTemplates = bind(app, 'dagTemplates');
+const getDagNodeInfo = bind(app, 'getDagNodeInfo');
+const applyDagTemplate = bind(app, 'applyDagTemplate');
+const availableTools = bind(app, 'availableTools');
+const knowledgeBases = bind(app, 'knowledgeBases');
+const agentMemories = bind(app, 'agentMemories');
+const availableSkills = bind(app, 'availableSkills');
+const workflows = bind(app, 'workflows');
+const agentTeams = bind(app, 'agentTeams');
+const mcpServers = bind(app, 'mcpServers');
+const agentVersions = bind(app, 'agentVersions');
+const agentTestSuites = bind(app, 'agentTestSuites');
+const agentTestCases = bind(app, 'agentTestCases');
+const marketplaceTemplates = bind(app, 'marketplaceTemplates');
+const agentResourceLoading = bind(app, 'agentResourceLoading');
+const knowledgeCreating = bind(app, 'knowledgeCreating');
+const knowledgeDocSaving = bind(app, 'knowledgeDocSaving');
+const knowledgeFileParsing = bind(app, 'knowledgeFileParsing');
+const knowledgeDocuments = bind(app, 'knowledgeDocuments');
+const knowledgeDocPreviewVisible = bind(app, 'knowledgeDocPreviewVisible');
+const knowledgeDocPreview = bind(app, 'knowledgeDocPreview');
+const showKnowledgeCreateDialog = bind(app, 'showKnowledgeCreateDialog');
+const memorySaving = bind(app, 'memorySaving');
+const skillCreating = bind(app, 'skillCreating');
+const showSkillCreateDialog = bind(app, 'showSkillCreateDialog');
+const skillPreviewOpen = bind(app, 'skillPreviewOpen');
+const skillTesting = bind(app, 'skillTesting');
+const activeSkill = bind(app, 'activeSkill');
+const activeSkillTestResult = bind(app, 'activeSkillTestResult');
+const skillTestInput = bind(app, 'skillTestInput');
+const editingSkillId = bind(app, 'editingSkillId');
+const skillFilters = bind(app, 'skillFilters');
+const workflowCreating = bind(app, 'workflowCreating');
+const workflowRunning = bind(app, 'workflowRunning');
+const teamCreating = bind(app, 'teamCreating');
+const teamRunning = bind(app, 'teamRunning');
+const mcpSaving = bind(app, 'mcpSaving');
+const mcpTesting = bind(app, 'mcpTesting');
+const versionSaving = bind(app, 'versionSaving');
+const testSaving = bind(app, 'testSaving');
+const testRunning = bind(app, 'testRunning');
+const marketplaceLoading = bind(app, 'marketplaceLoading');
+const marketplaceInstalling = bind(app, 'marketplaceInstalling');
+const marketplacePublishing = bind(app, 'marketplacePublishing');
+const activeWorkflowId = bind(app, 'activeWorkflowId');
+const workflowInput = bind(app, 'workflowInput');
+const activeWorkflowRun = bind(app, 'activeWorkflowRun');
+const activeTeamId = bind(app, 'activeTeamId');
+const teamInput = bind(app, 'teamInput');
+const activeTeamRun = bind(app, 'activeTeamRun');
+const activeTestSuiteId = bind(app, 'activeTestSuiteId');
+const activeTestRun = bind(app, 'activeTestRun');
+const agentEvaluations = bind(app, 'agentEvaluations');
+const agentStats = bind(app, 'agentStats');
+const agentEvaluationLoading = bind(app, 'agentEvaluationLoading');
+const agentEvaluationSaving = bind(app, 'agentEvaluationSaving');
+const evaluationForm = bind(app, 'evaluationForm');
+const generatorForm = bind(app, 'generatorForm');
+const customTools = bind(app, 'customTools');
+const toolCreateDialogVisible = bind(app, 'toolCreateDialogVisible');
+const toolPreviewVisible = bind(app, 'toolPreviewVisible');
+const toolTestVisible = bind(app, 'toolTestVisible');
+const activeTool = bind(app, 'activeTool');
+const toolTestInput = bind(app, 'toolTestInput');
+const toolTestResult = bind(app, 'toolTestResult');
+const toolTesting = bind(app, 'toolTesting');
+const toolCreating = bind(app, 'toolCreating');
+const toolEditingId = bind(app, 'toolEditingId');
+const toolForm = bind(app, 'toolForm');
+const dagNodeConfigVisible = bind(app, 'dagNodeConfigVisible');
+const activeDagNode = bind(app, 'activeDagNode');
+const dagNodeConfig = bind(app, 'dagNodeConfig');
+const agentForm = bind(app, 'agentForm');
+const knowledgeForm = bind(app, 'knowledgeForm');
+const knowledgeDocForm = bind(app, 'knowledgeDocForm');
+const ragLabForm = bind(app, 'ragLabForm');
+const ragLabSearching = bind(app, 'ragLabSearching');
+const ragLabResults = bind(app, 'ragLabResults');
+const memoryForm = bind(app, 'memoryForm');
+const skillForm = bind(app, 'skillForm');
+const teamForm = bind(app, 'teamForm');
+const mcpForm = bind(app, 'mcpForm');
+const versionForm = bind(app, 'versionForm');
+const testSuiteForm = bind(app, 'testSuiteForm');
+const testCaseForm = bind(app, 'testCaseForm');
+const marketplaceForm = bind(app, 'marketplaceForm');
+const agentBuilderBlocks = bind(app, 'agentBuilderBlocks');
+const agentBuilderCanvas = bind(app, 'agentBuilderCanvas');
+const agentBuilderDragging = bind(app, 'agentBuilderDragging');
+const agentBuilderSkillDragging = bind(app, 'agentBuilderSkillDragging');
+const showBuilderGuide = bind(app, 'showBuilderGuide');
+const activeBuilderBlock = bind(app, 'activeBuilderBlock');
+const builderBlockConfigs = bind(app, 'builderBlockConfigs');
+const workflowCanvasNodes = bind(app, 'workflowCanvasNodes');
+const workflowCanvasConnecting = bind(app, 'workflowCanvasConnecting');
+const workflowCanvasDrag = bind(app, 'workflowCanvasDrag');
+const workflowCanvasSaving = bind(app, 'workflowCanvasSaving');
+const workflowCanvasTypes = bind(app, 'workflowCanvasTypes');
+const selectedWorkflow = bind(app, 'selectedWorkflow');
+const workflowCanvasEdges = bind(app, 'workflowCanvasEdges');
+const skillCategories = bind(app, 'skillCategories');
+const filteredSkills = bind(app, 'filteredSkills');
+const agentPublicEndpoint = bind(app, 'agentPublicEndpoint');
+const agentApiEndpoint = bind(app, 'agentApiEndpoint');
+const agentGuideCards = bind(app, 'agentGuideCards');
+const apiKeys = bind(app, 'apiKeys');
+const apiKeyLoading = bind(app, 'apiKeyLoading');
+const apiKeyCreateDialog = bind(app, 'apiKeyCreateDialog');
+const apiKeyNewName = bind(app, 'apiKeyNewName');
+const errorCodes = bind(app, 'errorCodes');
+const models = bind(app, 'models');
+const selectedModel = bind(app, 'selectedModel');
+const pageModelsConfig = bind(app, 'pageModelsConfig');
+const getModelStorageKey = bind(app, 'getModelStorageKey');
+const restoreSelectedModel = bind(app, 'restoreSelectedModel');
+const persistSelectedModel = bind(app, 'persistSelectedModel');
+const getMmModelKey = bind(app, 'getMmModelKey');
+const restoreMmModel = bind(app, 'restoreMmModel');
+const persistMmModel = bind(app, 'persistMmModel');
+const getTtsModelKey = bind(app, 'getTtsModelKey');
+const restoreTtsModel = bind(app, 'restoreTtsModel');
+const persistTtsModel = bind(app, 'persistTtsModel');
+const getVisionModelKey = bind(app, 'getVisionModelKey');
+const restoreVisionModel = bind(app, 'restoreVisionModel');
+const persistVisionModel = bind(app, 'persistVisionModel');
+const isLoadingModels = bind(app, 'isLoadingModels');
+const status = bind(app, 'status');
+const isAuthLoaded = bind(app, 'isAuthLoaded');
+const sessions = bind(app, 'sessions');
+const activeSessionId = bind(app, 'activeSessionId');
+const draft = bind(app, 'draft');
+const isComposing = bind(app, 'isComposing');
+const isSubmitting = bind(app, 'isSubmitting');
+const requestId = bind(app, 'requestId');
+const isSessionLoaded = bind(app, 'isSessionLoaded');
+const pageMode = bind(app, 'pageMode');
+const battlePrompt = bind(app, 'battlePrompt');
+const isBattling = bind(app, 'isBattling');
+const battleStatus = bind(app, 'battleStatus');
+const battleLeftModel = bind(app, 'battleLeftModel');
+const battleRightModel = bind(app, 'battleRightModel');
+const battlePanels = bind(app, 'battlePanels');
+const groupPrompt = bind(app, 'groupPrompt');
+const isGrouping = bind(app, 'isGrouping');
+const groupMessages = bind(app, 'groupMessages');
+const routerEnabled = bind(app, 'routerEnabled');
+const routerIntent = bind(app, 'routerIntent');
+const routerConfidence = bind(app, 'routerConfidence');
+const routerSelectedModel = bind(app, 'routerSelectedModel');
+const routerReason = bind(app, 'routerReason');
+const routerFallbacks = bind(app, 'routerFallbacks');
+const routerDebug = bind(app, 'routerDebug');
+const routerRules = bind(app, 'routerRules');
+const routerLoading = bind(app, 'routerLoading');
+const collabMode = bind(app, 'collabMode');
+const collabPrompt = bind(app, 'collabPrompt');
+const collabRunning = bind(app, 'collabRunning');
+const collabModels = bind(app, 'collabModels');
+const collabSelectedModels = bind(app, 'collabSelectedModels');
+const collabModelPickerOpen = bind(app, 'collabModelPickerOpen');
+const collabPanels = bind(app, 'collabPanels');
+const collabSummary = bind(app, 'collabSummary');
+const collabSummaryStatus = bind(app, 'collabSummaryStatus');
+const collabAbortController = bind(app, 'collabAbortController');
+const collabLastQuery = bind(app, 'collabLastQuery');
+const collabLastMode = bind(app, 'collabLastMode');
+const getCollabModelLogo = bind(app, 'getCollabModelLogo');
+const adminStats = bind(app, 'adminStats');
+const adminUsers = bind(app, 'adminUsers');
+const adminUsersTotal = bind(app, 'adminUsersTotal');
+const adminUsersPage = bind(app, 'adminUsersPage');
+const adminUsersSearch = bind(app, 'adminUsersSearch');
+const adminBilling = bind(app, 'adminBilling');
+const adminBillingTotal = bind(app, 'adminBillingTotal');
+const adminBillingPage = bind(app, 'adminBillingPage');
+const adminBillingFilterUserId = bind(app, 'adminBillingFilterUserId');
+const adminBillingFilterModel = bind(app, 'adminBillingFilterModel');
+const adminEditUserDialog = bind(app, 'adminEditUserDialog');
+const adminEditUserId = bind(app, 'adminEditUserId');
+const adminEditUserCredits = bind(app, 'adminEditUserCredits');
+const adminEditUserRole = bind(app, 'adminEditUserRole');
+const adminEditUserUsername = bind(app, 'adminEditUserUsername');
+const adminTab = bind(app, 'adminTab');
+const adminDailyUsage = bind(app, 'adminDailyUsage');
+const adminChartDays = bind(app, 'adminChartDays');
+const adminTodayStats = bind(app, 'adminTodayStats');
+const adminModelUsage = bind(app, 'adminModelUsage');
+const adminResetPwdDialog = bind(app, 'adminResetPwdDialog');
+const adminResetPwdUserId = bind(app, 'adminResetPwdUserId');
+const adminResetPwdUsername = bind(app, 'adminResetPwdUsername');
+const adminResetPwdValue = bind(app, 'adminResetPwdValue');
+const adminBillingFromDate = bind(app, 'adminBillingFromDate');
+const adminBillingToDate = bind(app, 'adminBillingToDate');
+const adminProviderKeyCounts = bind(app, 'adminProviderKeyCounts');
+const adminApiKeyProviderFilter = bind(app, 'adminApiKeyProviderFilter');
+const adminSettings = bind(app, 'adminSettings');
+const adminEditSettingDialog = bind(app, 'adminEditSettingDialog');
+const adminEditSettingKey = bind(app, 'adminEditSettingKey');
+const adminEditSettingValue = bind(app, 'adminEditSettingValue');
+const adminEditSettingDesc = bind(app, 'adminEditSettingDesc');
+const adminEditSettingModels = bind(app, 'adminEditSettingModels');
+const adminEditModelTags = bind(app, 'adminEditModelTags');
+const adminModelTiers = bind(app, 'adminModelTiers');
+const adminTierEditDialog = bind(app, 'adminTierEditDialog');
+const adminTierEditKey = bind(app, 'adminTierEditKey');
+const adminTierEditLabel = bind(app, 'adminTierEditLabel');
+const adminTierEditPromptPrice = bind(app, 'adminTierEditPromptPrice');
+const adminTierEditCompletionPrice = bind(app, 'adminTierEditCompletionPrice');
+const adminTierEditDesc = bind(app, 'adminTierEditDesc');
+const adminTierEditIsNew = bind(app, 'adminTierEditIsNew');
+const adminEditSettingTagFilter = bind(app, 'adminEditSettingTagFilter');
+const adminEditSettingTextMode = bind(app, 'adminEditSettingTextMode');
+const filteredModelsForSetting = bind(app, 'filteredModelsForSetting');
+const consoleDailyUsage = bind(app, 'consoleDailyUsage');
+const consoleChartDays = bind(app, 'consoleChartDays');
+const adminProviderKeys = bind(app, 'adminProviderKeys');
+const adminAddKeyDialog = bind(app, 'adminAddKeyDialog');
+const adminNewKeyProvider = bind(app, 'adminNewKeyProvider');
+const adminNewKeyName = bind(app, 'adminNewKeyName');
+const adminNewKeyValue = bind(app, 'adminNewKeyValue');
+const adminProviderConfigs = bind(app, 'adminProviderConfigs');
+const adminEditConfigDialog = bind(app, 'adminEditConfigDialog');
+const adminEditConfigId = bind(app, 'adminEditConfigId');
+const adminEditConfigForm = bind(app, 'adminEditConfigForm');
+const adminIsNewConfig = bind(app, 'adminIsNewConfig');
+const adminChartInstance = bind(app, 'adminChartInstance');
+const consoleChartInstance = bind(app, 'consoleChartInstance');
+const threadRef = bind(app, 'threadRef');
+const groupThreadRef = bind(app, 'groupThreadRef');
+const chatAbortController = bind(app, 'chatAbortController');
+const battleAbortController = bind(app, 'battleAbortController');
+const groupAbortController = bind(app, 'groupAbortController');
+const sessionsSyncTimer = bind(app, 'sessionsSyncTimer');
+const activeSession = bind(app, 'activeSession');
+const activeMessages = bind(app, 'activeMessages');
+const sidebarSessions = bind(app, 'sidebarSessions');
+const isAuthenticated = bind(app, 'isAuthenticated');
+const isAdmin = bind(app, 'isAdmin');
+const activeAgent = bind(app, 'activeAgent');
+const authCreditsText = bind(app, 'authCreditsText');
+const authSpentText = bind(app, 'authSpentText');
+const apiBaseUrl = bind(app, 'apiBaseUrl');
+const battleStatusTagType = bind(app, 'battleStatusTagType');
+const panelStatusTagType = bind(app, 'panelStatusTagType');
+const onConsoleEnter = bind(app, 'onConsoleEnter');
+const triggerSync = bind(app, 'triggerSync');
+const loadModels = bind(app, 'loadModels');
+const resetAgentForm = bind(app, 'resetAgentForm');
+const fillAgentForm = bind(app, 'fillAgentForm');
+const refreshAgentStudio = bind(app, 'refreshAgentStudio');
+const loadAgentResources = bind(app, 'loadAgentResources');
+const loadAgentMemories = bind(app, 'loadAgentMemories');
+const loadAgentEvaluations = bind(app, 'loadAgentEvaluations');
+const loadAgentVersions = bind(app, 'loadAgentVersions');
+const loadAgentTestSuites = bind(app, 'loadAgentTestSuites');
+const loadAgents = bind(app, 'loadAgents');
+const loadAgentRuns = bind(app, 'loadAgentRuns');
+const createAgentDraft = bind(app, 'createAgentDraft');
+const selectAgent = bind(app, 'selectAgent');
+const selectAgentById = bind(app, 'selectAgentById');
+const startAgentBuilderDrag = bind(app, 'startAgentBuilderDrag');
+const startSkillBuilderDrag = bind(app, 'startSkillBuilderDrag');
+const dropAgentBuilderBlock = bind(app, 'dropAgentBuilderBlock');
+const removeAgentBuilderBlock = bind(app, 'removeAgentBuilderBlock');
+const clearAgentBuilderCanvas = bind(app, 'clearAgentBuilderCanvas');
+const applyAgentBuilder = bind(app, 'applyAgentBuilder');
+const applyBuilderConfigs = bind(app, 'applyBuilderConfigs');
+const persistAgent = bind(app, 'persistAgent');
+const saveAgentPublication = bind(app, 'saveAgentPublication');
+const generateAgentFromRequirement = bind(app, 'generateAgentFromRequirement');
+const installMarketplaceTemplate = bind(app, 'installMarketplaceTemplate');
+const publishCurrentAgentToMarketplace = bind(app, 'publishCurrentAgentToMarketplace');
+const getToolLabelById = bind(app, 'getToolLabelById');
+const confirmToolExecutionIfNeeded = bind(app, 'confirmToolExecutionIfNeeded');
+const saveAgent = bind(app, 'saveAgent');
+const removeAgent = bind(app, 'removeAgent');
+const runCurrentAgent = bind(app, 'runCurrentAgent');
+const selectAgentRun = bind(app, 'selectAgentRun');
+const agentRunTagType = bind(app, 'agentRunTagType');
+const agentEvalTagType = bind(app, 'agentEvalTagType');
+const evaluateActiveAgentRun = bind(app, 'evaluateActiveAgentRun');
+const formatAgentDate = bind(app, 'formatAgentDate');
+const formatStepMetadata = bind(app, 'formatStepMetadata');
+const createKnowledgeBaseFromForm = bind(app, 'createKnowledgeBaseFromForm');
+const addDocumentToKnowledgeBase = bind(app, 'addDocumentToKnowledgeBase');
+const handleKnowledgeFileUpload = bind(app, 'handleKnowledgeFileUpload');
+const loadKnowledgeDocuments = bind(app, 'loadKnowledgeDocuments');
+const previewKnowledgeDocument = bind(app, 'previewKnowledgeDocument');
+const deleteKnowledgeDocument = bind(app, 'deleteKnowledgeDocument');
+const formatDate = bind(app, 'formatDate');
+const runRagLabSearch = bind(app, 'runRagLabSearch');
+const createAgentMemory = bind(app, 'createAgentMemory');
+const createSkillFromForm = bind(app, 'createSkillFromForm');
+const exportSkillAsMarkdown = bind(app, 'exportSkillAsMarkdown');
+const exportAgentAsJson = bind(app, 'exportAgentAsJson');
+const exportAgentAsMarkdown = bind(app, 'exportAgentAsMarkdown');
+const previewSkill = bind(app, 'previewSkill');
+const previewSkillById = bind(app, 'previewSkillById');
+const runActiveSkillTest = bind(app, 'runActiveSkillTest');
+const copySkillToCustom = bind(app, 'copySkillToCustom');
+const deleteCustomSkill = bind(app, 'deleteCustomSkill');
+const startEditSkill = bind(app, 'startEditSkill');
+const cancelSkillEdit = bind(app, 'cancelSkillEdit');
+const bindSkillToCurrentAgent = bind(app, 'bindSkillToCurrentAgent');
+const skillRiskTagType = bind(app, 'skillRiskTagType');
+const openToolCreateDialog = bind(app, 'openToolCreateDialog');
+const editTool = bind(app, 'editTool');
+const saveTool = bind(app, 'saveTool');
+const deleteTool = bind(app, 'deleteTool');
+const previewTool = bind(app, 'previewTool');
+const openToolTest = bind(app, 'openToolTest');
+const runToolTest = bind(app, 'runToolTest');
+const toggleToolStatus = bind(app, 'toggleToolStatus');
+const openDagNodeConfig = bind(app, 'openDagNodeConfig');
+const saveDagNodeConfig = bind(app, 'saveDagNodeConfig');
+const createDefaultWorkflow = bind(app, 'createDefaultWorkflow');
+const createTeamFromForm = bind(app, 'createTeamFromForm');
+const runSelectedTeam = bind(app, 'runSelectedTeam');
+const createVersionFromForm = bind(app, 'createVersionFromForm');
+const restoreVersion = bind(app, 'restoreVersion');
+const createTestSuiteFromForm = bind(app, 'createTestSuiteFromForm');
+const createTestCaseFromForm = bind(app, 'createTestCaseFromForm');
+const loadSelectedTestCases = bind(app, 'loadSelectedTestCases');
+const runSelectedTestSuite = bind(app, 'runSelectedTestSuite');
+const createMcpServerFromForm = bind(app, 'createMcpServerFromForm');
+const testMcpServer = bind(app, 'testMcpServer');
+const syncWorkflowCanvasFromSelected = bind(app, 'syncWorkflowCanvasFromSelected');
+const createWorkflowNodeConfig = bind(app, 'createWorkflowNodeConfig');
+const dagNodeDragging = bind(app, 'dagNodeDragging');
+const startDagNodeDrag = bind(app, 'startDagNodeDrag');
+const dropDagNode = bind(app, 'dropDagNode');
+const addWorkflowCanvasNode = bind(app, 'addWorkflowCanvasNode');
+const startWorkflowNodeDrag = bind(app, 'startWorkflowNodeDrag');
+const dragWorkflowNode = bind(app, 'dragWorkflowNode');
+const stopWorkflowNodeDrag = bind(app, 'stopWorkflowNodeDrag');
+const connectWorkflowNode = bind(app, 'connectWorkflowNode');
+const removeWorkflowCanvasNode = bind(app, 'removeWorkflowCanvasNode');
+const saveWorkflowCanvas = bind(app, 'saveWorkflowCanvas');
+const runSelectedWorkflow = bind(app, 'runSelectedWorkflow');
+const bootstrapAuth = bind(app, 'bootstrapAuth');
+const fetchUserInvitationCode = bind(app, 'fetchUserInvitationCode');
+const submitAuth = bind(app, 'submitAuth');
+const onAuthDialogClosed = bind(app, 'onAuthDialogClosed');
+const handleSendCode = bind(app, 'handleSendCode');
+const loadUserData = bind(app, 'loadUserData');
+const handleUserMenu = bind(app, 'handleUserMenu');
+const logout = bind(app, 'logout');
+const handleTopUp = bind(app, 'handleTopUp');
+const openRechargeDialog = bind(app, 'openRechargeDialog');
+const submitRecharge = bind(app, 'submitRecharge');
+const startRechargePolling = bind(app, 'startRechargePolling');
+const stopRechargePolling = bind(app, 'stopRechargePolling');
+const loadRechargeOrders = bind(app, 'loadRechargeOrders');
+const handleCheckPayment = bind(app, 'handleCheckPayment');
+const closeRechargeDialog = bind(app, 'closeRechargeDialog');
+const refreshBillingData = bind(app, 'refreshBillingData');
+const upsertActiveSession = bind(app, 'upsertActiveSession');
+const submitPrompt = bind(app, 'submitPrompt');
+const stopChatGeneration = bind(app, 'stopChatGeneration');
+const loadRouterRules = bind(app, 'loadRouterRules');
+const submitRouterPrompt = bind(app, 'submitRouterPrompt');
+const startCollab = bind(app, 'startCollab');
+const clearCollab = bind(app, 'clearCollab');
+const stopCollab = bind(app, 'stopCollab');
+const createNewChat = bind(app, 'createNewChat');
+const handleSoftDeleteSession = bind(app, 'handleSoftDeleteSession');
+const clearChat = bind(app, 'clearChat');
+const loadAdminStats = bind(app, 'loadAdminStats');
+const loadAdminUsers = bind(app, 'loadAdminUsers');
+const loadAdminBilling = bind(app, 'loadAdminBilling');
+const openEditUser = bind(app, 'openEditUser');
+const saveEditUser = bind(app, 'saveEditUser');
+const loadAdminProviderKeys = bind(app, 'loadAdminProviderKeys');
+const openAddProviderKey = bind(app, 'openAddProviderKey');
+const saveAddProviderKey = bind(app, 'saveAddProviderKey');
+const deleteProviderKey = bind(app, 'deleteProviderKey');
+const loadAdminProviderConfigs = bind(app, 'loadAdminProviderConfigs');
+const openAddConfig = bind(app, 'openAddConfig');
+const openEditConfig = bind(app, 'openEditConfig');
+const saveConfig = bind(app, 'saveConfig');
+const toggleProvider = bind(app, 'toggleProvider');
+const deleteProviderConfig = bind(app, 'deleteProviderConfig');
+const loadAdminTodayStats = bind(app, 'loadAdminTodayStats');
+const loadAdminModelUsage = bind(app, 'loadAdminModelUsage');
+const modelChartInstance = bind(app, 'modelChartInstance');
+const viewUserBilling = bind(app, 'viewUserBilling');
+const openResetPassword = bind(app, 'openResetPassword');
+const saveResetPassword = bind(app, 'saveResetPassword');
+const handleDeleteUser = bind(app, 'handleDeleteUser');
+const handleExportBillingCsv = bind(app, 'handleExportBillingCsv');
+const loadAdminBillingWithDates = bind(app, 'loadAdminBillingWithDates');
+const loadAdminProviderKeyCounts = bind(app, 'loadAdminProviderKeyCounts');
+const loadAdminSettings = bind(app, 'loadAdminSettings');
+const loadAdminModelTiers = bind(app, 'loadAdminModelTiers');
+const openEditTier = bind(app, 'openEditTier');
+const saveTierEdit = bind(app, 'saveTierEdit');
+const deleteAdminTier = bind(app, 'deleteAdminTier');
+const modelTierSearch = bind(app, 'modelTierSearch');
+const modelTierTagFilter = bind(app, 'modelTierTagFilter');
+const modelTierMap = bind(app, 'modelTierMap');
+const allModelTierRows = bind(app, 'allModelTierRows');
+const filteredModelTierRows = bind(app, 'filteredModelTierRows');
+const unassignedCount = bind(app, 'unassignedCount');
+const changeModelTier = bind(app, 'changeModelTier');
+const tierDefaultLabels = bind(app, 'tierDefaultLabels');
+const tierRows = bind(app, 'tierRows');
+const tierTagType = bind(app, 'tierTagType');
+const defaultPricePrompt = bind(app, 'defaultPricePrompt');
+const defaultPriceCompletion = bind(app, 'defaultPriceCompletion');
+const adminDefaultPromptPrice = bind(app, 'adminDefaultPromptPrice');
+const adminDefaultCompletionPrice = bind(app, 'adminDefaultCompletionPrice');
+const initDefaultPriceFields = bind(app, 'initDefaultPriceFields');
+const saveDefaultPrices = bind(app, 'saveDefaultPrices');
+const consolePricingRows = bind(app, 'consolePricingRows');
+const openEditSetting = bind(app, 'openEditSetting');
+const toggleModelTag = bind(app, 'toggleModelTag');
+const toggleSettingTextMode = bind(app, 'toggleSettingTextMode');
+const saveEditSetting = bind(app, 'saveEditSetting');
+const adminRouterRules = bind(app, 'adminRouterRules');
+const adminRouterEditDialog = bind(app, 'adminRouterEditDialog');
+const adminRouterEditIntent = bind(app, 'adminRouterEditIntent');
+const adminRouterEditModels = bind(app, 'adminRouterEditModels');
+const loadAdminRouterRules = bind(app, 'loadAdminRouterRules');
+const openAdminRouterEdit = bind(app, 'openAdminRouterEdit');
+const saveAdminRouterRule = bind(app, 'saveAdminRouterRule');
+const deleteAdminRouterRule = bind(app, 'deleteAdminRouterRule');
+const renderLineChart = bind(app, 'renderLineChart');
+const renderModelUsageChart = bind(app, 'renderModelUsageChart');
+const loadAdminDailyUsage = bind(app, 'loadAdminDailyUsage');
+const loadConsoleDailyUsage = bind(app, 'loadConsoleDailyUsage');
+const disposeCharts = bind(app, 'disposeCharts');
+const darkMediaQuery2 = bind(app, 'darkMediaQuery2');
+const onDarkChange = bind(app, 'onDarkChange');
+const switchPage = bind(app, 'switchPage');
+const startBattle = bind(app, 'startBattle');
+const stopBattle = bind(app, 'stopBattle');
+const startGroupChat = bind(app, 'startGroupChat');
+const clearGroupChat = bind(app, 'clearGroupChat');
+const stopGroupChat = bind(app, 'stopGroupChat');
+const visionPrompt = bind(app, 'visionPrompt');
+const visionImageBase64 = bind(app, 'visionImageBase64');
+const visionImageName = bind(app, 'visionImageName');
+const visionModel = bind(app, 'visionModel');
+const visionMessages = bind(app, 'visionMessages');
+const isVisionSubmitting = bind(app, 'isVisionSubmitting');
+const visionFileRef = bind(app, 'visionFileRef');
+const visionAbortController = bind(app, 'visionAbortController');
+const modelTagsMap = bind(app, 'modelTagsMap');
+const getModelTags = bind(app, 'getModelTags');
+const chatModels = bind(app, 'chatModels');
+const battleModels = bind(app, 'battleModels');
+const groupModelList = bind(app, 'groupModelList');
+const getPageModels = bind(app, 'getPageModels');
+const visionModels = bind(app, 'visionModels');
+const ttsText = bind(app, 'ttsText');
+const ttsVoice = bind(app, 'ttsVoice');
+const ttsStyleTag = bind(app, 'ttsStyleTag');
+const ttsStyleInstruction = bind(app, 'ttsStyleInstruction');
+const ttsSingingMode = bind(app, 'ttsSingingMode');
+const ttsModeSegment = bind(app, 'ttsModeSegment');
+const ttsAudioUrl = bind(app, 'ttsAudioUrl');
+const ttsAudioLoading = bind(app, 'ttsAudioLoading');
+const ttsError = bind(app, 'ttsError');
+const ttsAudioRef = bind(app, 'ttsAudioRef');
+const ttsHistory = bind(app, 'ttsHistory');
+const ttsModel = bind(app, 'ttsModel');
+const ttsModels = bind(app, 'ttsModels');
+const multimodalTab = bind(app, 'multimodalTab');
+const videoFile = bind(app, 'videoFile');
+const videoUrl = bind(app, 'videoUrl');
+const videoAnalysis = bind(app, 'videoAnalysis');
+const videoAnalysisRunning = bind(app, 'videoAnalysisRunning');
+const videoRef = bind(app, 'videoRef');
+const drivingCanvasRef = bind(app, 'drivingCanvasRef');
+const drivingRunning = bind(app, 'drivingRunning');
+const drivingSpeed = bind(app, 'drivingSpeed');
+const drivingSteering = bind(app, 'drivingSteering');
+const drivingAutoPilot = bind(app, 'drivingAutoPilot');
+const drivingStats = bind(app, 'drivingStats');
+const drivingAnimationId = bind(app, 'drivingAnimationId');
+const drivingLastTime = bind(app, 'drivingLastTime');
+const drivingRoadOffset = bind(app, 'drivingRoadOffset');
+const drivingVehicles = bind(app, 'drivingVehicles');
+const drivingEgoX = bind(app, 'drivingEgoX');
+const retrievalQuery = bind(app, 'retrievalQuery');
+const retrievalResults = bind(app, 'retrievalResults');
+const retrievalLoading = bind(app, 'retrievalLoading');
+const mmChatMessages = bind(app, 'mmChatMessages');
+const mmChatPrompt = bind(app, 'mmChatPrompt');
+const mmChatImageBase64 = bind(app, 'mmChatImageBase64');
+const mmChatImageName = bind(app, 'mmChatImageName');
+const mmChatImages = bind(app, 'mmChatImages');
+const mmChatAudioBase64 = bind(app, 'mmChatAudioBase64');
+const mmChatAudioName = bind(app, 'mmChatAudioName');
+const mmChatVideoUrl = bind(app, 'mmChatVideoUrl');
+const mmChatVideoName = bind(app, 'mmChatVideoName');
+const mmChatMediaType = bind(app, 'mmChatMediaType');
+const mmChatFileRef = bind(app, 'mmChatFileRef');
+const mmChatAudioRef = bind(app, 'mmChatAudioRef');
+const mmChatVideoRef = bind(app, 'mmChatVideoRef');
+const isMmChatSubmitting = bind(app, 'isMmChatSubmitting');
+const mmChatAbortController = bind(app, 'mmChatAbortController');
+const drivingAiAnalyzing = bind(app, 'drivingAiAnalyzing');
+const drivingAiAnalysis = bind(app, 'drivingAiAnalysis');
+const drivingAiAbortController = bind(app, 'drivingAiAbortController');
+const drivingAiCommand = bind(app, 'drivingAiCommand');
+const drivingAiIntervalSec = bind(app, 'drivingAiIntervalSec');
+const drivingAiIntervalId = bind(app, 'drivingAiIntervalId');
+const multimodalModel = bind(app, 'multimodalModel');
+const handleVisionImageUpload = bind(app, 'handleVisionImageUpload');
+const removeVisionImage = bind(app, 'removeVisionImage');
+const openImageInNewTab = bind(app, 'openImageInNewTab');
+const submitVisionPrompt = bind(app, 'submitVisionPrompt');
+const clearVisionChat = bind(app, 'clearVisionChat');
+const stopVisionChat = bind(app, 'stopVisionChat');
+const TTS_STYLE_TAGS = bind(app, 'TTS_STYLE_TAGS');
+const TTS_AUDIO_TAGS = bind(app, 'TTS_AUDIO_TAGS');
+const TTS_VOICES = bind(app, 'TTS_VOICES');
+const insertTtsTag = bind(app, 'insertTtsTag');
+const onTtsModeChange = bind(app, 'onTtsModeChange');
+const generateTts = bind(app, 'generateTts');
+const initDrivingSim = bind(app, 'initDrivingSim');
+const LANE_COLORS = bind(app, 'LANE_COLORS');
+const VEHICLE_TYPES = bind(app, 'VEHICLE_TYPES');
+const getLaneCenter = bind(app, 'getLaneCenter');
+const spawnVehicle = bind(app, 'spawnVehicle');
+const drawCar = bind(app, 'drawCar');
+const tickDrivingSim = bind(app, 'tickDrivingSim');
+const startDrivingSim = bind(app, 'startDrivingSim');
+const stopDrivingSim = bind(app, 'stopDrivingSim');
+const handleVideoUpload = bind(app, 'handleVideoUpload');
+const runVideoAnalysis = bind(app, 'runVideoAnalysis');
+const stopVideoAnalysis = bind(app, 'stopVideoAnalysis');
+const searchImages = bind(app, 'searchImages');
+const handleMmImageUpload = bind(app, 'handleMmImageUpload');
+const handleMmAudioUpload = bind(app, 'handleMmAudioUpload');
+const handleMmVideoUpload = bind(app, 'handleMmVideoUpload');
+const removeMmMedia = bind(app, 'removeMmMedia');
+const submitMmChat = bind(app, 'submitMmChat');
+const stopMmChat = bind(app, 'stopMmChat');
+const clearMmChat = bind(app, 'clearMmChat');
+const analyzeDrivingScene = bind(app, 'analyzeDrivingScene');
+const stopDrivingAnalysis = bind(app, 'stopDrivingAnalysis');
+const loadApiKeys = bind(app, 'loadApiKeys');
+const openCreateApiKey = bind(app, 'openCreateApiKey');
+const createApiKey = bind(app, 'createApiKey');
+const revokeApiKey = bind(app, 'revokeApiKey');
+const copyToClipboard = bind(app, 'copyToClipboard');
+const openVideoUploadInput = bind(app, 'openVideoUploadInput');
+</script>
+
+<template>
+        <div class="page-header">
+          <div class="header-left"><strong>管理后台</strong></div>
+          <div class="header-right">
+            <el-tag v-if="isAdmin" type="warning" effect="dark">管理员</el-tag>
+          </div>
+        </div>
+
+        <div class="admin-page-content">
+          <el-tabs v-model="adminTab" @tab-change="(tab: string | number) => {
+            if (tab === 'dashboard') { loadAdminStats(); loadAdminDailyUsage(); loadAdminTodayStats(); loadAdminModelUsage(); }
+            else if (tab === 'users') loadAdminUsers();
+            else if (tab === 'billing') loadAdminBilling();
+            else if (tab === 'modelstats') loadAdminModelUsage();
+            else if (tab === 'modeltiers') { loadAdminModelTiers(); if (models.length === 0) loadModels(); refreshBillingData().then(() => initDefaultPriceFields()); }
+            else if (tab === 'providers') { loadAdminProviderConfigs(); loadAdminProviderKeyCounts(); }
+            else if (tab === 'apikeys') { loadAdminProviderKeys(); loadAdminProviderConfigs(); }
+            else if (tab === 'settings') { loadAdminSettings(); }
+            else if (tab === 'router') { loadAdminRouterRules(); }
+          }">
+            <!-- Dashboard Tab -->
+            <el-tab-pane label="概览" name="dashboard">
+              <div class="admin-stats-grid">
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#eff6ff"><el-icon :size="22" color="#3b82f6"><UserFilled /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminStats ? adminStats.totalUsers : '—' }}</div>
+                    <div class="admin-stat-label">用户总数</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#f0fdf4"><el-icon :size="22" color="#22c55e"><Plus /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminStats ? adminStats.newUsersToday : '—' }}</div>
+                    <div class="admin-stat-label">今日新增</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#fef3c7"><el-icon :size="22" color="#f59e0b"><Coin /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminStats ? '¥' + adminStats.totalRevenue.toFixed(2) : '—' }}</div>
+                    <div class="admin-stat-label">总收入</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#faf5ff"><el-icon :size="22" color="#a855f7"><TrendCharts /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminStats ? adminStats.totalRequests : '—' }}</div>
+                    <div class="admin-stat-label">请求总数</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#fff1f2"><el-icon :size="22" color="#f43f5e"><Cpu /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminStats ? adminStats.activeModels : '—' }}</div>
+                    <div class="admin-stat-label">活跃模型</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="admin-stats-grid" style="margin-top:12px">
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#ecfdf5"><el-icon :size="22" color="#10b981"><Coin /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminTodayStats ? '¥' + adminTodayStats.revenue.toFixed(4) : '—' }}</div>
+                    <div class="admin-stat-label">今日收入</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#f0f9ff"><el-icon :size="22" color="#0ea5e9"><TrendCharts /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminTodayStats ? adminTodayStats.requests : '—' }}</div>
+                    <div class="admin-stat-label">今日请求</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#fdf4ff"><el-icon :size="22" color="#d946ef"><Cpu /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminStats ? adminStats.totalTokens.toLocaleString() : '—' }}</div>
+                    <div class="admin-stat-label">总 Token 数</div>
+                  </div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-icon" style="background:#fefce8"><el-icon :size="22" color="#eab308"><TrendCharts /></el-icon></div>
+                  <div class="admin-stat-body">
+                    <div class="admin-stat-value">{{ adminTodayStats ? adminTodayStats.tokens.toLocaleString() : '—' }}</div>
+                    <div class="admin-stat-label">今日 Token</div>
+                  </div>
+                </div>
+              </div>
+
+              <el-card shadow="never" class="admin-chart-card">
+                <template #header>
+                  <div style="display:flex;align-items:center;justify-content:space-between">
+                    <span style="font-weight:600">用量趋势</span>
+                    <el-segmented
+                      :model-value="String(adminChartDays)"
+                      @change="(val: string | number) => { adminChartDays = Number(val); loadAdminDailyUsage(); }"
+                      :options="[
+                        { label: '7天', value: '7' },
+                        { label: '30天', value: '30' },
+                        { label: '90天', value: '90' },
+                      ]"
+                      size="small"
+                    />
+                  </div>
+                </template>
+                <div v-if="adminDailyUsage.length > 0" id="admin-chart" style="width:100%;height:300px"></div>
+                <el-empty v-else description="暂无用量数据" :image-size="48" style="padding:40px 0" />
+              </el-card>
+
+              <el-card shadow="never" class="admin-chart-card">
+                <template #header><span style="font-weight:600">模型用量排行 (Top 10)</span></template>
+                <div v-if="adminModelUsage.length > 0" id="admin-model-chart" style="width:100%;height:320px"></div>
+                <el-empty v-else description="暂无模型用量数据" :image-size="48" style="padding:40px 0" />
+              </el-card>
+            </el-tab-pane>
+
+            <!-- Users Tab -->
+            <el-tab-pane label="用户管理" name="users">
+              <div class="admin-toolbar">
+                <el-input v-model="adminUsersSearch" placeholder="搜索用户名或邮箱" clearable :prefix-icon="Search" style="width: 260px" @keyup.enter="adminUsersPage = 1; loadAdminUsers()" @clear="adminUsersPage = 1; loadAdminUsers()" />
+                <el-button type="primary" plain @click="adminUsersPage = 1; loadAdminUsers()">搜索</el-button>
+              </div>
+              <el-table :data="adminUsers" stripe size="small" class="admin-table" v-loading="adminUsers.length === 0 && adminUsersTotal === 0">
+                <el-table-column prop="username" label="用户名" min-width="100" />
+                <el-table-column prop="email" label="邮箱" min-width="160">
+                  <template #default="{ row }">{{ row.email || '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="role" label="角色" width="70">
+                  <template #default="{ row }">
+                    <el-tag :type="row.role === 'admin' ? 'warning' : 'info'" size="small">{{ row.role }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="credits" label="余额" width="100">
+                  <template #default="{ row }">{{ row.credits.toFixed(4) }}</template>
+                </el-table-column>
+                <el-table-column prop="totalSpent" label="累计消费" width="100">
+                  <template #default="{ row }">{{ row.totalSpent.toFixed(4) }}</template>
+                </el-table-column>
+                <el-table-column prop="requestCount" label="请求数" width="80" align="center" />
+                <el-table-column prop="invitationCode" label="邀请码" width="100">
+                  <template #default="{ row }">
+                    <span v-if="row.invitationCode" class="copyable-code">{{ row.invitationCode }}</span>
+                    <span v-else style="color:#999">-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="createdAt" label="注册时间" min-width="150">
+                  <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="60" fixed="right" align="center">
+                  <template #default="{ row }">
+                    <el-dropdown trigger="click" @command="(cmd: string) => { if (cmd === 'edit') openEditUser(row); else if (cmd === 'billing') viewUserBilling(row.id); else if (cmd === 'pwd') openResetPassword(row); else if (cmd === 'delete') handleDeleteUser(row.id); }">
+                      <el-button :icon="MoreFilled" link type="primary" />
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="edit"><el-icon><EditPen /></el-icon> 编辑</el-dropdown-item>
+                          <el-dropdown-item command="billing"><el-icon><DataAnalysis /></el-icon> 账单</el-dropdown-item>
+                          <el-dropdown-item command="pwd"><el-icon><Setting /></el-icon> 重置密码</el-dropdown-item>
+                          <el-dropdown-item v-if="row.role !== 'admin'" command="delete" divided style="color:#f56c6c"><el-icon><Delete /></el-icon> 删除</el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-pagination
+                v-if="adminUsersTotal > 50"
+                v-model:current-page="adminUsersPage"
+                :page-size="50"
+                :total="adminUsersTotal"
+                layout="total, prev, pager, next"
+                class="admin-pagination"
+                @current-change="loadAdminUsers()"
+              />
+            </el-tab-pane>
+
+            <!-- Billing Tab -->
+            <el-tab-pane label="计费明细" name="billing">
+              <div class="admin-toolbar" style="flex-wrap:wrap;gap:8px">
+                <el-input v-model="adminBillingFilterUserId" placeholder="用户ID" clearable style="width: 180px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
+                <el-input v-model="adminBillingFilterModel" placeholder="模型" clearable style="width: 140px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
+                <el-date-picker v-model="adminBillingFromDate" type="date" placeholder="开始日期" value-format="YYYY-MM-DD" style="width:150px" clearable @change="loadAdminBillingWithDates()" />
+                <el-date-picker v-model="adminBillingToDate" type="date" placeholder="结束日期" value-format="YYYY-MM-DD" style="width:150px" clearable @change="loadAdminBillingWithDates()" />
+                <el-button type="primary" plain @click="loadAdminBillingWithDates()">筛选</el-button>
+                <el-button type="success" plain @click="handleExportBillingCsv()">导出 CSV</el-button>
+              </div>
+              <el-table :data="adminBilling" stripe size="small" class="admin-table">
+                <el-table-column prop="username" label="用户" min-width="90" />
+                <el-table-column prop="model" label="模型" min-width="140" />
+                <el-table-column prop="requestType" label="类型" width="70" />
+                <el-table-column prop="promptTokens" label="输入Tokens" width="100" align="right" />
+                <el-table-column prop="completionTokens" label="输出Tokens" width="100" align="right" />
+                <el-table-column prop="totalTokens" label="总Tokens" width="100" align="right" />
+                <el-table-column prop="cost" label="费用" width="100" align="right">
+                  <template #default="{ row }">{{ row.cost.toFixed(6) }}</template>
+                </el-table-column>
+                <el-table-column prop="createdAt" label="时间" min-width="160">
+                  <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+                </el-table-column>
+              </el-table>
+              <el-pagination
+                v-if="adminBillingTotal > 50"
+                v-model:current-page="adminBillingPage"
+                :page-size="50"
+                :total="adminBillingTotal"
+                layout="total, prev, pager, next"
+                class="admin-pagination"
+                @current-change="loadAdminBilling()"
+              />
+              <div v-if="adminBilling.length > 0" class="admin-billing-summary">
+                <span>本页合计：</span>
+                <span>总 Token: <strong>{{ adminBilling.reduce((s, r) => s + r.totalTokens, 0).toLocaleString() }}</strong></span>
+                <span>总费用: <strong>¥{{ adminBilling.reduce((s, r) => s + r.cost, 0).toFixed(6) }}</strong></span>
+                <span style="color:#909399">（共 {{ adminBillingTotal }} 条记录）</span>
+              </div>
+            </el-tab-pane>
+
+
+            <!-- Model Stats Tab -->
+            <el-tab-pane label="用量统计" name="modelstats">
+              <el-table :data="adminModelUsage" stripe size="small" class="admin-table" :default-sort="{ prop: 'requests', order: 'descending' }">
+                <el-table-column prop="model" label="模型" min-width="180" sortable />
+                <el-table-column prop="providerName" label="服务商" width="120" sortable />
+                <el-table-column prop="requests" label="请求数" width="100" align="right" sortable />
+                <el-table-column prop="promptTokens" label="输入 Token" width="120" align="right" sortable>
+                  <template #default="{ row }">{{ row.promptTokens.toLocaleString() }}</template>
+                </el-table-column>
+                <el-table-column prop="completionTokens" label="输出 Token" width="120" align="right" sortable>
+                  <template #default="{ row }">{{ row.completionTokens.toLocaleString() }}</template>
+                </el-table-column>
+                <el-table-column prop="totalTokens" label="总 Token" width="120" align="right" sortable>
+                  <template #default="{ row }">{{ row.totalTokens.toLocaleString() }}</template>
+                </el-table-column>
+                <el-table-column prop="totalCost" label="总费用" width="120" align="right" sortable>
+                  <template #default="{ row }">¥{{ row.totalCost.toFixed(6) }}</template>
+                </el-table-column>
+                <el-table-column prop="avgCost" label="平均费用" width="120" align="right" sortable>
+                  <template #default="{ row }">¥{{ row.avgCost.toFixed(6) }}</template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="adminModelUsage.length === 0" description="暂无模型用量数据" :image-size="48" />
+            </el-tab-pane>
+
+            <!-- Provider Config Tab -->
+            <el-tab-pane label="服务商" name="providers">
+              <div style="margin-bottom: 16px">
+                <el-button type="primary" :icon="Plus" @click="openAddConfig()">添加服务商</el-button>
+              </div>
+              <el-table :data="adminProviderConfigs" stripe size="small" class="admin-table" empty-text="暂无服务商配置">
+                <el-table-column prop="displayName" label="名称" min-width="140" />
+                <el-table-column prop="providerName" label="标识符" width="120" />
+                <el-table-column prop="baseUrl" label="端点" min-width="220">
+                  <template #default="{ row }"><span style="font-size:12px;color:#909399">{{ row.baseUrl }}</span></template>
+                </el-table-column>
+                <el-table-column label="模型数" width="80" align="center">
+                  <template #default="{ row }">{{ row.models ? row.models.split(',').filter(Boolean).length : 0 }}</template>
+                </el-table-column>
+                <el-table-column label="Key 数" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="adminProviderKeyCounts[row.providerName] > 0 ? 'success' : 'info'">
+                      {{ adminProviderKeyCounts[row.providerName] ?? '...' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-switch :model-value="row.enabled" size="small" @click="toggleProvider(row)" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="140" fixed="right">
+                  <template #default="{ row }">
+                    <el-button type="primary" link :icon="EditPen" @click="openEditConfig(row)">编辑</el-button>
+                    <el-popconfirm title="确定要删除该服务商及其所有 Key 吗？" @confirm="deleteProviderConfig(row.id)">
+                      <template #reference>
+                        <el-button type="danger" link :icon="Delete">删除</el-button>
+                      </template>
+                    </el-popconfirm>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+
+            <!-- API Key Management Tab -->
+            <el-tab-pane label="API Key" name="apikeys">
+              <div style="margin-bottom: 16px;display:flex;gap:12px;align-items:center">
+                <el-button type="primary" :icon="Plus" @click="openAddProviderKey()">添加 Key</el-button>
+                <el-select v-model="adminApiKeyProviderFilter" placeholder="按 Provider 筛选" clearable style="width:200px" @change="loadAdminProviderKeys()">
+                  <el-option v-for="cfg in adminProviderConfigs" :key="cfg.providerName" :label="cfg.displayName" :value="cfg.providerName" />
+                </el-select>
+              </div>
+              <el-table :data="adminProviderKeys" stripe size="small" class="admin-table" empty-text="暂无 Provider API Key，请添加或检查 .env 配置">
+                <el-table-column prop="providerName" label="Provider" width="130" />
+                <el-table-column prop="name" label="名称" min-width="140" />
+                <el-table-column label="API Key" min-width="280">
+                  <template #default="{ row }">
+                    <code style="font-size:12px;word-break:break-all;user-select:all">{{ row.apiKey }}</code>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="createdAt" label="创建时间" width="170">
+                  <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="100" fixed="right">
+                  <template #default="{ row }">
+                    <el-popconfirm title="确定要删除该 Key 吗？将立即回退到 .env 中的 Key。" @confirm="deleteProviderKey(row.id)">
+                      <template #reference>
+                        <el-button type="danger" link :icon="Delete">删除</el-button>
+                      </template>
+                    </el-popconfirm>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+
+            <!-- Model → Tier Mapping Tab -->
+            <el-tab-pane label="定价映射" name="modeltiers">
+              <el-alert v-if="Object.keys(adminModelTiers.tiers).length === 0" type="warning" show-icon :closable="false"
+                title="还没有定价档位，请先点击「新增定价档位」创建至少一个档位" style="margin-bottom:16px" />
+
+              <!-- Tier pricing table -->
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <span style="font-weight:600;font-size:14px">定价档位</span>
+                <el-button size="small" @click="openEditTier()">新增档位</el-button>
+              </div>
+
+              <el-table v-if="tierRows.length > 0" :data="tierRows" stripe size="small" class="admin-table" style="margin-bottom:20px">
+                <el-table-column label="档位" width="160">
+                  <template #default="{ row }">
+                    <el-tag :type="tierTagType(row.key)" size="small">{{ row.label }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="输入价格 (元/千token)" width="180" align="center">
+                  <template #default="{ row }">{{ row.promptPrice.toFixed(4) }}</template>
+                </el-table-column>
+                <el-table-column label="输出价格 (元/千token)" width="180" align="center">
+                  <template #default="{ row }">{{ row.completionPrice.toFixed(4) }}</template>
+                </el-table-column>
+                <el-table-column label="模型数" width="80" align="center">
+                  <template #default="{ row }">{{ row.models.length }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="120">
+                  <template #default="{ row }">
+                    <el-button size="small" link @click="openEditTier(row.key)">编辑</el-button>
+                    <el-popconfirm title="删除此档位？" @confirm="deleteAdminTier(row.key)">
+                      <template #reference>
+                        <el-button size="small" link type="danger">删除</el-button>
+                      </template>
+                    </el-popconfirm>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <!-- Model → Tier Mapping Table -->
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <span style="font-weight:600;font-size:14px">模型映射</span>
+                  <el-input v-model="modelTierSearch" placeholder="搜索模型..." size="small" clearable style="width:200px" :prefix-icon="Search" />
+                  <el-button-group size="small">
+                    <el-button :type="modelTierTagFilter === '' ? 'primary' : ''" @click="modelTierTagFilter = ''">全部</el-button>
+                    <el-button :type="modelTierTagFilter === 'language' ? 'primary' : ''" @click="modelTierTagFilter = 'language'">语言</el-button>
+                    <el-button :type="modelTierTagFilter === 'vision' ? 'primary' : ''" @click="modelTierTagFilter = 'vision'">视觉</el-button>
+                    <el-button :type="modelTierTagFilter === 'audio' ? 'primary' : ''" @click="modelTierTagFilter = 'audio'">音频</el-button>
+                  </el-button-group>
+                </div>
+                <span style="font-size:12px;color:#9ca3af">
+                  未分配使用默认价（入 {{ defaultPricePrompt.toFixed(4) }} / 出 {{ defaultPriceCompletion.toFixed(4) }}）
+                </span>
+              </div>
+
+              <el-table :data="filteredModelTierRows" stripe size="small" class="admin-table" max-height="480">
+                <el-table-column prop="modelId" label="模型" min-width="200" />
+                <el-table-column label="标签" width="110">
+                  <template #default="{ row }">
+                    <el-tag v-if="getModelTags(row.modelId).includes('language')" size="small" type="info" style="margin-right:4px">语言</el-tag>
+                    <el-tag v-if="getModelTags(row.modelId).includes('vision')" size="small" type="success" style="margin-right:4px">视觉</el-tag>
+                    <el-tag v-if="getModelTags(row.modelId).includes('audio')" size="small" type="success">音频</el-tag>
+                    <span v-if="getModelTags(row.modelId).length === 0" style="color:#c0c4cc">-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="定价档位" width="180">
+                  <template #default="{ row }">
+                    <el-select v-model="row.tierKey" size="small" placeholder="未分配" clearable style="width:100%"
+                      @change="(val: string) => changeModelTier(row.modelId, val || '')">
+                      <el-option v-for="t in tierRows" :key="t.key" :label="t.label" :value="t.key">
+                        <span>{{ t.label }}</span>
+                        <span style="float:right;color:#9ca3af;font-size:11px">入{{ t.promptPrice.toFixed(3) }} 出{{ t.completionPrice.toFixed(3) }}</span>
+                      </el-option>
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="输入价格" width="110" align="center">
+                  <template #default="{ row }">{{ row.promptPrice.toFixed(4) }}</template>
+                </el-table-column>
+                <el-table-column label="输出价格" width="110" align="center">
+                  <template #default="{ row }">{{ row.completionPrice.toFixed(4) }}</template>
+                </el-table-column>
+              </el-table>
+
+              <div style="margin-top:8px;font-size:11px;color:#9ca3af">
+                共 {{ models.length }} 个模型，{{ unassignedCount }} 个未分配
+              </div>
+
+              <!-- Default prices (for unassigned models) -->
+              <el-card shadow="never" style="margin-top:16px;background:var(--el-fill-color-lighter, #f8fafc)">
+                <template #header><strong>默认价格</strong><span style="font-size:12px;color:#9ca3af;margin-left:8px">未分配档位的模型使用此价格</span></template>
+                <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
+                  <div>
+                    <div style="font-size:12px;color:#909399;margin-bottom:4px">输入价格（元/千token）</div>
+                    <el-input-number v-model="adminDefaultPromptPrice" :min="0" :step="0.001" :precision="4" style="width:180px" size="small" />
+                  </div>
+                  <div>
+                    <div style="font-size:12px;color:#909399;margin-bottom:4px">输出价格（元/千token）</div>
+                    <el-input-number v-model="adminDefaultCompletionPrice" :min="0" :step="0.001" :precision="4" style="width:180px" size="small" />
+                  </div>
+                  <el-button type="primary" size="small" @click="saveDefaultPrices()">保存默认价格</el-button>
+                </div>
+              </el-card>
+            </el-tab-pane>
+
+            <!-- Page Settings Tab -->
+            <el-tab-pane label="页面配置" name="settings">
+              <el-table :data="adminSettings.filter((s: any) => s.key !== 'model_tier_mapping')" stripe size="small" class="admin-table">
+                <el-table-column prop="description" label="配置" min-width="250" />
+                <el-table-column prop="value" label="值" min-width="300">
+                  <template #default="{ row }">
+                    <span style="font-size:12px;word-break:break-all">{{ row.value.length > 80 ? row.value.slice(0, 80) + '...' : row.value }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="80" fixed="right">
+                  <template #default="{ row }">
+                    <el-button type="primary" link :icon="EditPen" @click="openEditSetting(row)">编辑</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+
+            <!-- Router Rules Tab -->
+            <el-tab-pane label="路由规则" name="router">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <span style="font-size:13px;color:#64748b">配置各任务意图对应的模型列表（逗号分隔），Auto 路由时按意图匹配</span>
+                <el-button size="small" type="primary" @click="openAdminRouterEdit()">新增规则</el-button>
+              </div>
+              <el-table :data="adminRouterRules" size="small" stripe class="admin-table">
+                <el-table-column prop="intent" label="意图" width="140">
+                  <template #default="{ row }">
+                    <el-tag size="small">{{ row.intent }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="models" label="模型列表">
+                  <template #default="{ row }">
+                    <span style="font-size:12px;word-break:break-all">{{ (row.models || []).join(' → ') }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="140" fixed="right">
+                  <template #default="{ row }">
+                    <el-button type="primary" link size="small" @click="openAdminRouterEdit(row.intent, row.models)">编辑</el-button>
+                    <el-button type="danger" link size="small" @click="deleteAdminRouterRule(row.intent)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="adminRouterRules.length === 0" description="暂无路由规则，点击「新增规则」添加" :image-size="60" />
+            </el-tab-pane>
+
+            <!-- Router Rule Edit Dialog -->
+            <el-dialog v-model="adminRouterEditDialog" title="编辑路由规则" width="500px">
+              <el-form label-width="80px">
+                <el-form-item label="意图标识">
+                  <el-input v-model="adminRouterEditIntent" placeholder="如 coding, translation, general" />
+                  <div style="font-size:11px;color:#909399;margin-top:2px">支持: coding, translation, creative, reasoning, vision, summary, data, general</div>
+                </el-form-item>
+                <el-form-item label="模型列表">
+                  <el-input v-model="adminRouterEditModels" type="textarea" :rows="3" placeholder="逗号分隔，如: qwen-plus, deepseek-v4-flash" />
+                  <div style="font-size:11px;color:#909399;margin-top:2px">按优先级排列，排前面的优先使用</div>
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="adminRouterEditDialog = false">取消</el-button>
+                <el-button type="primary" @click="saveAdminRouterRule()">保存</el-button>
+              </template>
+            </el-dialog>
+          </el-tabs>
+
+          <!-- Edit User Dialog -->
+          <el-dialog v-model="adminEditUserDialog" title="编辑用户" width="460px">
+            <el-form label-position="top">
+              <el-form-item label="用户名">
+                <el-input :model-value="adminEditUserUsername" disabled />
+              </el-form-item>
+              <el-form-item label="余额 (元)">
+                <el-input-number v-model="adminEditUserCredits" :min="0" :precision="4" :step="1" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="角色">
+                <el-select v-model="adminEditUserRole" style="width: 100%">
+                  <el-option label="普通用户 (user)" value="user" />
+                  <el-option label="管理员 (admin)" value="admin" />
+                </el-select>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminEditUserDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveEditUser()">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Add Provider Key Dialog -->
+          <el-dialog v-model="adminAddKeyDialog" title="添加 Provider API Key" width="500px">
+            <el-form label-position="top">
+              <el-form-item label="Provider">
+                <el-select v-model="adminNewKeyProvider" style="width: 100%">
+                  <el-option v-for="cfg in adminProviderConfigs" :key="cfg.providerName" :label="cfg.displayName + ' (' + cfg.providerName + ')'" :value="cfg.providerName" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="名称（可选标签）">
+                <el-input v-model="adminNewKeyName" placeholder="如: 生产环境 Key 1" />
+              </el-form-item>
+              <el-form-item label="API Key">
+                <el-input v-model="adminNewKeyValue" type="password" show-password placeholder="sk-xxxxxxxx" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminAddKeyDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveAddProviderKey()" :disabled="!adminNewKeyValue.trim()">添加</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Edit Provider Config Dialog -->
+          <el-dialog v-model="adminEditConfigDialog" :title="adminIsNewConfig ? '添加服务商' : '编辑服务商'" width="560px">
+            <el-form label-position="top">
+              <el-row :gutter="16">
+                <el-col :span="12">
+                  <el-form-item label="标识符 (providerName)">
+                    <el-input v-model="adminEditConfigForm.providerName" placeholder="如: openai" :disabled="!adminIsNewConfig" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="显示名称">
+                    <el-input v-model="adminEditConfigForm.displayName" placeholder="如: OpenAI" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+              <el-form-item label="端点 URL (baseUrl)">
+                <el-input v-model="adminEditConfigForm.baseUrl" placeholder="如: https://api.openai.com/v1" />
+              </el-form-item>
+              <el-form-item label="模型列表 (逗号分隔)">
+                <el-input v-model="adminEditConfigForm.models" type="textarea" :rows="2" placeholder="如: gpt-4o-mini,gpt-4o,gpt-4.1" />
+              </el-form-item>
+              <el-row :gutter="16">
+                <el-col :span="8">
+                  <el-form-item label="模型前缀 (可选)">
+                    <el-input v-model="adminEditConfigForm.modelPrefix" placeholder="如: mimo" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="超时 (ms)">
+                    <el-input-number v-model="adminEditConfigForm.timeoutMs" :min="1000" :max="120000" :step="1000" style="width:100%" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="重试次数">
+                    <el-input-number v-model="adminEditConfigForm.retryCount" :min="0" :max="10" style="width:100%" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+              <el-row :gutter="16">
+                <el-col :span="12">
+                  <el-form-item label="Auth Header 名称">
+                    <el-input v-model="adminEditConfigForm.authHeader" placeholder="Authorization" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="Auth 前缀">
+                    <el-input v-model="adminEditConfigForm.authPrefix" placeholder="Bearer" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminEditConfigDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveConfig()">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Reset Password Dialog -->
+          <el-dialog v-model="adminResetPwdDialog" title="重置用户密码" width="420px">
+            <el-form label-position="top">
+              <el-form-item label="用户名">
+                <el-input :model-value="adminResetPwdUsername" disabled />
+              </el-form-item>
+              <el-form-item label="新密码">
+                <el-input v-model="adminResetPwdValue" type="password" show-password placeholder="输入新密码（至少 4 位）" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminResetPwdDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveResetPassword()" :disabled="adminResetPwdValue.length < 4">确认重置</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Edit Setting Dialog -->
+          <el-dialog v-model="adminEditSettingDialog" title="编辑配置" :width="adminEditSettingKey === 'model_tags' ? '720px' : '600px'">
+            <el-form label-position="top">
+              <el-form-item label="配置键">
+                <el-input :model-value="adminEditSettingKey" disabled />
+              </el-form-item>
+              <el-form-item :label="adminEditSettingDesc">
+                <!-- Model tags editor -->
+                <template v-if="adminEditSettingKey === 'model_tags'">
+                  <el-table :data="models" stripe size="small" max-height="400" style="width:100%">
+                    <el-table-column prop="id" label="模型" min-width="200" />
+                    <el-table-column label="语言" width="70" align="center">
+                      <template #default="{ row }">
+                        <el-checkbox :model-value="(adminEditModelTags[row.id] || []).includes('language')" @change="(v: boolean) => toggleModelTag(row.id, 'language', v)" />
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="视觉" width="70" align="center">
+                      <template #default="{ row }">
+                        <el-checkbox :model-value="(adminEditModelTags[row.id] || []).includes('vision')" @change="(v: boolean) => toggleModelTag(row.id, 'vision', v)" />
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="音频" width="70" align="center">
+                      <template #default="{ row }">
+                        <el-checkbox :model-value="(adminEditModelTags[row.id] || []).includes('audio')" @change="(v: boolean) => toggleModelTag(row.id, 'audio', v)" />
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </template>
+                <!-- Page models multi-select / text mode -->
+                <template v-else-if="adminEditSettingKey.startsWith('page_models_')">
+                  <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                      <template v-if="!adminEditSettingTextMode">
+                        <el-tag :type="adminEditSettingModels.length === 0 ? 'success' : 'info'" size="small" style="cursor:pointer" @click="adminEditSettingModels = []">
+                          {{ adminEditSettingModels.length === 0 ? '全部模型（已选中）' : '点击切换为全部模型' }}
+                        </el-tag>
+                        <span style="color:#909399;font-size:12px">按标签筛选：</span>
+                        <el-tag v-for="tag in ['language','vision','audio']" :key="tag"
+                          :effect="adminEditSettingTagFilter === tag ? 'dark' : 'plain'"
+                          size="small" style="cursor:pointer"
+                          @click="adminEditSettingTagFilter = adminEditSettingTagFilter === tag ? '' : tag">
+                          {{ tag === 'language' ? '语言' : tag === 'vision' ? '视觉' : '音频' }}
+                        </el-tag>
+                      </template>
+                    </div>
+                    <el-button size="small" text type="primary" @click="toggleSettingTextMode()">
+                      {{ adminEditSettingTextMode ? '多选模式' : '文本模式' }}
+                    </el-button>
+                  </div>
+                  <el-select v-if="!adminEditSettingTextMode" v-model="adminEditSettingModels" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择可用模型（留空表示全部）" style="width:100%" :key="adminEditSettingTagFilter">
+                    <el-option v-for="m in filteredModelsForSetting" :key="m.id" :label="m.id" :value="m.id">
+                      <span>{{ m.id }}</span>
+                      <el-tag v-for="t in getModelTags(m.id)" :key="t" size="small" :type="t === 'vision' ? 'warning' : t === 'audio' ? 'success' : 'info'" style="margin-left:4px">
+                        {{ t === 'language' ? '语言' : t === 'vision' ? '视觉' : '音频' }}
+                      </el-tag>
+                    </el-option>
+                  </el-select>
+                  <el-input v-else v-model="adminEditSettingValue" type="textarea" :rows="6" placeholder="输入模型 ID，逗号分隔（* 表示全部）" />
+                </template>
+                <!-- Default textarea -->
+                <el-input v-else v-model="adminEditSettingValue" type="textarea" :rows="4" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminEditSettingDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveEditSetting()">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Model Tier Edit Dialog -->
+          <el-dialog v-model="adminTierEditDialog" :title="adminTierEditIsNew ? '新增档位' : '编辑档位'" width="480px">
+            <el-form label-width="100px">
+              <el-form-item label="档位标识">
+                <el-input v-model="adminTierEditKey" placeholder="tier_xxx" :disabled="!adminTierEditIsNew" />
+              </el-form-item>
+              <el-form-item label="显示名称">
+                <el-input v-model="adminTierEditLabel" placeholder="如 入门、主流、旗舰、超旗舰" />
+              </el-form-item>
+              <el-form-item label="输入价格">
+                <el-input-number v-model="adminTierEditPromptPrice" :min="0" :step="0.001" :precision="4" style="width:100%" />
+                <span style="font-size:11px;color:#9ca3af;margin-left:8px">元/千token</span>
+              </el-form-item>
+              <el-form-item label="输出价格">
+                <el-input-number v-model="adminTierEditCompletionPrice" :min="0" :step="0.001" :precision="4" style="width:100%" />
+                <span style="font-size:11px;color:#9ca3af;margin-left:8px">元/千token</span>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminTierEditDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveTierEdit()">保存</el-button>
+            </template>
+          </el-dialog>
+
+        </div>
+</template>

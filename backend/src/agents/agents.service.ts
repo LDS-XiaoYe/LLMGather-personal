@@ -10,10 +10,12 @@ import { SkillsService } from '../skills/skills.service';
 import { ToolsService } from '../tools/tools.service';
 import {
   CreateAgentDto,
+  CreateAgentMarketplaceTemplateDto,
   CreateAgentTestCaseDto,
   CreateAgentTestSuiteDto,
   CreateAgentVersionDto,
   GenerateAgentDto,
+  InstallAgentTemplateDto,
   RunAgentDto,
   UpdateAgentDto,
   UpdateAgentPublicationDto,
@@ -217,7 +219,7 @@ export class AgentsService {
       now,
       now,
     );
-    await this.toolsService.setAgentTools(userId, id, dto.toolIds ?? []);
+    await this.toolsService.setAgentTools(userId, id, dto.toolIds ?? [], dto.toolPermissions ?? {});
     await this.knowledgeService.setAgentKnowledgeBases(userId, id, dto.knowledgeBaseIds ?? []);
     await this.skillsService.setAgentSkills(userId, id, dto.skillIds ?? []);
     return this.getById(userId, id);
@@ -298,7 +300,7 @@ export class AgentsService {
       agentId,
       userId,
     );
-    if (dto.toolIds) await this.toolsService.setAgentTools(userId, agentId, dto.toolIds);
+    if (dto.toolIds) await this.toolsService.setAgentTools(userId, agentId, dto.toolIds, dto.toolPermissions ?? {});
     if (dto.knowledgeBaseIds) await this.knowledgeService.setAgentKnowledgeBases(userId, agentId, dto.knowledgeBaseIds);
     if (dto.skillIds) await this.skillsService.setAgentSkills(userId, agentId, dto.skillIds);
     return this.getById(userId, agentId);
@@ -309,6 +311,115 @@ export class AgentsService {
     await this.databaseService.connection.prepare(
       'UPDATE agents SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?',
     ).run(this.databaseService.now(), this.databaseService.now(), agentId, userId);
+  }
+
+  async listMarketplaceTemplates(userId: string): Promise<Array<Record<string, unknown>>> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, source_agent_id as sourceAgentId, name, description, category,
+              template_json as templateJson, created_at as createdAt, updated_at as updatedAt
+       FROM agent_marketplace_templates
+       WHERE user_id = ? AND public_enabled = 1
+       ORDER BY updated_at DESC`,
+    ).all(userId) as unknown as Array<{
+      id: string;
+      userId: string;
+      sourceAgentId: string;
+      name: string;
+      description: string;
+      category: string;
+      templateJson: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    const customTemplates = rows.map((row) => {
+      let template: Record<string, unknown> = {};
+      try {
+        template = JSON.parse(row.templateJson || '{}') as Record<string, unknown>;
+      } catch {}
+      return {
+        ...template,
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        category: row.category,
+        source: 'custom',
+        sourceAgentId: row.sourceAgentId,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      };
+    });
+    return [...customTemplates, ...this.marketplaceTemplates()];
+  }
+
+  async createMarketplaceTemplate(
+    userId: string,
+    dto: CreateAgentMarketplaceTemplateDto,
+  ): Promise<Record<string, unknown>> {
+    const agent = await this.getById(userId, dto.sourceAgentId);
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    const template = {
+      source: 'custom',
+      sourceAgentId: agent.id,
+      name: dto.name.trim(),
+      category: (dto.category?.trim() || 'custom').slice(0, 64),
+      description: dto.description?.trim() || agent.description || '用户发布的 Agent 模板',
+      systemPrompt: agent.systemPrompt,
+      temperature: agent.temperature,
+      maxTokens: agent.maxTokens,
+      memoryEnabled: agent.memoryEnabled,
+      toolIds: agent.toolIds,
+      skillIds: agent.skillIds,
+      knowledgeBaseIds: agent.knowledgeBaseIds,
+    };
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_marketplace_templates
+       (id, user_id, source_agent_id, name, description, category, template_json, public_enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    ).run(
+      id,
+      userId,
+      agent.id,
+      template.name,
+      template.description,
+      template.category,
+      JSON.stringify(template),
+      now,
+      now,
+    );
+    return { ...template, id, createdAt: now, updatedAt: now };
+  }
+
+  async installMarketplaceTemplate(userId: string, dto: InstallAgentTemplateDto): Promise<AgentDefinition> {
+    const template = (await this.listMarketplaceTemplates(userId)).find((item) => item.id === dto.templateId);
+    if (!template) throw new NotFoundException('Agent 模板不存在');
+    const tools = await this.toolsService.listForUser(userId);
+    const skills = await this.skillsService.listForUser(userId);
+    const templateToolIds = Array.isArray(template.toolIds) ? template.toolIds.map(String) : [];
+    const templateSkillIds = Array.isArray(template.skillIds) ? template.skillIds.map(String) : [];
+    const templateKbIds = Array.isArray(template.knowledgeBaseIds) ? template.knowledgeBaseIds.map(String) : [];
+    const toolNames = Array.isArray(template.toolNames) ? template.toolNames.map(String) : [];
+    const skillNames = Array.isArray(template.skillNames) ? template.skillNames.map(String) : [];
+    const availableToolIds = new Set(tools.map((tool) => tool.id));
+    const availableSkillIds = new Set(skills.map((skill) => skill.id));
+    const toolIds = templateToolIds.length
+      ? templateToolIds.filter((id) => availableToolIds.has(id))
+      : tools.filter((tool) => toolNames.includes(tool.name)).map((tool) => tool.id);
+    const skillIds = templateSkillIds.length
+      ? templateSkillIds.filter((id) => availableSkillIds.has(id))
+      : skills.filter((skill) => skillNames.includes(skill.name)).map((skill) => skill.id);
+    return this.create(userId, {
+      name: String(template.name),
+      description: String(template.description),
+      model: dto.model,
+      systemPrompt: String(template.systemPrompt),
+      temperature: Number(template.temperature ?? 0.4),
+      maxTokens: Number(template.maxTokens ?? 2048),
+      memoryEnabled: template.memoryEnabled !== false,
+      toolIds,
+      skillIds,
+      knowledgeBaseIds: templateKbIds,
+    });
   }
 
   async updatePublication(
@@ -1132,6 +1243,44 @@ export class AgentsService {
     ).get(suiteId, userId) as { id: string; agentId: string } | undefined;
     if (!suite) throw new NotFoundException('Agent 测试集不存在');
     return suite;
+  }
+
+  private marketplaceTemplates(): Array<Record<string, unknown>> {
+    return [
+      {
+        id: 'research-agent',
+        name: 'Research Agent',
+        category: 'research',
+        description: '适合资料检索、证据整理、结论归纳和引用说明。',
+        toolNames: ['browser_fetch', 'notion_search', 'text_stats'],
+        skillNames: ['Research Planner', 'Workflow Orchestrator'],
+        temperature: 0.3,
+        maxTokens: 4096,
+        systemPrompt: '你是严谨的研究型 Agent。你会先拆解问题，再检索资料、整理证据、标注不确定性，最后输出结论、依据和后续建议。',
+      },
+      {
+        id: 'data-code-agent',
+        name: 'Data & Code Agent',
+        category: 'code',
+        description: '适合轻量代码执行、数据计算、文本统计和结果解释。',
+        toolNames: ['container_javascript_runner', 'calculator', 'text_stats'],
+        skillNames: ['Code Operator', 'Data Analyst'],
+        temperature: 0.2,
+        maxTokens: 4096,
+        systemPrompt: '你是数据与代码执行 Agent。遇到计算和代码任务时优先使用工具验证结果，并解释输入、过程、输出和边界情况。',
+      },
+      {
+        id: 'customer-support-agent',
+        name: 'Customer Support Agent',
+        category: 'business',
+        description: '适合客服问答、知识库检索、用户偏好记忆和标准答复。',
+        toolNames: ['current_time', 'browser_fetch'],
+        skillNames: ['Workflow Orchestrator'],
+        temperature: 0.5,
+        maxTokens: 2048,
+        systemPrompt: '你是专业客服 Agent。你会基于知识库和上下文给出简洁、礼貌、可执行的答复；不确定时说明需要补充的信息。',
+      },
+    ];
   }
 
   private async insertStep(

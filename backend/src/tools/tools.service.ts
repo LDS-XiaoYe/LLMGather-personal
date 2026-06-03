@@ -13,6 +13,7 @@ export interface ToolDefinition {
   schema: Record<string, unknown>;
   implementationType: string;
   enabled: boolean;
+  permissionLevel?: 'auto' | 'confirm' | 'disabled';
 }
 
 export interface ToolInvocationResult {
@@ -35,6 +36,7 @@ type ToolRow = {
   schemaJson: string;
   implementationType: string;
   enabled: number | string;
+  permissionLevel?: string;
 };
 
 @Injectable()
@@ -70,7 +72,8 @@ export class ToolsService {
   async getAgentTools(userId: string, agentId: string): Promise<ToolDefinition[]> {
     const rows = await this.databaseService.connection.prepare(
       `SELECT t.id, t.user_id as userId, t.name, t.display_name as displayName, t.description,
-              t.schema_json as schemaJson, t.implementation_type as implementationType, t.enabled
+              t.schema_json as schemaJson, t.implementation_type as implementationType, t.enabled,
+              at.permission_level as permissionLevel
        FROM agent_tools at
        JOIN tools t ON t.id = at.tool_id
        WHERE at.user_id = ? AND at.agent_id = ? AND t.enabled = 1
@@ -79,7 +82,12 @@ export class ToolsService {
     return rows.map((row) => this.mapTool(row));
   }
 
-  async setAgentTools(userId: string, agentId: string, toolIds: string[]): Promise<void> {
+  async setAgentTools(
+    userId: string,
+    agentId: string,
+    toolIds: string[],
+    permissions: Record<string, string> = {},
+  ): Promise<void> {
     await this.databaseService.connection.prepare(
       'DELETE FROM agent_tools WHERE user_id = ? AND agent_id = ?',
     ).run(userId, agentId);
@@ -87,9 +95,10 @@ export class ToolsService {
     const uniqueIds = Array.from(new Set(toolIds.filter(Boolean)));
     for (const toolId of uniqueIds) {
       await this.getById(userId, toolId);
+      const level = ['auto', 'confirm', 'disabled'].includes(permissions[toolId]) ? permissions[toolId] : 'auto';
       await this.databaseService.connection.prepare(
-        'INSERT INTO agent_tools (agent_id, tool_id, user_id, created_at) VALUES (?, ?, ?, ?)',
-      ).run(agentId, toolId, userId, this.databaseService.now());
+        'INSERT INTO agent_tools (agent_id, tool_id, user_id, permission_level, created_at) VALUES (?, ?, ?, ?, ?)',
+      ).run(agentId, toolId, userId, level, this.databaseService.now());
     }
   }
 
@@ -156,6 +165,7 @@ export class ToolsService {
     const lower = input.toLowerCase();
 
     for (const tool of tools) {
+      if (tool.permissionLevel === 'disabled') continue;
       if (tool.name === 'current_time' && /时间|日期|今天|现在|current\s*time|date/i.test(input)) {
         results.push(await this.invoke(userId, tool.id, { timezone: 'Asia/Shanghai' }, { agentId, runId }));
       }
@@ -245,6 +255,10 @@ export class ToolsService {
       return this.runContainerJavascript(args);
     }
 
+    if (name === 'python_runner' || name === 'container_python_runner') {
+      return this.runContainerPython(args);
+    }
+
     if (name === 'notion_search') {
       const server = await this.mcpService.getFirstEnabledNotion(userId);
       if (!server) throw new BadRequestException('请先配置并启用 Notion MCP Server');
@@ -253,6 +267,10 @@ export class ToolsService {
       const limit = typeof args.limit === 'number' ? args.limit : 5;
       const results = await this.mcpService.searchNotion(server, query, limit);
       return JSON.stringify(results, null, 2);
+    }
+
+    if (name === 'browser_fetch') {
+      return this.fetchWebPage(args);
     }
 
     throw new BadRequestException(`暂不支持的内置工具: ${name}`);
@@ -286,23 +304,59 @@ export class ToolsService {
     return JSON.stringify({ result, logs }, null, 2);
   }
 
-  private async runContainerJavascript(args: Record<string, unknown>): Promise<string> {
+  private async runContainerCode(args: Record<string, unknown>, language: string = 'javascript'): Promise<string> {
     const code = typeof args.code === 'string' ? args.code.trim() : '';
-    if (!code || code.length > 4000) {
-      throw new BadRequestException('代码为空或超过 4000 字符');
+    if (!code || code.length > 10000) {
+      throw new BadRequestException('代码为空或超过 10000 字符');
     }
     const endpoint = process.env.CODE_RUNNER_URL || 'http://code-runner:8787/run';
+    const timeout = language === 'python' ? 10000 : 5000;
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, input: args.input ?? {} }),
-      signal: AbortSignal.timeout(2500),
+      body: JSON.stringify({ 
+        code, 
+        input: args.input ?? {},
+        language 
+      }),
+      signal: AbortSignal.timeout(timeout),
     });
     const text = await response.text();
     if (!response.ok) {
       throw new BadRequestException(`容器代码执行失败: ${text.slice(0, 500)}`);
     }
     return text;
+  }
+
+  private async runContainerJavascript(args: Record<string, unknown>): Promise<string> {
+    return this.runContainerCode(args, 'javascript');
+  }
+
+  private async runContainerPython(args: Record<string, unknown>): Promise<string> {
+    return this.runContainerCode(args, 'python');
+  }
+
+  private async fetchWebPage(args: Record<string, unknown>): Promise<string> {
+    const url = typeof args.url === 'string' ? args.url.trim() : '';
+    if (!/^https?:\/\//i.test(url)) throw new BadRequestException('URL 必须以 http:// 或 https:// 开头');
+    const maxChars = typeof args.maxChars === 'number' ? Math.max(500, Math.min(12000, args.maxChars)) : 6000;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'LLMGather-AgentBrowser/1.0' },
+      signal: AbortSignal.timeout(5000),
+    });
+    const html = await response.text();
+    if (!response.ok) throw new BadRequestException(`网页读取失败: ${response.status}`);
+    const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim() ?? url;
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, maxChars);
+    return JSON.stringify({ url, title, text }, null, 2);
   }
 
   private extractExpression(input: string): string {
@@ -343,6 +397,7 @@ export class ToolsService {
       schema,
       implementationType: row.implementationType,
       enabled: Number(row.enabled) === 1,
+      permissionLevel: ['auto', 'confirm', 'disabled'].includes(row.permissionLevel || '') ? row.permissionLevel as ToolDefinition['permissionLevel'] : 'auto',
     };
   }
 }

@@ -50,13 +50,13 @@ services:
     image: node:22-alpine
     container_name: llmgather-code-runner-dev
     working_dir: /app
-    command: node scripts/code-runner-server.mjs
+    command: sh -c "apk add --no-cache python3 py3-pip && node scripts/code-runner-server.mjs"
     volumes:
       - .:/app:ro
     environment:
       - CODE_RUNNER_PORT=8787
-      - CODE_RUNNER_TIMEOUT_MS=1000
-      - CODE_RUNNER_MAX_CODE_LENGTH=4000
+      - CODE_RUNNER_TIMEOUT_MS=5000
+      - CODE_RUNNER_MAX_CODE_LENGTH=10000
     networks:
       - llmgather-dev-net
 

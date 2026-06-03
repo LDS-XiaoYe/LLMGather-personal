@@ -5,6 +5,7 @@ import {
   IsIn,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -65,6 +66,10 @@ export class CreateAgentDto {
   @ArrayMaxSize(30)
   @IsString({ each: true })
   toolIds?: string[];
+
+  @IsOptional()
+  @IsObject()
+  toolPermissions?: Record<string, string>;
 
   @IsOptional()
   @IsArray()
@@ -131,6 +136,10 @@ export class UpdateAgentDto {
   @ArrayMaxSize(30)
   @IsString({ each: true })
   toolIds?: string[];
+
+  @IsOptional()
+  @IsObject()
+  toolPermissions?: Record<string, string>;
 
   @IsOptional()
   @IsArray()
@@ -247,4 +256,38 @@ export class GenerateAgentDto {
   @IsOptional()
   @IsBoolean()
   persist?: boolean;
+}
+
+export class InstallAgentTemplateDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
+  templateId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  model!: string;
+}
+
+export class CreateAgentMarketplaceTemplateDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  category?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(36)
+  sourceAgentId!: string;
 }

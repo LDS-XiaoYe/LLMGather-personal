@@ -509,7 +509,7 @@ export class AdminService {
 
   /* ──────── Model Tier Management ──────── */
 
-  async getModelTiers(): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string> }> {
+  async getModelTiers(): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string>; examples: Record<string, string> }> {
     const db = this.databaseService.connection;
 
     const tierRow = await db.prepare(
@@ -521,6 +521,11 @@ export class AdminService {
       'SELECT value FROM system_settings WHERE `key` = ?',
     ).get('tier_labels') as { value: string } | undefined;
     const labels: Record<string, string> = labelRow ? JSON.parse(labelRow.value) : {};
+
+    const exampleRow = await db.prepare(
+      'SELECT value FROM system_settings WHERE `key` = ?',
+    ).get('tier_examples') as { value: string } | undefined;
+    const examples: Record<string, string> = exampleRow ? JSON.parse(exampleRow.value) : {};
 
     // Read prices from tier_prices system_settings
     const priceRow = await db.prepare(
@@ -539,10 +544,10 @@ export class AdminService {
       await this.settings.reloadAll();
     }
 
-    return { tiers, prices, labels };
+    return { tiers, prices, labels, examples };
   }
 
-  async updateModelTiers(body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string> }): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string> }> {
+  async updateModelTiers(body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string>; examples?: Record<string, string> }): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string>; examples: Record<string, string> }> {
     const db = this.databaseService.connection;
     const now = this.databaseService.now();
     const tiers = this.sanitizeModelTierMapping(body.tiers);
@@ -555,6 +560,12 @@ export class AdminService {
       await db.prepare(
         'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
       ).run('tier_labels', JSON.stringify(body.labels), '计费档位显示名称', now);
+    }
+
+    if (body.examples) {
+      await db.prepare(
+        'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
+      ).run('tier_examples', JSON.stringify(body.examples), '控制台计费规则模型举例', now);
     }
 
     // Save prices to tier_prices system_settings

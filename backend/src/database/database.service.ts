@@ -1280,6 +1280,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         tier_vision: { prompt: 0.005, completion: 0.015 },
         tier_audio: { prompt: 0.002, completion: 0.006 },
       }), '各档位价格（元/千token，JSON）'],
+      ['tier_examples', JSON.stringify({
+        tier_budget: 'qwen-turbo-latest, glm-4.5-flash, deepseek-v4-flash',
+        tier_mainstream: 'qwen-plus-latest, glm-4.6, kimi-k2.6',
+        tier_flagship: 'qwen-max-latest, deepseek-v4-pro, glm-4.5',
+        tier_super_flagship: 'qwen3.6-plus, gui-plus',
+        tier_ultra: 'qwen3.6-max',
+        tier_vision: 'gemini-3.5-flash, qwen-vl-max-latest',
+        tier_audio: 'qwen-audio-asr-latest, qwen-tts-latest',
+      }), '控制台计费规则模型举例（JSON）'],
       ['default_prices', JSON.stringify({ prompt: 0.002, completion: 0.006 }), '默认价格（未分配档位的模型使用，JSON）'],
     ];
 

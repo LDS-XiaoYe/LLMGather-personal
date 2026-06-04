@@ -268,8 +268,13 @@ export function useAppController() {
   const skillPreviewOpen = ref(false);
   const showTeamCreateDialog = ref(false);
   const showMcpCreateDialog = ref(false);
+  const showMcpTestDialog = ref(false);
   const showTestSuiteCreateDialog = ref(false);
   const showTestCaseCreateDialog = ref(false);
+  const showMarketplacePublishDialog = ref(false);
+  const showVersionCreateDialog = ref(false);
+  const showEvaluationDialog = ref(false);
+  const showMemoryCreateDialog = ref(false);
   const skillTesting = ref(false);
   const activeSkill = ref<SkillDefinition | null>(null);
   const activeSkillTestResult = ref<SkillTestResult | null>(null);
@@ -301,6 +306,7 @@ export function useAppController() {
   const activeTeamRun = ref<AgentTeamRun | null>(null);
   const activeTestSuiteId = ref('');
   const activeTestRun = ref<Record<string, unknown> | null>(null);
+  const activeMcpTestServerId = ref('');
   const agentEvaluations = ref<AgentEvaluation[]>([]);
   const agentStats = ref<AgentRunStats | null>(null);
   const agentEvaluationLoading = ref(false);
@@ -467,7 +473,7 @@ export function useAppController() {
   const marketplaceForm = ref({
     name: '',
     description: '',
-    category: 'custom',
+    category: '',
   });
   type AgentBuilderBlockType = 'identity' | 'model' | 'tools' | 'skills' | 'knowledge' | 'memory' | 'prompt' | 'constraints';
   interface AgentBuilderBlock {
@@ -875,13 +881,14 @@ export function useAppController() {
   const adminEditModelTags = ref<Record<string, string[]>>({});
 
   // Model tier management state
-  const adminModelTiers = ref<ModelTiersData>({ tiers: {}, prices: {}, labels: {} });
+  const adminModelTiers = ref<ModelTiersData>({ tiers: {}, prices: {}, labels: {}, examples: {} });
   const adminTierEditDialog = ref(false);
   const adminTierEditKey = ref('');
   const adminTierEditLabel = ref('');
   const adminTierEditPromptPrice = ref(0);
   const adminTierEditCompletionPrice = ref(0);
   const adminTierEditDesc = ref('');
+  const adminTierEditExamples = ref('');
   const adminTierEditIsNew = ref(false);
   const adminEditSettingTagFilter = ref('');
   const adminEditSettingTextMode = ref(false);
@@ -1689,7 +1696,8 @@ export function useAppController() {
         sourceAgentId: agent.id,
       }, backendBaseUrl.value);
       marketplaceTemplates.value = [template, ...marketplaceTemplates.value.filter((item) => item.id !== template.id)];
-      marketplaceForm.value = { name: '', description: '', category: 'custom' };
+      marketplaceForm.value = { name: '', description: '', category: '' };
+      showMarketplacePublishDialog.value = false;
       status.value = `已发布到 Agent Marketplace：${template.name}`;
     } catch (error) {
       status.value = error instanceof Error ? error.message : '发布模板失败';
@@ -1806,6 +1814,7 @@ export function useAppController() {
       agentEvaluations.value = [evaluation, ...agentEvaluations.value.filter((item) => item.id !== evaluation.id)];
       evaluationForm.value.expectedOutput = '';
       evaluationForm.value.rubric = '';
+      showEvaluationDialog.value = false;
       await loadAgentEvaluations(activeAgentRun.value.agentId);
       status.value = `评测完成：${evaluation.score}/100`;
     } catch (error) {
@@ -2008,6 +2017,7 @@ export function useAppController() {
         importance: memoryForm.value.importance,
       }, backendBaseUrl.value);
       memoryForm.value.content = '';
+      showMemoryCreateDialog.value = false;
       await loadAgentMemories(agentForm.value.id);
       status.value = '记忆已写入';
     } catch (error) {
@@ -2533,6 +2543,7 @@ export function useAppController() {
       const version = await apiCreateAgentVersion(agentForm.value.id, versionForm.value.label.trim(), backendBaseUrl.value);
       agentVersions.value = [version, ...agentVersions.value.filter((item) => item.id !== version.id)];
       versionForm.value.label = '';
+      showVersionCreateDialog.value = false;
       status.value = `已创建 Agent 版本 v${version.versionNumber}`;
     } catch (error) {
       status.value = error instanceof Error ? error.message : '创建版本失败';
@@ -2653,11 +2664,19 @@ export function useAppController() {
       const result = await apiTestMcpServer(serverId, mcpForm.value.query.trim() || 'test', backendBaseUrl.value);
       status.value = `MCP 测试${result.ok ? '成功' : '失败'}`;
       mcpServers.value = await fetchMcpServers(backendBaseUrl.value);
+      showMcpTestDialog.value = false;
+      activeMcpTestServerId.value = '';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '测试 MCP 失败';
     } finally {
       mcpTesting.value = false;
     }
+  }
+
+  function openMcpTestDialog(serverId: string) {
+    activeMcpTestServerId.value = serverId;
+    mcpForm.value.query = '';
+    showMcpTestDialog.value = true;
   }
 
   function syncWorkflowCanvasFromSelected() {
@@ -3134,6 +3153,18 @@ export function useAppController() {
     }
   }
 
+  function formatKeyRotationNotice(rotation: { provider?: string; attempts?: number; reason?: string } | null | undefined): string {
+    if (!rotation?.provider) return '';
+    const reasonLabel = rotation.reason === 'rate_limit'
+      ? '限流'
+      : rotation.reason === 'network'
+        ? '网络重试'
+        : rotation.reason === 'balance_exhausted'
+          ? '余额不足'
+          : '上游重试';
+    return `Key 已轮转：${rotation.provider} · ${rotation.attempts || 1}次 · ${reasonLabel}`;
+  }
+
   function upsertActiveSession(nextMessages: ChatMessage[], titleHint?: string) {
     const session = activeSession.value;
     if (!session) return;
@@ -3180,6 +3211,7 @@ export function useAppController() {
     let streamedContent = '';
     let streamedReasoning = '';
     let routedModel = currentModel;
+    let keyRotationNotice = '';
 
     if (currentModel === 'auto') {
       // ── Auto routing: direct fetch with SSE parsing ──
@@ -3198,6 +3230,13 @@ export function useAppController() {
         });
 
         if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+        const rotationHeader = res.headers.get('x-provider-key-rotation');
+        if (rotationHeader) {
+          try {
+            keyRotationNotice = formatKeyRotationNotice(JSON.parse(rotationHeader));
+            if (keyRotationNotice) status.value = keyRotationNotice;
+          } catch {}
+        }
 
         const reader = res.body?.getReader();
         if (!reader) throw new Error('Stream unavailable');
@@ -3261,7 +3300,7 @@ export function useAppController() {
             { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routedModel },
           ], content);
         }
-        status.value = '路由回复完成';
+        status.value = keyRotationNotice || '路由回复完成';
         triggerSync();
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
@@ -3285,6 +3324,10 @@ export function useAppController() {
           },
           {
             onRequestId: (rid) => { requestId.value = rid; status.value = '正在流式生成回复'; },
+            onKeyRotation: (rotation) => {
+              keyRotationNotice = formatKeyRotationNotice(rotation);
+              if (keyRotationNotice) status.value = keyRotationNotice;
+            },
             onChunk: (chunk) => {
               const choice = chunk.choices?.[0];
               const d = choice?.delta;
@@ -3298,7 +3341,7 @@ export function useAppController() {
                 { id: assistantMsgId, role: 'assistant', content: streamedContent, reasoning: streamedReasoning, model: currentModel },
               ], content);
             },
-            onDone: () => { status.value = '回复生成完成'; triggerSync(); },
+            onDone: () => { status.value = keyRotationNotice || '回复生成完成'; triggerSync(); },
             onAbort: () => {
               status.value = '已停止生成';
               upsertActiveSession([
@@ -3932,6 +3975,12 @@ export function useAppController() {
   async function loadAdminModelTiers() {
     try {
       adminModelTiers.value = await fetchAdminModelTiers(backendBaseUrl.value);
+      pageModelsConfig.value = {
+        ...pageModelsConfig.value,
+        model_tier_mapping: JSON.stringify(adminModelTiers.value.tiers || {}),
+        tier_labels: JSON.stringify(adminModelTiers.value.labels || {}),
+        tier_examples: JSON.stringify(adminModelTiers.value.examples || {}),
+      };
     } catch (e) {
       console.error('[admin] model tiers error:', e);
     }
@@ -3945,6 +3994,7 @@ export function useAppController() {
       adminTierEditPromptPrice.value = price.prompt;
       adminTierEditCompletionPrice.value = price.completion;
       adminTierEditDesc.value = price.description;
+      adminTierEditExamples.value = adminModelTiers.value.examples?.[tierKey] || (adminModelTiers.value.tiers[tierKey] || []).join(', ');
       adminTierEditIsNew.value = false;
     } else {
       adminTierEditKey.value = '';
@@ -3952,6 +4002,7 @@ export function useAppController() {
       adminTierEditPromptPrice.value = 0;
       adminTierEditCompletionPrice.value = 0;
       adminTierEditDesc.value = '';
+      adminTierEditExamples.value = '';
       adminTierEditIsNew.value = true;
     }
     adminTierEditDialog.value = true;
@@ -3978,8 +4029,12 @@ export function useAppController() {
           description: adminTierEditDesc.value || `【${key}】`,
         },
       };
+      const newExamples = { ...(adminModelTiers.value.examples || {}) };
+      const examples = adminTierEditExamples.value.trim();
+      if (examples) newExamples[key] = examples;
+      else delete newExamples[key];
 
-      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels }, backendBaseUrl.value);
+      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels, examples: newExamples }, backendBaseUrl.value);
       adminTierEditDialog.value = false;
       await loadAdminModelTiers();
     } catch (e) {
@@ -3993,7 +4048,11 @@ export function useAppController() {
       delete newTiers[tierKey];
       const newPrices = { ...adminModelTiers.value.prices };
       delete newPrices[tierKey];
-      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices }, backendBaseUrl.value);
+      const newLabels = { ...(adminModelTiers.value.labels || {}) };
+      delete newLabels[tierKey];
+      const newExamples = { ...(adminModelTiers.value.examples || {}) };
+      delete newExamples[tierKey];
+      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels, examples: newExamples }, backendBaseUrl.value);
       await loadAdminModelTiers();
     } catch (e) {
       console.error('[admin] delete tier error:', e);
@@ -4056,7 +4115,7 @@ export function useAppController() {
   }
 
   // Tier rows for pricing config bar
-  interface TierRow { key: string; label: string; models: string[]; promptPrice: number; completionPrice: number }
+  interface TierRow { key: string; label: string; models: string[]; promptPrice: number; completionPrice: number; sampleModels: string }
 
   const tierDefaultLabels: Record<string, string> = {
     tier_budget: '入门',
@@ -4074,6 +4133,7 @@ export function useAppController() {
       models,
       promptPrice: Number(adminModelTiers.value.prices[key]?.prompt ?? 0),
       completionPrice: Number(adminModelTiers.value.prices[key]?.completion ?? 0),
+      sampleModels: adminModelTiers.value.examples?.[key] || models.join(', '),
     }));
   });
 
@@ -4138,10 +4198,13 @@ export function useAppController() {
 
     // Prefer DB labels over hardcoded
     let dbLabels: Record<string, string> = {};
+    let dbExamples: Record<string, string> = {};
     let tierModels: Record<string, string[]> = {};
     try {
       const raw = pageModelsConfig.value['tier_labels'];
       if (raw) dbLabels = JSON.parse(raw);
+      const rawExamples = pageModelsConfig.value['tier_examples'];
+      if (rawExamples) dbExamples = JSON.parse(rawExamples);
       const rawMapping = pageModelsConfig.value['model_tier_mapping'];
       if (rawMapping) tierModels = JSON.parse(rawMapping);
     } catch {}
@@ -4149,8 +4212,10 @@ export function useAppController() {
     return Array.from(tierMap.entries()).map(([name, prices]) => {
       const label = dbLabels[`tier_${name}`] || defaultLabelMap[name]?.label || name;
       const tagType = defaultLabelMap[name]?.tagType || 'info';
-      const models = tierModels[`tier_${name}`] || tierModels[name] || [];
-      return { key: name, label, tagType, promptPrice: prices.prompt, completionPrice: prices.completion, sampleModels: models.join(', ') };
+      const tierKey = `tier_${name}`;
+      const models = tierModels[tierKey] || tierModels[name] || [];
+      const sampleModels = dbExamples[tierKey] || dbExamples[name] || models.join(', ');
+      return { key: name, label, tagType, promptPrice: prices.prompt, completionPrice: prices.completion, sampleModels };
     }).sort((a, b) => a.label.localeCompare(b.label, 'zh'));
   });
 
@@ -6048,8 +6113,13 @@ export function useAppController() {
     skillPreviewOpen,
     showTeamCreateDialog,
     showMcpCreateDialog,
+    showMcpTestDialog,
     showTestSuiteCreateDialog,
     showTestCaseCreateDialog,
+    showMarketplacePublishDialog,
+    showVersionCreateDialog,
+    showEvaluationDialog,
+    showMemoryCreateDialog,
     skillTesting,
     activeSkill,
     activeSkillTestResult,
@@ -6076,6 +6146,7 @@ export function useAppController() {
     activeTeamRun,
     activeTestSuiteId,
     activeTestRun,
+    activeMcpTestServerId,
     agentEvaluations,
     agentStats,
     agentEvaluationLoading,
@@ -6234,6 +6305,7 @@ export function useAppController() {
     adminTierEditPromptPrice,
     adminTierEditCompletionPrice,
     adminTierEditDesc,
+    adminTierEditExamples,
     adminTierEditIsNew,
     adminEditSettingTagFilter,
     adminEditSettingTextMode,
@@ -6351,6 +6423,7 @@ export function useAppController() {
     runSelectedTestSuite,
     createMcpServerFromForm,
     testMcpServer,
+    openMcpTestDialog,
     syncWorkflowCanvasFromSelected,
     createWorkflowNodeConfig,
     dagNodeDragging,

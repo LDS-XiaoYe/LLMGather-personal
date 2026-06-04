@@ -1150,12 +1150,6 @@ html, body, #app {
   color: #6b7280;
 }
 
-.marketplace-filters {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 12px;
-}
-
 .marketplace-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -4542,10 +4536,6 @@ html.dark .agent-history-item.active {
   }
 
   .agent-builder-body {
-    grid-template-columns: 1fr;
-  }
-
-  .marketplace-filters {
     grid-template-columns: 1fr;
   }
 

@@ -66,6 +66,7 @@ const adminTierEditKey = bind(app, 'adminTierEditKey');
 const adminTierEditLabel = bind(app, 'adminTierEditLabel');
 const adminTierEditPromptPrice = bind(app, 'adminTierEditPromptPrice');
 const adminTierEditCompletionPrice = bind(app, 'adminTierEditCompletionPrice');
+const adminTierEditExamples = bind(app, 'adminTierEditExamples');
 const adminTierEditIsNew = bind(app, 'adminTierEditIsNew');
 const adminEditSettingTagFilter = bind(app, 'adminEditSettingTagFilter');
 const adminEditSettingTextMode = bind(app, 'adminEditSettingTextMode');
@@ -480,6 +481,11 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-table-column label="模型数" width="80" align="center">
                   <template #default="{ row }">{{ row.models.length }}</template>
                 </el-table-column>
+                <el-table-column label="控制台模型举例" min-width="240">
+                  <template #default="{ row }">
+                    <span style="font-size:12px;word-break:break-all">{{ row.sampleModels || '-' }}</span>
+                  </template>
+                </el-table-column>
                 <el-table-column label="操作" width="120">
                   <template #default="{ row }">
                     <el-button size="small" link @click="openEditTier(row.key)">编辑</el-button>
@@ -823,6 +829,15 @@ const getModelTags = bind(app, 'getModelTags');
               <el-form-item label="输出价格">
                 <el-input-number v-model="adminTierEditCompletionPrice" :min="0" :step="0.001" :precision="4" style="width:100%" />
                 <span style="font-size:11px;color:#9ca3af;margin-left:8px">元/千token</span>
+              </el-form-item>
+              <el-form-item label="模型举例">
+                <el-input
+                  v-model="adminTierEditExamples"
+                  type="textarea"
+                  :rows="3"
+                  resize="vertical"
+                  placeholder="控制台计费规则展示用，例如 qwen-plus, deepseek-v4-flash"
+                />
               </el-form-item>
             </el-form>
             <template #footer>

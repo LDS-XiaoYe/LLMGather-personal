@@ -55,7 +55,7 @@ describe('ApiKeyPool', () => {
       const pool = new ApiKeyPool(['A', 'B', 'C']);
       pool.markRateLimited('A'); // A: now + 30s
       // Manually set B's cooldown to a future time later than A
-      const entries = pool._debugEntries() as Array<{ key: string; cooldownUntil: number }>;
+      const entries = pool._debugEntries();
       const entryB = entries.find((e) => e.key === 'B')!;
       // Override via internal — we need to test the "all cooled" path
       // Use markRateLimited on B and C, then advance time for A only
@@ -105,6 +105,26 @@ describe('ApiKeyPool', () => {
       expect(() => pool.markRetryableFailure('NONEXISTENT')).not.toThrow();
       expect(pool._debugNextIndex()).toBe(0);
       expect(pool.getKey()).toBe('A');
+    });
+  });
+
+  describe('markBalanceExhausted', () => {
+    it('should skip an exhausted key and keep using the remaining keys', () => {
+      const pool = new ApiKeyPool(['A', 'B', 'C']);
+      pool.markBalanceExhausted('A');
+      expect(pool.usableCount()).toBe(2);
+      expect(pool.availableCount()).toBe(2);
+      expect(pool.getKey()).toBe('B');
+      expect(pool.getKey()).toBe('C');
+      expect(pool.getKey()).toBe('B');
+    });
+
+    it('should throw when all keys are exhausted', () => {
+      const pool = new ApiKeyPool(['A', 'B']);
+      pool.markBalanceExhausted('A');
+      pool.markBalanceExhausted('B');
+      expect(pool.usableCount()).toBe(0);
+      expect(() => pool.getKey()).toThrow('ApiKeyPool has no usable keys');
     });
   });
 

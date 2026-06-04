@@ -115,6 +115,8 @@ export class ChatController {
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
+      const rotationHeader = upstream.headers.get('x-provider-key-rotation');
+      if (rotationHeader) res.setHeader('x-provider-key-rotation', rotationHeader);
       res.flushHeaders?.();
 
       const decoder = new TextDecoder();
@@ -165,6 +167,8 @@ export class ChatController {
       user.id, payload, completion.usage, 'chat',
     );
     res.setHeader('x-credit-balance', updatedUser.credits.toFixed(6));
+    const rotation = (completion as typeof completion & { _providerKeyRotation?: unknown })._providerKeyRotation;
+    if (rotation) res.setHeader('x-provider-key-rotation', JSON.stringify(rotation));
 
     // Store in cache
     const replyContent = completion.choices?.[0]?.message?.content ?? '';
@@ -211,6 +215,8 @@ export class ChatController {
       res.setHeader('x-router-intent', decision.intent);
       res.setHeader('x-router-model', decision.selectedModel);
       res.setHeader('x-router-reason', encodeURIComponent(decision.reason));
+      const rotationHeader = upstream.headers.get('x-provider-key-rotation');
+      if (rotationHeader) res.setHeader('x-provider-key-rotation', rotationHeader);
       res.flushHeaders?.();
 
       // Send router decision as first SSE event
@@ -264,6 +270,8 @@ export class ChatController {
     res.setHeader('x-credit-balance', updatedUser.credits.toFixed(6));
     res.setHeader('x-router-intent', decision.intent);
     res.setHeader('x-router-model', decision.selectedModel);
+    const rotation = (completion as typeof completion & { _providerKeyRotation?: unknown })._providerKeyRotation;
+    if (rotation) res.setHeader('x-provider-key-rotation', JSON.stringify(rotation));
     res.json({ ...completion, router_decision: decision });
   }
 }

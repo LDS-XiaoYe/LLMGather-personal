@@ -19,6 +19,13 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: frontendOrigins.length === 1 ? frontendOrigins[0] : frontendOrigins,
     credentials: true,
+    exposedHeaders: [
+      REQUEST_ID_HEADER,
+      'x-provider-key-rotation',
+      'x-cache-hit',
+      'x-cache-tokens-saved',
+      'x-credit-balance',
+    ],
   });
   // JSON body size limit from system settings (bytes). fallback to 2mb.
   let jsonLimit = '2mb';

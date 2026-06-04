@@ -88,6 +88,12 @@ export interface ChatCompletionChunk {
   }>;
 }
 
+export interface ProviderKeyRotationInfo {
+  provider: string;
+  attempts: number;
+  reason: 'rate_limit' | 'balance_exhausted' | 'retryable_failure' | 'network';
+}
+
 const defaultBaseUrl = '/v1';
 const REQUEST_TIMEOUT_MS = 60_000;
 const TOKEN_STORAGE_KEY = 'llm_gather_access_token';
@@ -390,6 +396,7 @@ export async function streamCompletion(
   payload: ChatCompletionRequest,
   handlers: {
     onRequestId?: (requestId: string) => void;
+    onKeyRotation?: (rotation: ProviderKeyRotationInfo) => void;
     onChunk?: (chunk: ChatCompletionChunk) => void;
     onDone?: () => void;
     onAbort?: () => void;
@@ -433,6 +440,12 @@ export async function streamCompletion(
   }
 
   handlers.onRequestId?.(response.headers.get('x-request-id') ?? '');
+  const rotationHeader = response.headers.get('x-provider-key-rotation');
+  if (rotationHeader) {
+    try {
+      handlers.onKeyRotation?.(JSON.parse(rotationHeader) as ProviderKeyRotationInfo);
+    } catch {}
+  }
 
   const reader = response.body?.getReader();
   if (!reader) { cleanup(); throw new Error('流式响应不可用'); }
@@ -1754,6 +1767,7 @@ export interface ModelTiersData {
   tiers: Record<string, string[]>;
   prices: Record<string, TierPriceInfo>;
   labels: Record<string, string>;
+  examples: Record<string, string>;
 }
 
 export async function fetchAdminModelTiers(baseUrl = defaultBaseUrl): Promise<ModelTiersData> {
@@ -1768,7 +1782,7 @@ export async function fetchAdminModelTiers(baseUrl = defaultBaseUrl): Promise<Mo
 }
 
 export async function updateAdminModelTiers(
-  data: { tiers: Record<string, string[]>; prices: Record<string, TierPriceInfo>; labels?: Record<string, string> },
+  data: { tiers: Record<string, string[]>; prices: Record<string, TierPriceInfo>; labels?: Record<string, string>; examples?: Record<string, string> },
   baseUrl = defaultBaseUrl,
 ): Promise<ModelTiersData> {
   const response = await fetch(`${baseUrl}/admin/model-tiers`, {

@@ -2,9 +2,11 @@
  * ApiKeyPool — thread-safe round-robin key distribution with 429 cooldown.
  *
  * Each provider feeds this pool with one or more API keys (deduplicated).
- * `getKey()` returns the next non-cooled-down key, rotating deterministically
- * via `nextIndex`.  When all keys are in cooldown the earliest-expiring one
- * is returned as a fallback.
+ * `getKey()` returns the next usable key, rotating deterministically via
+ * `nextIndex`. Keys can be temporarily cooled down (429) or marked exhausted
+ * for the current process (e.g. provider account balance is insufficient).
+ * When all non-exhausted keys are in cooldown the earliest-expiring one is
+ * returned as a fallback.
  *
  * Node's single-threaded event loop makes the mutable `nextIndex` and per-key
  * `cooldownUntil` safe without locks.
@@ -23,7 +25,7 @@ export class ApiKeyPool {
       if (!trimmed) continue;
       if (seen.has(trimmed)) continue;
       seen.add(trimmed);
-      this.entries.push({ key: trimmed, cooldownUntil: 0 });
+      this.entries.push({ key: trimmed, cooldownUntil: 0, exhausted: false });
     }
     if (this.entries.length === 0) {
       throw new Error('ApiKeyPool requires at least one non-empty key');
@@ -38,20 +40,24 @@ export class ApiKeyPool {
     // Linear scan from nextIndex — pick the first non-cooled-down key.
     for (let i = 0; i < n; i++) {
       const idx = (this.nextIndex + i) % n;
-      if (this.entries[idx].cooldownUntil <= now) {
+      if (!this.entries[idx].exhausted && this.entries[idx].cooldownUntil <= now) {
         this.nextIndex = (idx + 1) % n;
         return this.entries[idx].key;
       }
     }
 
     // All keys are in cooldown — return the one that expires soonest.
-    let earliestIdx = 0;
-    let earliestExpiry = this.entries[0].cooldownUntil;
-    for (let i = 1; i < n; i++) {
+    let earliestIdx = -1;
+    let earliestExpiry = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < n; i++) {
+      if (this.entries[i].exhausted) continue;
       if (this.entries[i].cooldownUntil < earliestExpiry) {
         earliestExpiry = this.entries[i].cooldownUntil;
         earliestIdx = i;
       }
+    }
+    if (earliestIdx === -1) {
+      throw new Error('ApiKeyPool has no usable keys');
     }
     this.nextIndex = (earliestIdx + 1) % n;
     return this.entries[earliestIdx].key;
@@ -60,7 +66,7 @@ export class ApiKeyPool {
   /** Return a random non-cooled-down key. Falls back to round-robin if all cooled. */
   getRandomKey(): string {
     const now = Date.now();
-    const available = this.entries.filter((e) => e.cooldownUntil <= now);
+    const available = this.entries.filter((e) => !e.exhausted && e.cooldownUntil <= now);
     if (available.length > 0) {
       return available[Math.floor(Math.random() * available.length)].key;
     }
@@ -88,19 +94,33 @@ export class ApiKeyPool {
     }
   }
 
+  /** Mark a key as unusable for this process, e.g. provider balance exhausted. */
+  markBalanceExhausted(key: string): void {
+    const entry = this.entries.find((e) => e.key === key);
+    if (entry) {
+      entry.exhausted = true;
+      this.markRetryableFailure(key);
+    }
+  }
+
   /** Whether at least one key is not in cooldown. */
   hasAvailableKey(): boolean {
     const now = Date.now();
-    return this.entries.some((e) => e.cooldownUntil <= now);
+    return this.entries.some((e) => !e.exhausted && e.cooldownUntil <= now);
   }
 
   /** Number of keys that are currently not in cooldown. */
   availableCount(): number {
     const now = Date.now();
     return this.entries.reduce(
-      (count, e) => count + (e.cooldownUntil <= now ? 1 : 0),
+      (count, e) => count + (!e.exhausted && e.cooldownUntil <= now ? 1 : 0),
       0,
     );
+  }
+
+  /** Number of keys that have not been marked balance-exhausted. */
+  usableCount(): number {
+    return this.entries.reduce((count, e) => count + (e.exhausted ? 0 : 1), 0);
   }
 
   /** Total number of unique keys in the pool. */
@@ -114,7 +134,7 @@ export class ApiKeyPool {
    * @internal Expose cooldown timestamps for tests.
    * Returns a snapshot of `{ key, cooldownUntil }`.
    */
-  _debugEntries(): ReadonlyArray<{ key: string; cooldownUntil: number }> {
+  _debugEntries(): ReadonlyArray<{ key: string; cooldownUntil: number; exhausted: boolean }> {
     return this.entries.map((e) => ({ ...e }));
   }
 
@@ -129,4 +149,5 @@ export class ApiKeyPool {
 interface PoolEntry {
   key: string;
   cooldownUntil: number; // epoch ms, 0 = available
+  exhausted: boolean;
 }

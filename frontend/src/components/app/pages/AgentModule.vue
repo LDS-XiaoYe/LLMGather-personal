@@ -57,8 +57,13 @@ const showSkillCreateDialog = bind(app, 'showSkillCreateDialog');
 const skillPreviewOpen = bind(app, 'skillPreviewOpen');
 const showTeamCreateDialog = bind(app, 'showTeamCreateDialog');
 const showMcpCreateDialog = bind(app, 'showMcpCreateDialog');
+const showMcpTestDialog = bind(app, 'showMcpTestDialog');
 const showTestSuiteCreateDialog = bind(app, 'showTestSuiteCreateDialog');
 const showTestCaseCreateDialog = bind(app, 'showTestCaseCreateDialog');
+const showMarketplacePublishDialog = bind(app, 'showMarketplacePublishDialog');
+const showVersionCreateDialog = bind(app, 'showVersionCreateDialog');
+const showEvaluationDialog = bind(app, 'showEvaluationDialog');
+const showMemoryCreateDialog = bind(app, 'showMemoryCreateDialog');
 const skillTesting = bind(app, 'skillTesting');
 const activeSkill = bind(app, 'activeSkill');
 const activeSkillTestResult = bind(app, 'activeSkillTestResult');
@@ -80,6 +85,7 @@ const teamInput = bind(app, 'teamInput');
 const activeTeamRun = bind(app, 'activeTeamRun');
 const activeTestSuiteId = bind(app, 'activeTestSuiteId');
 const activeTestRun = bind(app, 'activeTestRun');
+const activeMcpTestServerId = bind(app, 'activeMcpTestServerId');
 const agentEvaluations = bind(app, 'agentEvaluations');
 const agentStats = bind(app, 'agentStats');
 const agentEvaluationLoading = bind(app, 'agentEvaluationLoading');
@@ -187,6 +193,7 @@ const createTestCaseFromForm = bind(app, 'createTestCaseFromForm');
 const runSelectedTestSuite = bind(app, 'runSelectedTestSuite');
 const createMcpServerFromForm = bind(app, 'createMcpServerFromForm');
 const testMcpServer = bind(app, 'testMcpServer');
+const openMcpTestDialog = bind(app, 'openMcpTestDialog');
 const startDagNodeDrag = bind(app, 'startDagNodeDrag');
 const dropDagNode = bind(app, 'dropDagNode');
 const startWorkflowNodeDrag = bind(app, 'startWorkflowNodeDrag');
@@ -345,20 +352,19 @@ const chatModels = bind(app, 'chatModels');
               <el-divider />
 
               <div class="agent-overview-section">
-                <div class="agent-section-title">版本历史</div>
+                <div class="agent-section-title">
+                  <span>版本历史</span>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    plain
+                    :disabled="!agentForm.id"
+                    @click="showVersionCreateDialog = true"
+                  >
+                    创建版本快照
+                  </el-button>
+                </div>
                 <div class="agent-resource-stack">
-                  <div class="agent-inline-field">
-                    <el-input v-model="versionForm.label" placeholder="版本标签，例如 release-1" maxlength="120" style="flex:1" />
-                    <el-button
-                      type="primary"
-                      plain
-                      :loading="versionSaving"
-                      :disabled="!agentForm.id"
-                      @click="createVersionFromForm()"
-                    >
-                      创建版本快照
-                    </el-button>
-                  </div>
                   <div v-for="version in agentVersions" :key="version.id" class="agent-resource-item">
                     <div class="agent-resource-title">
                       <span>v{{ version.versionNumber }} · {{ version.label }}</span>
@@ -368,37 +374,35 @@ const chatModels = bind(app, 'chatModels');
                   </div>
                   <el-empty v-if="agentVersions.length === 0" description="暂无版本" :image-size="72" />
                 </div>
+                <el-dialog v-model="showVersionCreateDialog" title="创建版本快照" width="520px" :close-on-click-modal="false">
+                  <el-form label-position="top">
+                    <el-form-item label="版本标签">
+                      <el-input v-model="versionForm.label" placeholder="例如 release-1，留空则自动生成" maxlength="120" />
+                    </el-form-item>
+                  </el-form>
+                  <template #footer>
+                    <el-button @click="showVersionCreateDialog = false">取消</el-button>
+                    <el-button type="primary" :loading="versionSaving" :disabled="!agentForm.id" @click="createVersionFromForm()">创建</el-button>
+                  </template>
+                </el-dialog>
               </div>
 
               <el-divider />
 
               <div class="agent-overview-section">
-                <div class="agent-section-title">评测</div>
-                <div class="agent-resource-stack">
-                  <el-input
-                    v-model="evaluationForm.expectedOutput"
-                    type="textarea"
-                    :rows="3"
-                    resize="vertical"
-                    placeholder="可选：期望答案或关键点"
-                  />
-                  <el-input
-                    v-model="evaluationForm.rubric"
-                    type="textarea"
-                    :rows="3"
-                    resize="vertical"
-                    placeholder="可选：自定义评测标准"
-                  />
+                <div class="agent-section-title">
+                  <span>评测</span>
                   <el-button
+                    size="small"
                     type="primary"
                     plain
-                    :loading="agentEvaluationSaving"
                     :disabled="!activeAgentRun"
-                    @click="evaluateActiveAgentRun()"
+                    @click="showEvaluationDialog = true"
                   >
                     评测当前运行
                   </el-button>
-                  <el-divider />
+                </div>
+                <div class="agent-resource-stack">
                   <div v-for="evaluation in agentEvaluations" :key="evaluation.id" class="agent-resource-item">
                     <div class="agent-resource-title">
                       <el-tag size="small" :type="agentEvalTagType(evaluation.grade)">{{ evaluation.grade }}</el-tag>
@@ -409,6 +413,32 @@ const chatModels = bind(app, 'chatModels');
                   </div>
                   <el-empty v-if="!agentEvaluationLoading && agentEvaluations.length === 0" description="暂无评测记录" :image-size="72" />
                 </div>
+                <el-dialog v-model="showEvaluationDialog" title="评测当前运行" width="620px" :close-on-click-modal="false">
+                  <el-form label-position="top">
+                    <el-form-item label="期望答案或关键点">
+                      <el-input
+                        v-model="evaluationForm.expectedOutput"
+                        type="textarea"
+                        :rows="3"
+                        resize="vertical"
+                        placeholder="可选"
+                      />
+                    </el-form-item>
+                    <el-form-item label="评测标准">
+                      <el-input
+                        v-model="evaluationForm.rubric"
+                        type="textarea"
+                        :rows="3"
+                        resize="vertical"
+                        placeholder="可选：自定义通过标准"
+                      />
+                    </el-form-item>
+                  </el-form>
+                  <template #footer>
+                    <el-button @click="showEvaluationDialog = false">取消</el-button>
+                    <el-button type="primary" :loading="agentEvaluationSaving" :disabled="!activeAgentRun" @click="evaluateActiveAgentRun()">开始评测</el-button>
+                  </template>
+                </el-dialog>
               </div>
             </el-card>
 
@@ -779,21 +809,18 @@ const chatModels = bind(app, 'chatModels');
                 </div>
 
                 <div class="agent-cap-section">
-                  <div class="agent-section-title">记忆</div>
-                  <el-input v-model="memoryForm.content" type="textarea" :rows="3" resize="vertical" placeholder="写入一条长期记忆" />
-                  <div class="agent-inline-field">
-                    <span>重要性</span>
-                    <el-slider v-model="memoryForm.importance" :min="1" :max="5" :step="1" show-stops />
+                  <div class="agent-section-title">
+                    <span>记忆</span>
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :disabled="!agentForm.id"
+                      @click="showMemoryCreateDialog = true"
+                    >
+                      写入记忆
+                    </el-button>
                   </div>
-                  <el-button
-                    type="primary"
-                    plain
-                    :loading="memorySaving"
-                    :disabled="!memoryForm.content.trim() || !agentForm.id"
-                    @click="createAgentMemory()"
-                  >
-                    写入记忆
-                  </el-button>
                   <div v-for="memory in agentMemories" :key="memory.id" class="agent-resource-item">
                     <div class="agent-resource-title">
                       <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
@@ -802,6 +829,27 @@ const chatModels = bind(app, 'chatModels');
                     <div class="agent-resource-content">{{ memory.content }}</div>
                   </div>
                   <el-empty v-if="agentMemories.length === 0" description="暂无记忆" :image-size="72" />
+                  <el-dialog v-model="showMemoryCreateDialog" title="写入长期记忆" width="560px" :close-on-click-modal="false">
+                    <el-form label-position="top">
+                      <el-form-item label="记忆内容" required>
+                        <el-input v-model="memoryForm.content" type="textarea" :rows="4" resize="vertical" placeholder="写入一条长期记忆" />
+                      </el-form-item>
+                      <el-form-item label="重要性">
+                        <el-slider v-model="memoryForm.importance" :min="1" :max="5" :step="1" show-stops />
+                      </el-form-item>
+                    </el-form>
+                    <template #footer>
+                      <el-button @click="showMemoryCreateDialog = false">取消</el-button>
+                      <el-button
+                        type="primary"
+                        :loading="memorySaving"
+                        :disabled="!memoryForm.content.trim() || !agentForm.id"
+                        @click="createAgentMemory()"
+                      >
+                        写入
+                      </el-button>
+                    </template>
+                  </el-dialog>
                 </div>
               </div>
 
@@ -1258,14 +1306,13 @@ const chatModels = bind(app, 'chatModels');
                     <span>MCP Server</span>
                     <el-button size="small" type="primary" plain @click="showMcpCreateDialog = true">添加 MCP</el-button>
                   </div>
-                  <el-input v-model="mcpForm.query" placeholder="测试查询" maxlength="200" />
                   <div v-for="server in mcpServers" :key="server.id" class="agent-resource-item">
                     <div class="agent-resource-title">
                       <span>{{ server.name }}</span>
                       <el-tag size="small" :type="server.lastStatus === 'ok' ? 'success' : 'info'">{{ server.lastStatus }}</el-tag>
                     </div>
                     <div class="agent-resource-meta">{{ server.serverType }} · {{ server.enabled ? 'enabled' : 'disabled' }}</div>
-                    <el-button size="small" text :loading="mcpTesting" @click="testMcpServer(server.id)">测试</el-button>
+                    <el-button size="small" text :loading="mcpTesting && activeMcpTestServerId === server.id" @click="openMcpTestDialog(server.id)">测试</el-button>
                   </div>
                   <el-empty v-if="mcpServers.length === 0" description="暂无 MCP Server" :image-size="72" />
                 </div>
@@ -1336,6 +1383,24 @@ const chatModels = bind(app, 'chatModels');
                     @click="createMcpServerFromForm()"
                   >
                     保存
+                  </el-button>
+                </template>
+              </el-dialog>
+              <el-dialog v-model="showMcpTestDialog" title="测试 MCP Server" width="520px" :close-on-click-modal="false">
+                <el-form label-position="top">
+                  <el-form-item label="测试查询">
+                    <el-input v-model="mcpForm.query" type="textarea" :rows="3" resize="vertical" placeholder="留空则使用 test" maxlength="200" show-word-limit />
+                  </el-form-item>
+                </el-form>
+                <template #footer>
+                  <el-button @click="showMcpTestDialog = false; activeMcpTestServerId = ''">取消</el-button>
+                  <el-button
+                    type="primary"
+                    :loading="mcpTesting"
+                    :disabled="!activeMcpTestServerId"
+                    @click="testMcpServer(activeMcpTestServerId)"
+                  >
+                    测试
                   </el-button>
                 </template>
               </el-dialog>
@@ -1728,18 +1793,11 @@ const chatModels = bind(app, 'chatModels');
                     <el-button
                       type="primary"
                       size="small"
-                      :loading="marketplacePublishing"
                       :disabled="!agentForm.id"
-                      @click="publishCurrentAgentToMarketplace()"
+                      @click="showMarketplacePublishDialog = true"
                     >
                       发布当前 Agent
                     </el-button>
-                  </div>
-
-                  <div class="marketplace-filters">
-                    <el-input v-model="marketplaceForm.name" placeholder="模板名称，留空则使用当前 Agent 名称" maxlength="80" />
-                    <el-input v-model="marketplaceForm.category" placeholder="分类，例如 research / code / support" maxlength="64" />
-                    <el-input v-model="marketplaceForm.description" placeholder="一句话说明这个模板适合什么任务" maxlength="500" />
                   </div>
 
                   <div class="marketplace-grid">
@@ -1760,6 +1818,37 @@ const chatModels = bind(app, 'chatModels');
                     </div>
                     <el-empty v-if="marketplaceTemplates.length === 0" description="暂无模板" :image-size="72" />
                   </div>
+                  <el-dialog v-model="showMarketplacePublishDialog" title="发布 Agent 模板" width="560px" :close-on-click-modal="false">
+                    <el-form label-position="top">
+                      <el-form-item label="模板名称">
+                        <el-input v-model="marketplaceForm.name" placeholder="留空则使用当前 Agent 名称" maxlength="80" />
+                      </el-form-item>
+                      <el-form-item label="分类">
+                        <el-select v-model="marketplaceForm.category" placeholder="选择分类，留空归入自定义" clearable filterable style="width:100%">
+                          <el-option label="研究" value="research" />
+                          <el-option label="代码" value="code" />
+                          <el-option label="客服" value="support" />
+                          <el-option label="运营" value="ops" />
+                          <el-option label="数据" value="data" />
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="描述">
+                        <el-input
+                          v-model="marketplaceForm.description"
+                          type="textarea"
+                          :rows="4"
+                          resize="vertical"
+                          placeholder="一句话说明这个模板适合什么任务，留空则使用当前 Agent 描述"
+                          maxlength="500"
+                          show-word-limit
+                        />
+                      </el-form-item>
+                    </el-form>
+                    <template #footer>
+                      <el-button @click="showMarketplacePublishDialog = false">取消</el-button>
+                      <el-button type="primary" :loading="marketplacePublishing" @click="publishCurrentAgentToMarketplace()">发布</el-button>
+                    </template>
+                  </el-dialog>
                 </div>
 
                 <el-divider />

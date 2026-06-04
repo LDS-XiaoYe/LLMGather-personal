@@ -7,6 +7,7 @@ import {
   ContentPart,
   ModelDescriptor,
   ProviderAdapter,
+  ProviderKeyRotationInfo,
 } from './provider.types';
 
 export interface GeminiProviderConfig {
@@ -104,27 +105,30 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    const { response } = await this.fetchWithRetry(request, false);
+    const { response, rotation } = await this.fetchWithRetry(request, false);
     if (!response.ok) throw await this.buildProviderException(response);
     const data = (await response.json()) as GeminiResponse;
-    return this.toOpenAiResponse(request, data);
+    const completion = this.toOpenAiResponse(request, data);
+    attachKeyRotation(completion, rotation);
+    return completion;
   }
 
   async chatCompletionStream(request: ChatCompletionRequest): Promise<Response> {
-    const { response } = await this.fetchWithRetry(request, true);
+    const { response, rotation } = await this.fetchWithRetry(request, true);
     if (!response.ok) throw await this.buildProviderException(response);
     if (!response.body) throw new ServiceUnavailableException(`${this.providerName} stream unavailable`);
-    return this.toOpenAiStream(request, response);
+    return withKeyRotationHeader(this.toOpenAiStream(request, response), rotation);
   }
 
   private async fetchWithRetry(
     request: ChatCompletionRequest,
     stream: boolean,
-  ): Promise<{ response: Response }> {
+  ): Promise<{ response: Response; rotation?: ProviderKeyRotationInfo }> {
     if (!this.keyPool) throw new ServiceUnavailableException(`${this.providerName} API key pool is not configured`);
     let currentKey = this.keyPool.getRandomKey();
     let lastError = 'unknown error';
-    const maxAttempts = stream ? 0 : this.retryCount;
+    let rotation: ProviderKeyRotationInfo | undefined;
+    const maxAttempts = this.retryCount;
     const requestTimeoutMs = stream ? Math.min(Math.max(this.timeoutMs, 45000), 50000) : this.timeoutMs;
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
@@ -149,17 +153,26 @@ export class GeminiProvider implements ProviderAdapter {
 
         if (response.status === 429 && attempt < maxAttempts) {
           this.keyPool.markRateLimited(currentKey);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'rate_limit' };
+          currentKey = this.keyPool.getRandomKey();
+          continue;
+        }
+
+        if (attempt < maxAttempts && this.keyPool.usableCount() > 1 && await isBalanceExhaustedResponse(response)) {
+          this.keyPool.markBalanceExhausted(currentKey);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'balance_exhausted' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
         if (response.status >= 500 && attempt < maxAttempts) {
           this.keyPool.markRetryableFailure(currentKey);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
-        return { response };
+        return { response, rotation };
       } catch (error) {
         clearTimeout(timeoutId);
         lastError = error instanceof Error ? error.message : String(error);
@@ -170,6 +183,7 @@ export class GeminiProvider implements ProviderAdapter {
           throw new ServiceUnavailableException(`${this.providerName} ${detail}`);
         }
         this.keyPool.markRetryableFailure(currentKey);
+        rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'network' };
         currentKey = this.keyPool.getRandomKey();
       }
     }
@@ -633,4 +647,48 @@ export class GeminiProvider implements ProviderAdapter {
     }
     return parts.join('; ');
   }
+}
+
+function attachKeyRotation(response: ChatCompletionResponse, rotation?: ProviderKeyRotationInfo): void {
+  if (!rotation) return;
+  Object.defineProperty(response, '_providerKeyRotation', {
+    value: rotation,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+async function isBalanceExhaustedResponse(response: Response): Promise<boolean> {
+  if (![400, 402, 403].includes(response.status)) return false;
+  let text = response.statusText || '';
+  try {
+    text += ` ${await response.clone().text()}`;
+  } catch {}
+  const normalized = text.toLowerCase();
+  return [
+    '余额不足',
+    '账户余额不足',
+    '账号余额不足',
+    'insufficient balance',
+    'insufficient credit',
+    'insufficient credits',
+    'credit exhausted',
+    'credits exhausted',
+    'balance not enough',
+    'balance is not enough',
+    'prepaid balance',
+    'insufficient_quota',
+    'quota_exceeded',
+  ].some((needle) => normalized.includes(needle));
+}
+
+function withKeyRotationHeader(response: Response, rotation?: ProviderKeyRotationInfo): Response {
+  if (!rotation) return response;
+  const headers = new Headers(response.headers);
+  headers.set('x-provider-key-rotation', JSON.stringify(rotation));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

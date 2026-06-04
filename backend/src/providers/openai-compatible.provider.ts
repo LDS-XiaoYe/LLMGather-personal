@@ -4,6 +4,7 @@ import {
   ChatCompletionResponse,
   ModelDescriptor,
   ProviderAdapter,
+  ProviderKeyRotationInfo,
 } from './provider.types';
 import { ApiKeyPool } from './api-key-pool';
 
@@ -71,7 +72,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
   }
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    const { response } = await this.fetchWithRetry({
+    const { response, rotation } = await this.fetchWithRetry({
       ...request,
       model: this.normalizeModel(request.model),
       stream: false,
@@ -82,11 +83,12 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
     }
 
     const data = (await response.json()) as ChatCompletionResponse;
+    attachKeyRotation(data, rotation);
     return data;
   }
 
   async chatCompletionStream(request: ChatCompletionRequest): Promise<Response> {
-    const { response } = await this.fetchWithRetry({
+    const { response, rotation } = await this.fetchWithRetry({
       ...request,
       model: this.normalizeModel(request.model),
       stream: true,
@@ -100,7 +102,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
       throw new ServiceUnavailableException(`${this.providerName} stream unavailable`);
     }
 
-    return response;
+    return withKeyRotationHeader(response, rotation);
   }
 
   listModels(): ModelDescriptor[] {
@@ -161,9 +163,10 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
    */
   private async fetchWithRetry(
     payload: ChatCompletionRequest,
-  ): Promise<{ response: Response }> {
+  ): Promise<{ response: Response; rotation?: ProviderKeyRotationInfo }> {
     let lastError = 'unknown error';
     let currentKey = this.keyPool.getRandomKey();
+    let rotation: ProviderKeyRotationInfo | undefined;
 
     for (let attempt = 0; attempt <= this.retryCount; attempt += 1) {
       const controller = new AbortController();
@@ -182,6 +185,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
         // 429 — rate limit: cooldown this key, rotate, retry
         if (response.status === 429 && attempt < this.retryCount) {
           this.keyPool.markRateLimited(currentKey);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'rate_limit' };
           console.warn(
             JSON.stringify({
               event: 'provider_rate_limited',
@@ -194,15 +198,32 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
           continue;
         }
 
+        // Provider account/key balance exhausted — retire this key and try the next one.
+        if (attempt < this.retryCount && this.keyPool.usableCount() > 1 && await isBalanceExhaustedResponse(response)) {
+          this.keyPool.markBalanceExhausted(currentKey);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'balance_exhausted' };
+          console.warn(
+            JSON.stringify({
+              event: 'provider_key_balance_exhausted',
+              provider: this.providerName,
+              key_prefix: maskKey(currentKey),
+              attempt: attempt + 1,
+            }),
+          );
+          currentKey = this.keyPool.getRandomKey();
+          continue;
+        }
+
         // 5xx — server error: rotate key without cooldown, retry
         if (response.status >= 500 && attempt < this.retryCount) {
           this.keyPool.markRetryableFailure(currentKey);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
         // 4xx (non-429) or final attempt — don't retry
-        return { response };
+        return { response, rotation };
       } catch (error) {
         clearTimeout(timeoutId);
         const reason =
@@ -235,6 +256,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
 
         // Network error — rotate key (no cooldown), retry
         this.keyPool.markRetryableFailure(currentKey);
+        rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'network' };
         currentKey = this.keyPool.getRandomKey();
       }
     }
@@ -247,4 +269,48 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
 function maskKey(key: string): string {
   if (!key || key.length <= 4) return '***';
   return `***${key.slice(-4)}`;
+}
+
+async function isBalanceExhaustedResponse(response: Response): Promise<boolean> {
+  if (![400, 402, 403].includes(response.status)) return false;
+  let text = response.statusText || '';
+  try {
+    text += ` ${await response.clone().text()}`;
+  } catch {}
+  const normalized = text.toLowerCase();
+  return [
+    '余额不足',
+    '账户余额不足',
+    '账号余额不足',
+    'insufficient balance',
+    'insufficient credit',
+    'insufficient credits',
+    'credit exhausted',
+    'credits exhausted',
+    'balance not enough',
+    'balance is not enough',
+    'prepaid balance',
+    'insufficient_quota',
+    'quota_exceeded',
+  ].some((needle) => normalized.includes(needle));
+}
+
+function attachKeyRotation(response: ChatCompletionResponse, rotation?: ProviderKeyRotationInfo): void {
+  if (!rotation) return;
+  Object.defineProperty(response, '_providerKeyRotation', {
+    value: rotation,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+function withKeyRotationHeader(response: Response, rotation?: ProviderKeyRotationInfo): Response {
+  if (!rotation) return response;
+  const headers = new Headers(response.headers);
+  headers.set('x-provider-key-rotation', JSON.stringify(rotation));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

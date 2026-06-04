@@ -76,6 +76,12 @@ export interface ChatCompletionResponse {
   usage?: ChatCompletionUsage;
 }
 
+export interface ProviderKeyRotationInfo {
+  provider: string;
+  attempts: number;
+  reason: 'rate_limit' | 'balance_exhausted' | 'retryable_failure' | 'network';
+}
+
 export interface ModelDescriptor {
   id: string;
   object: 'model';

@@ -17,6 +17,13 @@ function makeConfig(overrides?: Partial<OpenAiCompatibleConfig>): OpenAiCompatib
 }
 
 describe('OpenAiCompatibleProvider', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
   describe('isModelSupported', () => {
     it('should match models in the explicit list', () => {
       const provider = new OpenAiCompatibleProvider(makeConfig());
@@ -93,6 +100,54 @@ describe('OpenAiCompatibleProvider', () => {
       // Verify setKeyPool can be called to provide a real pool
       provider.setKeyPool(new ApiKeyPool(['sk-later']));
       // Provider should now work (no throw on construction)
+    });
+  });
+
+  describe('API key rotation', () => {
+    it('should rotate to the next key when the current key has insufficient balance', async () => {
+      const fetchMock = jest.fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ error: { message: '账户余额不足' } }),
+            { status: 402 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              id: 'ok',
+              object: 'chat.completion',
+              created: 1,
+              model: 'model-a',
+              choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            }),
+            { status: 200 },
+          ),
+      );
+      global.fetch = fetchMock;
+      jest.spyOn(Math, 'random').mockReturnValue(0);
+
+      const provider = new OpenAiCompatibleProvider(makeConfig({
+        apiKeys: ['sk-empty', 'sk-funded'],
+        apiKey: '',
+        retryCount: 1,
+      }));
+      const response = await provider.chatCompletion({
+        model: 'model-a',
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+
+      const firstCall = fetchMock.mock.calls[0][1] as RequestInit;
+      const secondCall = fetchMock.mock.calls[1][1] as RequestInit;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(firstCall.headers).toMatchObject({ Authorization: 'Bearer sk-empty' });
+      expect(secondCall.headers).toMatchObject({ Authorization: 'Bearer sk-funded' });
+      expect(response.choices[0].message.content).toBe('ok');
+      expect((response as any)._providerKeyRotation).toEqual({
+        provider: 'test-provider',
+        attempts: 1,
+        reason: 'balance_exhausted',
+      });
     });
   });
 

@@ -321,7 +321,7 @@ export class AdminController {
   @Put('model-tiers')
   @HttpCode(HttpStatus.OK)
   async updateModelTiers(
-    @Body() body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string> },
+    @Body() body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string>; examples?: Record<string, string> },
   ) {
     return { data: await this.adminService.updateModelTiers(body) };
   }

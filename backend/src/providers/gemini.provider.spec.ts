@@ -1,14 +1,14 @@
 import { ApiKeyPool } from './api-key-pool';
 import { GeminiProvider } from './gemini.provider';
 
-function makeProvider(): GeminiProvider {
+function makeProvider(options: { keys?: string[]; retryCount?: number } = {}): GeminiProvider {
   const provider = new GeminiProvider({
     providerName: 'gemini',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     models: ['gemini-3.5-flash'],
-    retryCount: 0,
+    retryCount: options.retryCount ?? 0,
   });
-  provider.setKeyPool(new ApiKeyPool(['gemini-test-key']));
+  provider.setKeyPool(new ApiKeyPool(options.keys ?? ['gemini-test-key']));
   return provider;
 }
 
@@ -184,6 +184,68 @@ describe('GeminiProvider', () => {
     expect(text).toContain('"object":"chat.completion.chunk"');
     expect(text).toContain('"content":"hi"');
     expect(text).toContain('data: [DONE]');
+  });
+
+  it('rotates API keys when a Gemini stream request is rate limited before streaming starts', async () => {
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'quota exceeded' } }), { status: 429 }))
+      .mockResolvedValueOnce(
+        new Response(
+          'data: {"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}\n\n',
+          { status: 200 },
+        ),
+    );
+    global.fetch = fetchMock;
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+
+    const response = await makeProvider({ keys: ['gemini-key-a', 'gemini-key-b'], retryCount: 1 }).chatCompletionStream({
+      model: 'gemini-3.5-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+      stream: true,
+    });
+
+    const text = await response.text();
+    const firstCall = fetchMock.mock.calls[0][1] as RequestInit;
+    const secondCall = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(firstCall.headers).toMatchObject({ 'x-goog-api-key': 'gemini-key-a' });
+    expect(secondCall.headers).toMatchObject({ 'x-goog-api-key': 'gemini-key-b' });
+    expect(JSON.parse(response.headers.get('x-provider-key-rotation') || '{}')).toEqual({
+      provider: 'gemini',
+      attempts: 1,
+      reason: 'rate_limit',
+    });
+    expect(text).toContain('"content":"hi"');
+  });
+
+  it('rotates API keys when a Gemini key has insufficient balance', async () => {
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'insufficient balance' } }), { status: 402 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: 'funded key ok' }] }, finishReason: 'STOP' }] }),
+          { status: 200 },
+        ),
+      );
+    global.fetch = fetchMock;
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+
+    const response = await makeProvider({ keys: ['gemini-empty', 'gemini-funded'], retryCount: 1 }).chatCompletion({
+      model: 'gemini-3.5-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    const firstCall = fetchMock.mock.calls[0][1] as RequestInit;
+    const secondCall = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(firstCall.headers).toMatchObject({ 'x-goog-api-key': 'gemini-empty' });
+    expect(secondCall.headers).toMatchObject({ 'x-goog-api-key': 'gemini-funded' });
+    expect(response.choices[0].message.content).toBe('funded key ok');
+    expect((response as any)._providerKeyRotation).toEqual({
+      provider: 'gemini',
+      attempts: 1,
+      reason: 'balance_exhausted',
+    });
   });
 
   it('emits Gemini thought summary parts as reasoning_content in streams', async () => {

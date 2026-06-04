@@ -36,8 +36,8 @@ export class BillingController {
   async pageModels() {
     const db = this.databaseService.connection;
     const rows = await db.prepare(
-      'SELECT `key`, value FROM system_settings WHERE `key` LIKE ? OR `key` IN (?, ?, ?)',
-    ).all('page_models_%', 'model_tier_mapping', 'tier_labels', 'model_tags') as Array<{ key: string; value: string }>;
+      'SELECT `key`, value FROM system_settings WHERE `key` LIKE ? OR `key` IN (?, ?, ?, ?)',
+    ).all('page_models_%', 'model_tier_mapping', 'tier_labels', 'tier_examples', 'model_tags') as Array<{ key: string; value: string }>;
     const result: Record<string, string> = {};
     for (const r of rows) {
       result[r.key] = r.value;

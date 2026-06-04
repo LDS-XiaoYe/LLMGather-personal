@@ -19,9 +19,9 @@ export class ApiKeyOrJwtGuard implements CanActivate {
 
     // 1) sk-xxx → API Key 认证
     if (token.startsWith('sk-')) {
-      const userId = await this.apiKeysService.validateKey(token);
-      if (!userId) throw new UnauthorizedException('无效的 API Key');
-      (request as any).user = { id: userId, username: '' };
+      const apiUser = await this.apiKeysService.validateKey(token);
+      if (!apiUser) throw new UnauthorizedException('无效的 API Key');
+      (request as any).user = { id: apiUser.userId, username: apiUser.username, role: apiUser.role || 'user' };
       return true;
     }
 
@@ -29,7 +29,7 @@ export class ApiKeyOrJwtGuard implements CanActivate {
     if (token) {
       try {
         const payload = this.jwtService.verify(token);
-        (request as any).user = { id: payload.sub, username: payload.username };
+        (request as any).user = { id: payload.sub, username: payload.username, role: payload.role || 'user' };
         return true;
       } catch {
         throw new UnauthorizedException('Token 无效或已过期');

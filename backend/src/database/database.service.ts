@@ -199,6 +199,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS semantic_cache (
         id ${pk},
+        user_id VARCHAR(36) NOT NULL DEFAULT '',
         query_hash VARCHAR(64) NOT NULL,
         query_text TEXT NOT NULL,
         model VARCHAR(128) NOT NULL,
@@ -208,6 +209,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         hit_count ${int} DEFAULT 1,
         created_at ${ts},
         last_hit_at ${ts},
+        INDEX idx_cache_user_hash (user_id, query_hash),
+        INDEX idx_cache_user_model (user_id, model),
         INDEX idx_cache_hash (query_hash),
         INDEX idx_cache_model (model)
       )${fk};`);
@@ -661,6 +664,25 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     } catch {
       // column already exists
     }
+
+    // semantic_cache: add user_id column for per-user cache isolation
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE semantic_cache ADD COLUMN user_id VARCHAR(36) NOT NULL DEFAULT ''`,
+      );
+    } catch {
+      // column already exists
+    }
+    try {
+      await this.adapter.exec(
+        `CREATE INDEX idx_cache_user_hash ON semantic_cache (user_id, query_hash)`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `CREATE INDEX idx_cache_user_model ON semantic_cache (user_id, model)`,
+      );
+    } catch {}
 
     // conversations: add deleted_at column
     try {

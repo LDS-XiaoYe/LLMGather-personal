@@ -2,6 +2,8 @@ import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiKeyOrJwtGuard } from '../api-keys/api-key-or-jwt.guard';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { SettingsThrottle } from '../common/settings-throttle.decorator';
+import { SettingsThrottleGuard } from '../common/settings-throttle.guard';
 import { AgentsService } from './agents.service';
 import { RunAgentDto } from './dto/agent.dto';
 
@@ -20,6 +22,8 @@ export class AgentAccessController {
   }
 
   @Post('public/agents/:slug/runs')
+  @SettingsThrottle('rate_limit_public_agent')
+  @UseGuards(SettingsThrottleGuard)
   async runPublished(
     @Param('slug') slug: string,
     @Body() payload: RunAgentDto,

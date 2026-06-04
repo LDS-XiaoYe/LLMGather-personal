@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { lookup } from 'dns/promises';
+import { isIP } from 'net';
 import { Script, createContext } from 'vm';
 import { DatabaseService } from '../database/database.service';
 import { McpService } from '../mcp/mcp.service';
@@ -186,6 +188,7 @@ export class ToolsService {
       }
 
       if (tool.name === 'javascript_runner' && /代码|执行.*js|javascript|run\s*code|code\s*run/i.test(input)) {
+        if (process.env.ENABLE_CODE_RUNNER_TOOLS !== 'true') continue;
         const code = this.extractCodeBlock(input) || this.extractInlineCodeRequest(input);
         if (code) {
           results.push(await this.invoke(userId, tool.id, { code }, { agentId, runId }));
@@ -248,14 +251,17 @@ export class ToolsService {
     }
 
     if (name === 'javascript_runner') {
+      this.assertCodeRunnerEnabled();
       return this.runJavascript(args);
     }
 
     if (name === 'container_javascript_runner') {
+      this.assertCodeRunnerEnabled();
       return this.runContainerJavascript(args);
     }
 
     if (name === 'python_runner' || name === 'container_python_runner') {
+      this.assertCodeRunnerEnabled();
       return this.runContainerPython(args);
     }
 
@@ -338,12 +344,18 @@ export class ToolsService {
 
   private async fetchWebPage(args: Record<string, unknown>): Promise<string> {
     const url = typeof args.url === 'string' ? args.url.trim() : '';
-    if (!/^https?:\/\//i.test(url)) throw new BadRequestException('URL 必须以 http:// 或 https:// 开头');
+    const safeUrl = await this.assertSafeFetchUrl(url);
     const maxChars = typeof args.maxChars === 'number' ? Math.max(500, Math.min(12000, args.maxChars)) : 6000;
-    const response = await fetch(url, {
+    const response = await fetch(safeUrl.toString(), {
       headers: { 'User-Agent': 'LLMGather-AgentBrowser/1.0' },
+      redirect: 'manual',
       signal: AbortSignal.timeout(5000),
     });
+    if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
+      const nextUrl = new URL(response.headers.get('location') || '', safeUrl);
+      await this.assertSafeFetchUrl(nextUrl.toString());
+      throw new BadRequestException('网页读取不跟随重定向，请直接使用最终 URL');
+    }
     const html = await response.text();
     if (!response.ok) throw new BadRequestException(`网页读取失败: ${response.status}`);
     const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim() ?? url;
@@ -356,7 +368,79 @@ export class ToolsService {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, maxChars);
-    return JSON.stringify({ url, title, text }, null, 2);
+    return JSON.stringify({ url: safeUrl.toString(), title, text }, null, 2);
+  }
+
+  private assertCodeRunnerEnabled(): void {
+    if (process.env.ENABLE_CODE_RUNNER_TOOLS !== 'true') {
+      throw new BadRequestException('代码执行工具默认禁用，请由管理员显式开启 ENABLE_CODE_RUNNER_TOOLS=true');
+    }
+  }
+
+  private async assertSafeFetchUrl(rawUrl: string): Promise<URL> {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new BadRequestException('URL 格式无效');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new BadRequestException('URL 必须以 http:// 或 https:// 开头');
+    }
+    if (parsed.username || parsed.password) {
+      throw new BadRequestException('URL 不允许包含认证信息');
+    }
+    const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80);
+    if (![80, 443].includes(port)) {
+      throw new BadRequestException('URL 只允许访问 80 或 443 端口');
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'localhost' || host.endsWith('.localhost')) {
+      throw new BadRequestException('不允许访问 localhost');
+    }
+    const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true }).catch(() => []);
+    if (addresses.length === 0) {
+      throw new BadRequestException('URL 主机无法解析');
+    }
+    for (const item of addresses) {
+      if (this.isBlockedAddress(item.address)) {
+        throw new BadRequestException('不允许访问内网、本机或链路本地地址');
+      }
+    }
+    return parsed;
+  }
+
+  private isBlockedAddress(address: string): boolean {
+    const version = isIP(address);
+    if (version === 4) {
+      const parts = address.split('.').map(Number);
+      const [a, b] = parts;
+      return (
+        a === 0 ||
+        a === 10 ||
+        a === 127 ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 100 && b >= 64 && b <= 127) ||
+        a >= 224
+      );
+    }
+    if (version === 6) {
+      const normalized = address.toLowerCase();
+      return (
+        normalized === '::1' ||
+        normalized === '::' ||
+        normalized.startsWith('fc') ||
+        normalized.startsWith('fd') ||
+        normalized.startsWith('fe80:') ||
+        normalized.startsWith('::ffff:127.') ||
+        normalized.startsWith('::ffff:10.') ||
+        normalized.startsWith('::ffff:192.168.') ||
+        normalized.startsWith('::ffff:169.254.')
+      );
+    }
+    return true;
   }
 
   private extractExpression(input: string): string {

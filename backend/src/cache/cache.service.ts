@@ -13,14 +13,14 @@ export class CacheService {
   constructor(private readonly db: DatabaseService) {}
 
   /** Look up cached response by semantic similarity */
-  async lookup(query: string, model: string): Promise<CacheEntry | null> {
+  async lookup(userId: string, query: string, model: string): Promise<CacheEntry | null> {
     const hash = queryHash(query);
     const conn = this.db.connection;
 
     // First try exact hash match
     const exactRow = await conn
-      .prepare('SELECT * FROM semantic_cache WHERE query_hash = ? AND model = ? ORDER BY last_hit_at DESC LIMIT 1')
-      .get(hash, model);
+      .prepare('SELECT * FROM semantic_cache WHERE user_id = ? AND query_hash = ? AND model = ? ORDER BY last_hit_at DESC LIMIT 1')
+      .get(userId, hash, model);
     const exact = exactRow ? this.mapEntry(exactRow) : undefined;
 
     if (exact) {
@@ -37,8 +37,8 @@ export class CacheService {
 
     // Fuzzy lookup: check recent entries for the same model
     const recentRows = await conn
-      .prepare('SELECT * FROM semantic_cache WHERE model = ? ORDER BY last_hit_at DESC LIMIT 50')
-      .all(model);
+      .prepare('SELECT * FROM semantic_cache WHERE user_id = ? AND model = ? ORDER BY last_hit_at DESC LIMIT 50')
+      .all(userId, model);
     const recent = (recentRows as unknown[]).map((row) => this.mapEntry(row));
 
     for (const entry of recent) {
@@ -57,6 +57,7 @@ export class CacheService {
 
   /** Store a new response in cache */
   async store(
+    userId: string,
     query: string,
     model: string,
     response: string,
@@ -66,10 +67,10 @@ export class CacheService {
     const hash = queryHash(query);
     await this.db.connection
       .prepare(
-        `INSERT INTO semantic_cache (id, query_hash, query_text, model, response, tokens_saved, cost_saved, hit_count, created_at, last_hit_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))`,
+        `INSERT INTO semantic_cache (id, user_id, query_hash, query_text, model, response, tokens_saved, cost_saved, hit_count, created_at, last_hit_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))`,
       )
-      .run(randomUUID(), hash, query, model, response, tokensSaved, costSaved);
+      .run(randomUUID(), userId, hash, query, model, response, tokensSaved, costSaved);
   }
 
   /** Get cache statistics */

@@ -63,7 +63,7 @@ export class ChatController {
 
     // Check semantic cache for both stream and non-stream
     if (queryText) {
-      const cached = await this.cacheService.lookup(queryText, payload.model);
+      const cached = await this.cacheService.lookup(user.id, queryText, payload.model);
       if (cached) {
         if (payload.stream) {
           // Stream the cached response as SSE
@@ -155,7 +155,7 @@ export class ChatController {
       if (queryText && generatedText) {
         const tokensSaved = finalUsage.total_tokens;
         const costSaved = 0; // Actual cost is already charged, cache is for future savings
-        this.cacheService.store(queryText, payload.model, generatedText, tokensSaved, costSaved).catch(() => {});
+        this.cacheService.store(user.id, queryText, payload.model, generatedText, tokensSaved, costSaved).catch(() => {});
       }
 
       res.end();
@@ -174,7 +174,7 @@ export class ChatController {
     const replyContent = completion.choices?.[0]?.message?.content ?? '';
     if (queryText && replyContent) {
       const tokens = (completion.usage?.total_tokens) ?? 0;
-      this.cacheService.store(queryText, payload.model, replyContent, tokens, 0).catch(() => {});
+      this.cacheService.store(user.id, queryText, payload.model, replyContent, tokens, 0).catch(() => {});
     }
 
     res.json(completion);

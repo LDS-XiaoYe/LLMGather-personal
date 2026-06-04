@@ -51,5 +51,63 @@ const mdRenderer = new Marked({
 });
 
 export function renderMarkdown(text: string): string {
-  return mdRenderer.parse(text) as string;
+  return sanitizeMarkdownHtml(mdRenderer.parse(text) as string);
+}
+
+function sanitizeMarkdownHtml(html: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const blockedTags = new Set([
+    'script',
+    'style',
+    'iframe',
+    'object',
+    'embed',
+    'link',
+    'meta',
+    'form',
+    'input',
+    'button',
+    'textarea',
+    'select',
+    'option',
+    'svg',
+    'math',
+  ]);
+  const allowedUriAttrs = new Set(['href', 'src']);
+  const safeUrl = (value: string, tagName: string): boolean => {
+    const trimmed = value.trim();
+    if (!trimmed) return true;
+    if (trimmed.startsWith('#') || trimmed.startsWith('/')) return true;
+    try {
+      const url = new URL(trimmed, window.location.origin);
+      if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:') return true;
+      return tagName === 'img' && url.protocol === 'data:' && /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(trimmed);
+    } catch {
+      return false;
+    }
+  };
+
+  for (const element of Array.from(doc.body.querySelectorAll('*'))) {
+    const tagName = element.tagName.toLowerCase();
+    if (blockedTags.has(tagName)) {
+      element.remove();
+      continue;
+    }
+    for (const attr of Array.from(element.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on') || name === 'style' || name === 'srcdoc') {
+        element.removeAttribute(attr.name);
+        continue;
+      }
+      if (allowedUriAttrs.has(name) && !safeUrl(attr.value, tagName)) {
+        element.removeAttribute(attr.name);
+      }
+    }
+    if (tagName === 'a') {
+      element.setAttribute('rel', 'noopener noreferrer');
+      element.setAttribute('target', '_blank');
+    }
+  }
+  return doc.body.innerHTML;
 }

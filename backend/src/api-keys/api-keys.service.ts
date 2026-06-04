@@ -65,14 +65,17 @@ export class ApiKeysService {
     await db.prepare('DELETE FROM api_keys WHERE id = ?').run(keyId);
   }
 
-  /** 通过 raw key 验证并返回 userId（用于中转 API 认证） */
-  async validateKey(rawKey: string): Promise<string | null> {
+  /** 通过 raw key 验证并返回用户身份（用于中转 API 认证） */
+  async validateKey(rawKey: string): Promise<{ userId: string; username: string; role: string } | null> {
     if (!rawKey || !rawKey.startsWith('sk-')) return null;
     const keyHash = this.hashKey(rawKey);
     const db = this.databaseService.connection;
     const row = await db.prepare(
-      'SELECT user_id as userId FROM api_keys WHERE key_hash = ?',
-    ).get(keyHash) as { userId: string } | undefined;
-    return row?.userId ?? null;
+      `SELECT ak.user_id as userId, COALESCE(u.username, '') as username, COALESCE(u.role, 'user') as role
+       FROM api_keys ak
+       LEFT JOIN users u ON u.id = ak.user_id
+       WHERE ak.key_hash = ?`,
+    ).get(keyHash) as { userId: string; username: string; role: string } | undefined;
+    return row ?? null;
   }
 }

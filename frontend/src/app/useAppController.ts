@@ -2458,10 +2458,20 @@ export function useAppController() {
 
   async function createDefaultWorkflow() {
     // 默认生成知识库问答DAG
-    const template = dagTemplates[0];
+    applyWorkflowDagTemplate(dagTemplates[0]);
+  }
+
+  function applyWorkflowDagTemplate(template: any) {
+    if (!template) {
+      status.value = '未找到可用的 DAG 模板';
+      return;
+    }
     applyDagTemplate(template, workflowCanvasNodes.value, (nodes) => {
       workflowCanvasNodes.value = nodes;
     });
+    workflowCanvasConnecting.value = '';
+    activeWorkflowRun.value = null;
+    status.value = `已应用模板: ${template.name || 'DAG 模板'}`;
   }
 
   async function createTeamFromForm() {
@@ -6012,6 +6022,7 @@ export function useAppController() {
     dagTemplates,
     getDagNodeInfo,
     applyDagTemplate,
+    applyWorkflowDagTemplate,
     availableTools,
     knowledgeBases,
     agentMemories,

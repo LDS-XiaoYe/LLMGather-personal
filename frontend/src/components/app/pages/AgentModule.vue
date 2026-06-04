@@ -38,7 +38,7 @@ const agentPageTab = bind(app, 'agentPageTab');
 const dagNodeCategories = bind(app, 'dagNodeCategories');
 const dagTemplates = bind(app, 'dagTemplates');
 const getDagNodeInfo = bind(app, 'getDagNodeInfo');
-const applyDagTemplate = bind(app, 'applyDagTemplate');
+const applyWorkflowDagTemplate = bind(app, 'applyWorkflowDagTemplate');
 const availableTools = bind(app, 'availableTools');
 const knowledgeBases = bind(app, 'knowledgeBases');
 const agentMemories = bind(app, 'agentMemories');
@@ -119,6 +119,15 @@ const workflowCanvasNodes = bind(app, 'workflowCanvasNodes');
 const workflowCanvasConnecting = bind(app, 'workflowCanvasConnecting');
 const workflowCanvasSaving = bind(app, 'workflowCanvasSaving');
 const workflowCanvasEdges = bind(app, 'workflowCanvasEdges');
+const workflowConnectingNode = vueComputed(() => {
+  const node = workflowCanvasNodes.value.find((item: any) => item.id === workflowCanvasConnecting.value);
+  if (!node) return null;
+  const info = unref(getDagNodeInfo)?.(node.type);
+  return {
+    ...node,
+    label: node.name || info?.label || node.type,
+  };
+});
 const agentPublicEndpoint = bind(app, 'agentPublicEndpoint');
 const agentApiEndpoint = bind(app, 'agentApiEndpoint');
 const agentGuideCards = bind(app, 'agentGuideCards');
@@ -963,7 +972,7 @@ const chatModels = bind(app, 'chatModels');
                       <span>{{ workflowCanvasNodes.length }} 个节点</span>
                     </div>
                     <div class="dag-actions">
-                      <el-dropdown @command="(cmd: string) => applyDagTemplate(dagTemplates.find(t => t.id === cmd)!)">
+                      <el-dropdown @command="(cmd: string) => applyWorkflowDagTemplate(dagTemplates.find(t => t.id === cmd))">
                         <el-button size="small" type="primary" plain>
                           模板 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
                         </el-button>
@@ -979,9 +988,12 @@ const chatModels = bind(app, 'chatModels');
                       <el-button size="small" type="primary" :loading="workflowCanvasSaving" :disabled="workflowCanvasNodes.length === 0" @click="saveWorkflowCanvas()">
                         保存 DAG
                       </el-button>
-                      <el-button size="small" @click="workflowCanvasConnecting = ''">取消连线</el-button>
                       <el-button size="small" @click="workflowCanvasNodes = []">清空</el-button>
                     </div>
+                  </div>
+                  <div v-if="workflowConnectingNode" class="dag-connection-status">
+                    <span>正在从 {{ workflowConnectingNode.label }} 连线</span>
+                    <el-button size="small" text type="primary" @click="workflowCanvasConnecting = ''">取消</el-button>
                   </div>
                   
                   <div class="dag-workbench">
@@ -1056,7 +1068,7 @@ const chatModels = bind(app, 'chatModels');
                             </div>
                             <div class="dag-node-actions" @pointerdown.stop>
                               <el-button size="small" text @click="connectWorkflowNode(node.id)">
-                                {{ workflowCanvasConnecting ? '设为目标' : '连线' }}
+                                {{ workflowCanvasConnecting === node.id ? '取消' : workflowCanvasConnecting ? '设为目标' : '连线' }}
                               </el-button>
                               <el-button size="small" text @click="openDagNodeConfig(node)">配置</el-button>
                               <el-button size="small" text type="danger" @click="removeWorkflowCanvasNode(node.id)">删除</el-button>

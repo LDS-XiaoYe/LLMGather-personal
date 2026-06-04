@@ -204,7 +204,7 @@ export class AdminService {
   async listBillingLedger(
     page = 1,
     pageSize = 50,
-    filters?: { userId?: string; model?: string; fromDate?: string; toDate?: string },
+    filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
   ): Promise<{ data: AdminBillingRow[]; total: number }> {
     const db = this.databaseService.connection;
     const offset = (page - 1) * pageSize;
@@ -212,9 +212,9 @@ export class AdminService {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
-    if (filters?.userId) {
-      conditions.push('bl.user_id = ?');
-      params.push(filters.userId);
+    if (filters?.username) {
+      conditions.push('u.username LIKE ?');
+      params.push(`%${filters.username}%`);
     }
     if (filters?.model) {
       conditions.push('bl.model = ?');
@@ -232,7 +232,10 @@ export class AdminService {
     const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
 
     const { total } = await db.prepare(
-      `SELECT COUNT(*) as total FROM billing_ledger bl${whereClause}`,
+      `SELECT COUNT(*) as total
+       FROM billing_ledger bl
+       LEFT JOIN users u ON u.id = bl.user_id
+       ${whereClause}`,
     ).get(...params) as { total: number };
 
     params.push(pageSize, offset);
@@ -382,14 +385,14 @@ export class AdminService {
   }
 
   async exportBillingCsv(
-    filters?: { userId?: string; model?: string; fromDate?: string; toDate?: string },
+    filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
   ): Promise<string> {
     const db = this.databaseService.connection;
 
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
-    if (filters?.userId) { conditions.push('bl.user_id = ?'); params.push(filters.userId); }
+    if (filters?.username) { conditions.push('u.username LIKE ?'); params.push(`%${filters.username}%`); }
     if (filters?.model) { conditions.push('bl.model = ?'); params.push(filters.model); }
     if (filters?.fromDate) { conditions.push('bl.created_at >= ?'); params.push(filters.fromDate); }
     if (filters?.toDate) { conditions.push('bl.created_at <= ?'); params.push(filters.toDate); }

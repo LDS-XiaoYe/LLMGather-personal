@@ -35,7 +35,7 @@ const adminUsersSearch = bind(app, 'adminUsersSearch');
 const adminBilling = bind(app, 'adminBilling');
 const adminBillingTotal = bind(app, 'adminBillingTotal');
 const adminBillingPage = bind(app, 'adminBillingPage');
-const adminBillingFilterUserId = bind(app, 'adminBillingFilterUserId');
+const adminBillingFilterUsername = bind(app, 'adminBillingFilterUsername');
 const adminBillingFilterModel = bind(app, 'adminBillingFilterModel');
 const adminEditUserDialog = bind(app, 'adminEditUserDialog');
 const adminEditUserCredits = bind(app, 'adminEditUserCredits');
@@ -293,7 +293,7 @@ const getModelTags = bind(app, 'getModelTags');
                 </el-table-column>
                 <el-table-column label="操作" width="60" fixed="right" align="center">
                   <template #default="{ row }">
-                    <el-dropdown trigger="click" @command="(cmd: string) => { if (cmd === 'edit') openEditUser(row); else if (cmd === 'billing') viewUserBilling(row.id); else if (cmd === 'pwd') openResetPassword(row); else if (cmd === 'delete') handleDeleteUser(row.id); }">
+                    <el-dropdown trigger="click" @command="(cmd: string) => { if (cmd === 'edit') openEditUser(row); else if (cmd === 'billing') viewUserBilling(row.username); else if (cmd === 'pwd') openResetPassword(row); else if (cmd === 'delete') handleDeleteUser(row.id); }">
                       <el-button :icon="MoreFilled" link type="primary" />
                       <template #dropdown>
                         <el-dropdown-menu>
@@ -321,7 +321,7 @@ const getModelTags = bind(app, 'getModelTags');
             <!-- Billing Tab -->
             <el-tab-pane label="计费明细" name="billing">
               <div class="admin-toolbar" style="flex-wrap:wrap;gap:8px">
-                <el-input v-model="adminBillingFilterUserId" placeholder="用户ID" clearable style="width: 180px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
+                <el-input v-model="adminBillingFilterUsername" placeholder="用户名" clearable style="width: 180px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
                 <el-input v-model="adminBillingFilterModel" placeholder="模型" clearable style="width: 140px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
                 <el-date-picker v-model="adminBillingFromDate" type="date" placeholder="开始日期" value-format="YYYY-MM-DD" style="width:150px" clearable @change="loadAdminBillingWithDates()" />
                 <el-date-picker v-model="adminBillingToDate" type="date" placeholder="结束日期" value-format="YYYY-MM-DD" style="width:150px" clearable @change="loadAdminBillingWithDates()" />

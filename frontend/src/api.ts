@@ -1521,11 +1521,11 @@ export async function fetchAdminTodayStats(baseUrl = defaultBaseUrl): Promise<To
 }
 
 export async function fetchAdminBilling(
-  page = 1, pageSize = 50, filters?: { userId?: string; model?: string; fromDate?: string; toDate?: string },
+  page = 1, pageSize = 50, filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
   baseUrl = defaultBaseUrl,
 ): Promise<{ data: AdminBillingRow[]; total: number }> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-  if (filters?.userId) params.set('userId', filters.userId);
+  if (filters?.username) params.set('username', filters.username);
   if (filters?.model) params.set('model', filters.model);
   if (filters?.fromDate) params.set('fromDate', filters.fromDate);
   if (filters?.toDate) params.set('toDate', filters.toDate);
@@ -1535,11 +1535,11 @@ export async function fetchAdminBilling(
 }
 
 export function exportAdminBillingCsv(
-  filters?: { userId?: string; model?: string; fromDate?: string; toDate?: string },
+  filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
   baseUrl = defaultBaseUrl,
 ): void {
   const params = new URLSearchParams();
-  if (filters?.userId) params.set('userId', filters.userId);
+  if (filters?.username) params.set('username', filters.username);
   if (filters?.model) params.set('model', filters.model);
   if (filters?.fromDate) params.set('fromDate', filters.fromDate);
   if (filters?.toDate) params.set('toDate', filters.toDate);

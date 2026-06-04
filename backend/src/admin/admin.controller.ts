@@ -120,26 +120,26 @@ export class AdminController {
   async listBilling(
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
-    @Query('userId') userId?: string,
+    @Query('username') username?: string,
     @Query('model') model?: string,
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
   ) {
     const p = Math.max(1, Number(page) || 1);
     const ps = Math.min(200, Math.max(1, Number(pageSize) || 50));
-    return this.adminService.listBillingLedger(p, ps, { userId, model, fromDate, toDate });
+    return this.adminService.listBillingLedger(p, ps, { username, model, fromDate, toDate });
   }
 
   /** GET /v1/admin/billing/export — export billing data as CSV */
   @Get('billing/export')
   async exportBillingCsv(
-    @Query('userId') userId: string,
+    @Query('username') username: string,
     @Query('model') model: string,
     @Query('fromDate') fromDate: string,
     @Query('toDate') toDate: string,
     @Res() res: Response,
   ) {
-    const csv = await this.adminService.exportBillingCsv({ userId, model, fromDate, toDate });
+    const csv = await this.adminService.exportBillingCsv({ username, model, fromDate, toDate });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename=billing-export.csv');
     res.send(csv);

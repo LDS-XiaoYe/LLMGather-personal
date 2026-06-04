@@ -842,7 +842,8 @@ export function useAppController() {
   const adminBilling = ref<AdminBillingRow[]>([]);
   const adminBillingTotal = ref(0);
   const adminBillingPage = ref(1);
-  const adminBillingFilterUserId = ref('');
+  const adminBillingFilterUsername = ref('');
+  const adminBillingFilterUserId = adminBillingFilterUsername;
   const adminBillingFilterModel = ref('');
   const adminEditUserDialog = ref(false);
   const adminEditUserId = ref('');
@@ -3713,8 +3714,8 @@ export function useAppController() {
 
   async function loadAdminBilling() {
     try {
-      const filters: { userId?: string; model?: string; fromDate?: string; toDate?: string } = {};
-      if (adminBillingFilterUserId.value) filters.userId = adminBillingFilterUserId.value;
+      const filters: { username?: string; model?: string; fromDate?: string; toDate?: string } = {};
+      if (adminBillingFilterUsername.value) filters.username = adminBillingFilterUsername.value;
       if (adminBillingFilterModel.value) filters.model = adminBillingFilterModel.value;
       if (adminBillingFromDate.value) filters.fromDate = adminBillingFromDate.value;
       if (adminBillingToDate.value) filters.toDate = adminBillingToDate.value;
@@ -3900,8 +3901,8 @@ export function useAppController() {
 
   let modelChartInstance: echarts.ECharts | null = null;
 
-  function viewUserBilling(userId: string) {
-    adminBillingFilterUserId.value = userId;
+  function viewUserBilling(username: string) {
+    adminBillingFilterUsername.value = username;
     adminBillingPage.value = 1;
     adminTab.value = 'billing';
     loadAdminBilling();
@@ -3935,8 +3936,8 @@ export function useAppController() {
   }
 
   function handleExportBillingCsv() {
-    const filters: { userId?: string; model?: string; fromDate?: string; toDate?: string } = {};
-    if (adminBillingFilterUserId.value) filters.userId = adminBillingFilterUserId.value;
+    const filters: { username?: string; model?: string; fromDate?: string; toDate?: string } = {};
+    if (adminBillingFilterUsername.value) filters.username = adminBillingFilterUsername.value;
     if (adminBillingFilterModel.value) filters.model = adminBillingFilterModel.value;
     if (adminBillingFromDate.value) filters.fromDate = adminBillingFromDate.value;
     if (adminBillingToDate.value) filters.toDate = adminBillingToDate.value;
@@ -6271,6 +6272,7 @@ export function useAppController() {
     adminBilling,
     adminBillingTotal,
     adminBillingPage,
+    adminBillingFilterUsername,
     adminBillingFilterUserId,
     adminBillingFilterModel,
     adminEditUserDialog,

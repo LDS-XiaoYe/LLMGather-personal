@@ -33,8 +33,8 @@ const STOP_WORDS = new Set([
   '没有', '看', '好', '自己', '这', '那', '吗', '呢', '吧', '啊',
 ]);
 
-function normalize(text: string): string[] {
-  return text
+function normalize(text: string | null | undefined): string[] {
+  return String(text ?? '')
     .toLowerCase()
     .replace(/[^\w一-鿿\s]/g, ' ')
     .split(/\s+/)
@@ -67,7 +67,7 @@ function levenshtein(a: string, b: string): number {
 }
 
 /** Composite similarity score */
-export function similarityScore(query1: string, query2: string): number {
+export function similarityScore(query1: string | null | undefined, query2: string | null | undefined): number {
   const tokens1 = normalize(query1);
   const tokens2 = normalize(query2);
 
@@ -84,7 +84,7 @@ export function similarityScore(query1: string, query2: string): number {
 }
 
 /** Simple hash for DB lookup */
-export function queryHash(text: string): string {
+export function queryHash(text: string | null | undefined): string {
   let hash = 0;
   const norm = normalize(text).join(' ');
   for (let i = 0; i < norm.length; i++) {

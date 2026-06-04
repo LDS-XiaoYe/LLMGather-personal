@@ -61,9 +61,13 @@ describe('GeminiProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=gemini-test-key',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
     );
     expect(init.method).toBe('POST');
+    expect(init.headers).toMatchObject({
+      'Content-Type': 'application/json',
+      'x-goog-api-key': 'gemini-test-key',
+    });
 
     const body = JSON.parse(String(init.body));
     expect(body).toMatchObject({
@@ -74,7 +78,7 @@ describe('GeminiProvider', () => {
           role: 'user',
           parts: [
             { text: 'Describe this image.' },
-            { inline_data: { mime_type: 'image/png', data: 'abc123' } },
+            { inlineData: { mimeType: 'image/png', data: 'abc123' } },
           ],
         },
       ],
@@ -84,13 +88,82 @@ describe('GeminiProvider', () => {
     expect(result.usage).toEqual({ prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 });
   });
 
+  it('maps multi-turn messages, thinking config, safety, structured output, and tools', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'done' }] }, finishReason: 'STOP' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    global.fetch = fetchMock;
+
+    await makeProvider().chatCompletion({
+      model: 'gemini-3.5-flash',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: 'Hi there' },
+        { role: 'user', content: 'Use a tool if needed' },
+      ],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'lookup',
+          description: 'Lookup data',
+          parameters: { type: 'object', properties: { q: { type: 'string' } } },
+        },
+      }],
+      tool_choice: { type: 'function', function: { name: 'lookup' } },
+      extra_body: {
+        thinking_config: { thinking_level: 'medium', include_thoughts: true },
+        safety_settings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }],
+        response_mime_type: 'application/json',
+        response_schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+        cached_content: 'cachedContents/test-cache',
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({
+      systemInstruction: { parts: [{ text: 'System prompt' }] },
+      contents: [
+        { role: 'user', parts: [{ text: 'Hello' }] },
+        { role: 'model', parts: [{ text: 'Hi there' }] },
+        { role: 'user', parts: [{ text: 'Use a tool if needed' }] },
+      ],
+      generationConfig: {
+        thinkingConfig: { thinkingLevel: 'medium', includeThoughts: true },
+        responseMimeType: 'application/json',
+        responseSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+      },
+      safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }],
+      tools: [{
+        functionDeclarations: [{
+          name: 'lookup',
+          description: 'Lookup data',
+          parameters: { type: 'object', properties: { q: { type: 'string' } } },
+        }],
+      }],
+      toolConfig: {
+        functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['lookup'] },
+      },
+      cachedContent: 'cachedContents/test-cache',
+    });
+    expect(body.generationConfig.thinkingConfig.thinking_level).toBeUndefined();
+    expect(body.generationConfig.thinkingConfig.include_thoughts).toBeUndefined();
+  });
+
   it('wraps Gemini SSE chunks as OpenAI-compatible stream chunks', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
+    const fetchMock = jest.fn().mockResolvedValue(
       new Response(
         'data: {"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}\n\n',
         { status: 200 },
       ),
     );
+    global.fetch = fetchMock;
 
     const response = await makeProvider().chatCompletionStream({
       model: 'gemini-3.5-flash',
@@ -99,9 +172,41 @@ describe('GeminiProvider', () => {
     });
 
     const text = await response.text();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse',
+    );
+    expect(init.headers).toMatchObject({
+      'Content-Type': 'application/json',
+      'x-goog-api-key': 'gemini-test-key',
+      Accept: 'text/event-stream',
+    });
     expect(text).toContain('"object":"chat.completion.chunk"');
     expect(text).toContain('"content":"hi"');
     expect(text).toContain('data: [DONE]');
+  });
+
+  it('emits Gemini thought summary parts as reasoning_content in streams', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      new Response(
+        'data: {"candidates":[{"content":{"parts":[{"text":"Thinking...","thought":true},{"text":"Answer."}]}}]}\n\n',
+        { status: 200 },
+      ),
+    );
+
+    const response = await makeProvider().chatCompletionStream({
+      model: 'gemini-3.5-flash',
+      messages: [{ role: 'user', content: 'reason' }],
+      stream: true,
+      extra_body: { enable_thinking: true },
+    });
+
+    const text = await response.text();
+    expect(text).toContain('"reasoning_content":"Thinking..."');
+    expect(text).toContain('"content":"Answer."');
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.generationConfig.thinkingConfig).toEqual({ includeThoughts: true });
   });
 
   it('parses CRLF SSE chunks and trailing events without a blank-line terminator', async () => {
@@ -158,6 +263,17 @@ describe('GeminiProvider', () => {
       model: 'gemini-3.5-flash',
       messages: [{ role: 'user', content: 'hello' }],
     })).rejects.toThrow('finish reason: SAFETY');
+  });
+
+  it('surfaces Gemini provider error details from non-JSON responses', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      new Response('upstream html error', { status: 500, statusText: 'Internal Server Error' }),
+    );
+
+    await expect(makeProvider().chatCompletion({
+      model: 'gemini-3.5-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    })).rejects.toThrow('upstream html error');
   });
 
   it('emits an explanatory stream chunk when Gemini stream has no text', async () => {

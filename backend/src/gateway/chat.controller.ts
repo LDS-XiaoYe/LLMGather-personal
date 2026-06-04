@@ -147,7 +147,7 @@ export class ChatController {
       const updatedUser = await this.billingService.chargeForCompletion(
         user.id, payload, finalUsage, 'chat',
       );
-      writeSse(res, { billing: { creditBalance: updatedUser.credits.toFixed(6) } });
+      void updatedUser;
 
       // Store in cache
       if (queryText && generatedText) {
@@ -245,7 +245,7 @@ export class ChatController {
       finalUsage.total_tokens = finalUsage.prompt_tokens + finalUsage.completion_tokens;
 
       const updatedUser = await this.billingService.chargeForCompletion(user.id, payload, finalUsage, 'chat');
-      writeSse(res, { billing: { creditBalance: updatedUser.credits.toFixed(6) } });
+      void updatedUser;
 
       const latencyMs = Date.now() - startedAt;
       this.routerService.recordCompletion(decision.selectedModel, latencyMs, true, decision.intent);

@@ -119,7 +119,7 @@ export class RelayController {
         finalUsage,
         'openai',
       );
-      writeSse(res, { billing: { creditBalance: updatedUser.credits.toFixed(6) } });
+      void updatedUser;
       res.end();
       return;
     }

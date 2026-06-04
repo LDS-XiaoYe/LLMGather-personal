@@ -18,9 +18,10 @@ export class CacheService {
     const conn = this.db.connection;
 
     // First try exact hash match
-    const exact = await conn
+    const exactRow = await conn
       .prepare('SELECT * FROM semantic_cache WHERE query_hash = ? AND model = ? ORDER BY last_hit_at DESC LIMIT 1')
-      .get(hash, model) as CacheEntry | undefined;
+      .get(hash, model);
+    const exact = exactRow ? this.mapEntry(exactRow) : undefined;
 
     if (exact) {
       // Verify similarity still meets threshold
@@ -30,14 +31,15 @@ export class CacheService {
         await conn
           .prepare('UPDATE semantic_cache SET hit_count = hit_count + 1, last_hit_at = CURRENT_TIMESTAMP(3) WHERE id = ?')
           .run(exact.id);
-        return this.mapEntry(exact);
+        return exact;
       }
     }
 
     // Fuzzy lookup: check recent entries for the same model
-    const recent = await conn
+    const recentRows = await conn
       .prepare('SELECT * FROM semantic_cache WHERE model = ? ORDER BY last_hit_at DESC LIMIT 50')
-      .all(model) as unknown as CacheEntry[];
+      .all(model);
+    const recent = (recentRows as unknown[]).map((row) => this.mapEntry(row));
 
     for (const entry of recent) {
       const sim = similarityScore(query, entry.queryText);
@@ -46,7 +48,7 @@ export class CacheService {
         await conn
           .prepare('UPDATE semantic_cache SET hit_count = hit_count + 1, last_hit_at = CURRENT_TIMESTAMP(3) WHERE id = ?')
           .run(entry.id);
-        return this.mapEntry(entry);
+        return entry;
       }
     }
 

@@ -19,8 +19,11 @@ export interface GeminiProviderConfig {
 
 type GeminiPart =
   | { text: string }
-  | { inline_data: { mime_type: string; data: string } }
-  | { file_data: { mime_type?: string; file_uri: string } };
+  | { text: string; thought: true }
+  | { inlineData: { mimeType: string; data: string } }
+  | { fileData: { mimeType?: string; fileUri: string } }
+  | { functionCall: { name: string; args?: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: Record<string, unknown> } };
 
 type GeminiContent = {
   role?: 'user' | 'model';
@@ -29,7 +32,7 @@ type GeminiContent = {
 
 type GeminiResponse = {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
+    content?: { parts?: Array<{ text?: string; thought?: boolean; functionCall?: { name?: string; args?: Record<string, unknown> } }> };
     finishReason?: string;
     safetyRatings?: Array<{ category?: string; probability?: string }>;
   }>;
@@ -44,6 +47,32 @@ type GeminiResponse = {
   };
   error?: { message?: string };
 };
+
+type GeminiRequest = {
+  contents: GeminiContent[];
+  systemInstruction?: { parts: GeminiPart[] };
+  generationConfig?: Record<string, unknown>;
+  safetySettings?: unknown[];
+  tools?: unknown[];
+  toolConfig?: Record<string, unknown>;
+  cachedContent?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  return values.find(isRecord);
+}
+
+function firstValue<T = unknown>(record: Record<string, unknown> | undefined, ...keys: string[]): T | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    if (record[key] !== undefined) return record[key] as T;
+  }
+  return undefined;
+}
 
 export class GeminiProvider implements ProviderAdapter {
   public readonly providerName: string;
@@ -105,11 +134,14 @@ export class GeminiProvider implements ProviderAdapter {
       try {
         const model = encodeURIComponent(this.normalizeModel(request.model));
         const method = stream ? 'streamGenerateContent?alt=sse' : 'generateContent';
-        const separator = method.includes('?') ? '&' : '?';
-        const url = `${this.config.baseUrl.replace(/\/$/, '')}/models/${model}:${method}${separator}key=${encodeURIComponent(currentKey)}`;
+        const url = `${this.config.baseUrl.replace(/\/$/, '')}/models/${model}:${method}`;
         const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': currentKey,
+            ...(stream ? { Accept: 'text/event-stream' } : {}),
+          },
           body: JSON.stringify(this.toGeminiRequest(request)),
           signal: controller.signal,
         });
@@ -145,52 +177,273 @@ export class GeminiProvider implements ProviderAdapter {
     throw new ServiceUnavailableException(`${this.providerName} request failed: ${lastError}`);
   }
 
-  private toGeminiRequest(request: ChatCompletionRequest): Record<string, unknown> {
+  private toGeminiRequest(request: ChatCompletionRequest): GeminiRequest {
+    const extra = isRecord(request.extra_body) ? request.extra_body : {};
+    const rawGemini = firstRecord(extra.gemini, extra.google, extra.geminiRequest);
     const systemInstructionParts: GeminiPart[] = [];
     const contents: GeminiContent[] = [];
 
     for (const message of request.messages) {
       const parts = this.toGeminiParts(message);
+      if (!parts.length) continue;
       if (message.role === 'system') {
         systemInstructionParts.push(...parts);
         continue;
       }
       contents.push({
-        role: message.role === 'assistant' ? 'model' : 'user',
+        role: this.toGeminiRole(message.role),
         parts,
       });
     }
 
+    if (!contents.length && systemInstructionParts.length) {
+      contents.push({ role: 'user', parts: systemInstructionParts.splice(0) });
+    }
+    if (!contents.length) {
+      contents.push({ role: 'user', parts: [{ text: '' }] });
+    }
+
+    const generationConfig = this.toGenerationConfig(request, extra, rawGemini);
+    const payload: GeminiRequest = { contents };
+    const rawSystemInstruction = firstValue<{ parts?: GeminiPart[] }>(rawGemini, 'systemInstruction', 'system_instruction')
+      || firstValue<{ parts?: GeminiPart[] }>(extra, 'systemInstruction', 'system_instruction');
+    if (rawSystemInstruction) payload.systemInstruction = rawSystemInstruction as { parts: GeminiPart[] };
+    else if (systemInstructionParts.length) payload.systemInstruction = { parts: systemInstructionParts };
+    if (Object.keys(generationConfig).length) payload.generationConfig = generationConfig;
+
+    const safetySettings = firstValue<unknown[]>(rawGemini, 'safetySettings', 'safety_settings')
+      || firstValue<unknown[]>(extra, 'safetySettings', 'safety_settings');
+    if (Array.isArray(safetySettings)) payload.safetySettings = safetySettings;
+
+    const tools = firstValue<unknown[]>(rawGemini, 'tools') || firstValue<unknown[]>(extra, 'tools') || this.toGeminiTools(request);
+    if (Array.isArray(tools) && tools.length) payload.tools = tools;
+
+    const toolConfig = firstRecord(
+      firstValue(rawGemini, 'toolConfig', 'tool_config'),
+      firstValue(extra, 'toolConfig', 'tool_config'),
+      this.toGeminiToolConfig(request),
+    );
+    if (toolConfig && Object.keys(toolConfig).length) payload.toolConfig = toolConfig;
+
+    const cachedContent = firstValue<string>(rawGemini, 'cachedContent', 'cached_content')
+      || firstValue<string>(extra, 'cachedContent', 'cached_content');
+    if (cachedContent) payload.cachedContent = cachedContent;
+
+    return payload;
+  }
+
+  private toGeminiParts(message: ChatMessage): GeminiPart[] {
+    const parts: GeminiPart[] = [];
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        const name = call.function?.name;
+        if (!name) continue;
+        parts.push({
+          functionCall: {
+            name,
+            args: this.safeJsonObject(call.function?.arguments),
+          },
+        });
+      }
+    }
+    if (message.role === 'tool') {
+      const name = message.name || message.tool_call_id || 'tool_result';
+      return [{
+        functionResponse: {
+          name,
+          response: this.toolResponseObject(message.content),
+        },
+      }];
+    }
+    if (typeof message.content === 'string') {
+      if (message.content) parts.push({ text: message.content });
+      return parts;
+    }
+    parts.push(...message.content.map((part) => this.toGeminiPart(part)).filter((part): part is GeminiPart => Boolean(part)));
+    return parts;
+  }
+
+  private toGeminiRole(role: ChatMessage['role']): 'user' | 'model' {
+    return role === 'assistant' ? 'model' : 'user';
+  }
+
+  private toGenerationConfig(
+    request: ChatCompletionRequest,
+    extra: Record<string, unknown>,
+    rawGemini?: Record<string, unknown>,
+  ): Record<string, unknown> {
     const generationConfig: Record<string, unknown> = {};
     if (request.temperature !== undefined) generationConfig.temperature = request.temperature;
     if (request.top_p !== undefined) generationConfig.topP = request.top_p;
     if (request.max_tokens !== undefined) generationConfig.maxOutputTokens = request.max_tokens;
 
-    const payload: Record<string, unknown> = { contents };
-    if (systemInstructionParts.length) payload.systemInstruction = { parts: systemInstructionParts };
-    if (Object.keys(generationConfig).length) payload.generationConfig = generationConfig;
-    return payload;
+    const directMappings: Array<[string, string[]]> = [
+      ['topK', ['topK', 'top_k']],
+      ['candidateCount', ['candidateCount', 'candidate_count']],
+      ['responseMimeType', ['responseMimeType', 'response_mime_type']],
+      ['responseSchema', ['responseSchema', 'response_schema']],
+      ['seed', ['seed']],
+      ['presencePenalty', ['presencePenalty', 'presence_penalty']],
+      ['frequencyPenalty', ['frequencyPenalty', 'frequency_penalty']],
+      ['responseLogprobs', ['responseLogprobs', 'response_logprobs']],
+      ['logprobs', ['logprobs']],
+      ['mediaResolution', ['mediaResolution', 'media_resolution']],
+    ];
+    for (const [geminiKey, aliases] of directMappings) {
+      const value = firstValue(rawGemini, ...aliases) ?? firstValue(extra, ...aliases);
+      if (value !== undefined) generationConfig[geminiKey] = value;
+    }
+
+    const stopSequences = firstValue<string[] | string>((request as unknown as Record<string, unknown>), 'stop')
+      ?? firstValue<string[] | string>(rawGemini, 'stopSequences', 'stop_sequences')
+      ?? firstValue<string[] | string>(extra, 'stopSequences', 'stop_sequences');
+    if (typeof stopSequences === 'string') generationConfig.stopSequences = [stopSequences];
+    else if (Array.isArray(stopSequences)) generationConfig.stopSequences = stopSequences;
+
+    const rawGenerationConfig = firstRecord(
+      firstValue(rawGemini, 'generationConfig', 'generation_config'),
+      firstValue(extra, 'generationConfig', 'generation_config'),
+    );
+    if (rawGenerationConfig) Object.assign(generationConfig, rawGenerationConfig);
+
+    const thinkingConfig = this.toThinkingConfig(extra, rawGemini);
+    if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+    return generationConfig;
   }
 
-  private toGeminiParts(message: ChatMessage): GeminiPart[] {
-    if (typeof message.content === 'string') return [{ text: message.content }];
-    return message.content.map((part) => this.toGeminiPart(part));
+  private toThinkingConfig(
+    extra: Record<string, unknown>,
+    rawGemini?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    const raw = firstRecord(
+      firstValue(rawGemini, 'thinkingConfig', 'thinking_config'),
+      firstValue(extra, 'thinkingConfig', 'thinking_config'),
+    );
+    const thinkingConfig: Record<string, unknown> = {};
+    const thinkingLevel = firstValue<string>(raw, 'thinkingLevel', 'thinking_level')
+      ?? firstValue<string>(rawGemini, 'thinkingLevel', 'thinking_level')
+      ?? firstValue<string>(extra, 'thinkingLevel', 'thinking_level');
+    const thinkingBudget = firstValue<number>(raw, 'thinkingBudget', 'thinking_budget')
+      ?? firstValue<number>(rawGemini, 'thinkingBudget', 'thinking_budget')
+      ?? firstValue<number>(extra, 'thinkingBudget', 'thinking_budget');
+    const includeThoughts = firstValue<boolean>(raw, 'includeThoughts', 'include_thoughts')
+      ?? firstValue<boolean>(rawGemini, 'includeThoughts', 'include_thoughts')
+      ?? firstValue<boolean>(extra, 'includeThoughts', 'include_thoughts');
+
+    if (raw) {
+      for (const [key, value] of Object.entries(raw)) {
+        if (['thinkingLevel', 'thinking_level', 'thinkingBudget', 'thinking_budget', 'includeThoughts', 'include_thoughts'].includes(key)) {
+          continue;
+        }
+        thinkingConfig[key] = value;
+      }
+    }
+    if (thinkingLevel !== undefined) thinkingConfig.thinkingLevel = thinkingLevel;
+    if (thinkingBudget !== undefined) thinkingConfig.thinkingBudget = thinkingBudget;
+    if (includeThoughts !== undefined) thinkingConfig.includeThoughts = includeThoughts;
+    if (extra.enable_thinking === true && thinkingConfig.includeThoughts === undefined) {
+      thinkingConfig.includeThoughts = true;
+    }
+    return Object.keys(thinkingConfig).length ? thinkingConfig : undefined;
   }
 
-  private toGeminiPart(part: ContentPart): GeminiPart {
-    if (part.type === 'text') return { text: part.text };
+  private toGeminiTools(request: ChatCompletionRequest): unknown[] {
+    if (!Array.isArray(request.tools) || request.tools.length === 0) return [];
+    const functionDeclarations = request.tools
+      .filter((tool) => tool?.type === 'function' && tool.function?.name)
+      .map((tool) => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters,
+      }));
+    return functionDeclarations.length ? [{ functionDeclarations }] : [];
+  }
+
+  private toGeminiToolConfig(request: ChatCompletionRequest): Record<string, unknown> | undefined {
+    const choice = request.tool_choice;
+    if (!choice) return undefined;
+    if (choice === 'none') return { functionCallingConfig: { mode: 'NONE' } };
+    if (choice === 'auto') return { functionCallingConfig: { mode: 'AUTO' } };
+    if (isRecord(choice) && isRecord(choice.function) && typeof choice.function.name === 'string') {
+      return {
+        functionCallingConfig: {
+          mode: 'ANY',
+          allowedFunctionNames: [choice.function.name],
+        },
+      };
+    }
+    return undefined;
+  }
+
+  private safeJsonObject(value: unknown): Record<string, unknown> {
+    if (isRecord(value)) return value;
+    if (typeof value !== 'string' || !value.trim()) return {};
+    try {
+      const parsed = JSON.parse(value);
+      return isRecord(parsed) ? parsed : { value: parsed };
+    } catch {
+      return { value };
+    }
+  }
+
+  private toolResponseObject(content: ChatMessage['content']): Record<string, unknown> {
+    if (typeof content !== 'string') return { content };
+    return this.safeJsonObject(content);
+  }
+
+  private toGeminiPart(part: ContentPart | Record<string, unknown>): GeminiPart | null {
+    if (!isRecord(part)) return null;
+    if (part.type === 'text') {
+      const text = typeof part.text === 'string' ? part.text : '';
+      return text ? { text } : null;
+    }
+    if ('inlineData' in part || 'fileData' in part || 'functionCall' in part || 'functionResponse' in part) {
+      return part as GeminiPart;
+    }
+    if ('inline_data' in part && isRecord(part.inline_data)) {
+      return {
+        inlineData: {
+          mimeType: String(part.inline_data.mime_type || part.inline_data.mimeType || ''),
+          data: String(part.inline_data.data || ''),
+        },
+      };
+    }
+    if ('file_data' in part && isRecord(part.file_data)) {
+      return {
+        fileData: {
+          mimeType: part.file_data.mime_type || part.file_data.mimeType ? String(part.file_data.mime_type || part.file_data.mimeType) : undefined,
+          fileUri: String(part.file_data.file_uri || part.file_data.fileUri || ''),
+        },
+      };
+    }
+    if (part.type !== 'image_url' || !isRecord(part.image_url) || typeof part.image_url.url !== 'string') return null;
     const url = part.image_url.url;
     if (url.startsWith('data:')) {
       const match = url.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) return { inline_data: { mime_type: match[1], data: match[2] } };
+      if (match) return { inlineData: { mimeType: match[1], data: match[2] } };
     }
-    return { file_data: { file_uri: url } };
+    if (!url) return null;
+    return { fileData: { fileUri: url } };
   }
 
   private toOpenAiResponse(request: ChatCompletionRequest, data: GeminiResponse): ChatCompletionResponse {
     const candidate = data.candidates?.[0];
-    const content = candidate?.content?.parts?.map((part) => part.text || '').join('') || '';
-    if (!content) {
+    const parts = candidate?.content?.parts || [];
+    const content = parts.filter((part) => !part.thought).map((part) => part.text || '').join('');
+    const reasoningContent = parts.filter((part) => part.thought).map((part) => part.text || '').join('');
+    const toolCalls = parts
+      .map((part, index) => part.functionCall?.name
+        ? {
+            id: `gemini-call-${index}-${Date.now()}`,
+            type: 'function' as const,
+            function: {
+              name: part.functionCall.name,
+              arguments: JSON.stringify(part.functionCall.args || {}),
+            },
+          }
+        : null)
+      .filter((call): call is NonNullable<typeof call> => Boolean(call));
+    if (!content && !toolCalls.length) {
       throw new BadGatewayException(this.describeEmptyResponse(data));
     }
     const usage = data.usageMetadata;
@@ -201,8 +454,13 @@ export class GeminiProvider implements ProviderAdapter {
       model: request.model,
       choices: [{
         index: 0,
-        message: { role: 'assistant', content },
-        finish_reason: this.normalizeFinishReason(candidate?.finishReason),
+        message: {
+          role: 'assistant',
+          content,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+          ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+        },
+        finish_reason: toolCalls.length ? 'tool_calls' : this.normalizeFinishReason(candidate?.finishReason),
       }],
       usage: usage
         ? {
@@ -221,19 +479,19 @@ export class GeminiProvider implements ProviderAdapter {
     const providerName = this.providerName;
     const describeEmptyResponse = this.describeEmptyResponse.bind(this);
     let buffer = '';
-    let emittedText = false;
+    let emittedAny = false;
     let lastEmptyReason = '';
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const reader = response.body!.getReader();
-        const emitChunk = (content: string, finishReason: string | null = null) => {
+        const emitChunk = (delta: Record<string, unknown>, finishReason: string | null = null) => {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({
             id: `gemini-${Date.now()}`,
             object: 'chat.completion.chunk',
             created: Math.floor(Date.now() / 1000),
             model,
-            choices: [{ index: 0, delta: { content }, finish_reason: finishReason }],
+            choices: [{ index: 0, delta, finish_reason: finishReason }],
           })}\n\n`));
         };
         const parseEventPayloads = (event: string): string[] => {
@@ -252,18 +510,35 @@ export class GeminiProvider implements ProviderAdapter {
             const data = JSON.parse(dataLine) as GeminiResponse;
             if (data.error?.message) {
               lastEmptyReason = data.error.message;
-              emitChunk(`Gemini 请求失败：${data.error.message}`, 'error');
-              emittedText = true;
+              emitChunk({ content: `Gemini 请求失败：${data.error.message}` }, 'error');
+              emittedAny = true;
               return;
             }
             const candidate = data.candidates?.[0];
             if (!candidate?.content?.parts?.length || candidate.finishReason || data.promptFeedback?.blockReason) {
               lastEmptyReason = describeEmptyResponse(data);
             }
-            const text = candidate?.content?.parts?.map((part) => part.text || '').join('') || '';
-            if (!text) return;
-            emittedText = true;
-            emitChunk(text);
+            for (const part of candidate?.content?.parts || []) {
+              if (part.functionCall?.name) {
+                emittedAny = true;
+                emitChunk({
+                  tool_calls: [{
+                    index: 0,
+                    id: `gemini-call-${Date.now()}`,
+                    type: 'function',
+                    function: {
+                      name: part.functionCall.name,
+                      arguments: JSON.stringify(part.functionCall.args || {}),
+                    },
+                  }],
+                }, 'tool_calls');
+                continue;
+              }
+              const text = part.text || '';
+              if (!text) continue;
+              emittedAny = true;
+              emitChunk(part.thought ? { reasoning_content: text } : { content: text });
+            }
           } catch {
             // Ignore malformed SSE fragments.
           }
@@ -287,9 +562,9 @@ export class GeminiProvider implements ProviderAdapter {
           }
           const trailing = buffer.trim();
           if (trailing) handleEvent(trailing);
-          if (!emittedText) {
+          if (!emittedAny) {
             const message = lastEmptyReason || `${providerName} returned an empty response`;
-            emitChunk(message, 'error');
+            emitChunk({ content: message }, 'error');
           }
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           controller.close();
@@ -312,8 +587,15 @@ export class GeminiProvider implements ProviderAdapter {
   private async buildProviderException(response: Response): Promise<BadGatewayException> {
     let detail = response.statusText;
     try {
-      const data = (await response.json()) as GeminiResponse;
-      if (data.error?.message) detail = data.error.message;
+      const text = await response.text();
+      if (text) {
+        try {
+          const data = JSON.parse(text) as GeminiResponse;
+          detail = data.error?.message || text.slice(0, 500);
+        } catch {
+          detail = text.slice(0, 500);
+        }
+      }
     } catch {}
     return new BadGatewayException(`${this.providerName} request failed (${response.status}): ${detail}`);
   }

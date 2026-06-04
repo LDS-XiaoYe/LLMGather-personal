@@ -567,7 +567,7 @@ export function useAppController() {
           if (!target) return null;
           return {
             id: `${node.id}-${nextId}`,
-            x1: node.x + 170,
+            x1: node.x + 190,
             y1: node.y + 38,
             x2: target.x,
             y2: target.y + 38,
@@ -1206,8 +1206,14 @@ export function useAppController() {
       if (!knowledgeDocForm.value.kbId && bases[0]) knowledgeDocForm.value.kbId = bases[0].id;
       if (!ragLabForm.value.kbId && bases[0]) ragLabForm.value.kbId = bases[0].id;
       if (!activeTeamId.value && teamItems[0]) activeTeamId.value = teamItems[0].id;
-      if (!activeWorkflowId.value && workflowItems[0]) activeWorkflowId.value = workflowItems[0].id;
-      else syncWorkflowCanvasFromSelected();
+      if (activeWorkflowId.value && workflowItems.some((item) => item.id === activeWorkflowId.value)) {
+        syncWorkflowCanvasFromSelected();
+      } else {
+        activeWorkflowId.value = '';
+        workflowCanvasNodes.value = [];
+        workflowCanvasConnecting.value = '';
+        activeWorkflowRun.value = null;
+      }
       await loadAgentMemories();
       await loadAgentEvaluations();
       await loadAgentVersions();

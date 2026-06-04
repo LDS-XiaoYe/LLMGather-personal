@@ -136,7 +136,7 @@ export class RouterController {
       const updatedUser = await this.billingService.chargeForCompletion(
         user.id, routedPayload, finalUsage, 'chat',
       );
-      writeSse(res, { billing: { creditBalance: updatedUser.credits.toFixed(6) } });
+      void updatedUser;
 
       // Record routing metric
       const latencyMs = Date.now() - startedAt;

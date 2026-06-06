@@ -122,6 +122,7 @@ const activeDagNode = bind(app, 'activeDagNode');
 const dagNodeConfig = bind(app, 'dagNodeConfig');
 const agentForm = bind(app, 'agentForm');
 const memoryForm = bind(app, 'memoryForm');
+const editingMemoryId = bind(app, 'editingMemoryId');
 const skillForm = bind(app, 'skillForm');
 const teamForm = bind(app, 'teamForm');
 const mcpForm = bind(app, 'mcpForm');
@@ -187,6 +188,10 @@ const evaluateActiveAgentRun = bind(app, 'evaluateActiveAgentRun');
 const formatAgentDate = bind(app, 'formatAgentDate');
 const formatStepMetadata = bind(app, 'formatStepMetadata');
 const createAgentMemory = bind(app, 'createAgentMemory');
+const startEditAgentMemory = bind(app, 'startEditAgentMemory');
+const resetMemoryEditor = bind(app, 'resetMemoryEditor');
+const saveAgentMemory = bind(app, 'saveAgentMemory');
+const deleteAgentMemory = bind(app, 'deleteAgentMemory');
 const createSkillFromForm = bind(app, 'createSkillFromForm');
 const exportSkillAsMarkdown = bind(app, 'exportSkillAsMarkdown');
 const agentExportPreview = bind(app, 'agentExportPreview');
@@ -872,20 +877,32 @@ const chatModels = bind(app, 'chatModels');
                       type="primary"
                       plain
                       :disabled="!agentForm.id"
-                      @click="showMemoryCreateDialog = true"
+                      @click="resetMemoryEditor(); showMemoryCreateDialog = true"
                     >
                       写入记忆
                     </el-button>
                   </div>
                   <div v-for="memory in agentMemories" :key="memory.id" class="agent-resource-item">
                     <div class="agent-resource-title">
-                      <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
-                      <span>重要性 {{ memory.importance }}</span>
+                      <div>
+                        <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
+                        <span style="margin-left:6px">重要性 {{ memory.importance }}</span>
+                      </div>
+                      <div>
+                        <el-button size="small" text @click="startEditAgentMemory(memory)">编辑</el-button>
+                        <el-button size="small" text type="danger" @click="deleteAgentMemory(memory)">删除</el-button>
+                      </div>
                     </div>
                     <div class="agent-resource-content">{{ memory.content }}</div>
                   </div>
                   <el-empty v-if="agentMemories.length === 0" description="暂无记忆" :image-size="72" />
-                  <el-dialog v-model="showMemoryCreateDialog" title="写入长期记忆" width="560px" :close-on-click-modal="false">
+                  <el-dialog
+                    v-model="showMemoryCreateDialog"
+                    :title="editingMemoryId ? '编辑长期记忆' : '写入长期记忆'"
+                    width="560px"
+                    :close-on-click-modal="false"
+                    @closed="resetMemoryEditor()"
+                  >
                     <el-form label-position="top">
                       <el-form-item label="记忆内容" required>
                         <el-input v-model="memoryForm.content" type="textarea" :rows="4" resize="vertical" placeholder="写入一条长期记忆" />
@@ -900,9 +917,9 @@ const chatModels = bind(app, 'chatModels');
                         type="primary"
                         :loading="memorySaving"
                         :disabled="!memoryForm.content.trim() || !agentForm.id"
-                        @click="createAgentMemory()"
+                        @click="saveAgentMemory()"
                       >
-                        写入
+                        {{ editingMemoryId ? '保存' : '写入' }}
                       </el-button>
                     </template>
                   </el-dialog>

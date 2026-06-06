@@ -4175,13 +4175,12 @@ html.dark .tts-history-item {
 }
 
 .driving-hud {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 12px;
-  flex-wrap: wrap;
 }
 
 .hud-item {
-  flex: 1;
   min-width: 100px;
   background: var(--el-fill-color-light, #f8fafc);
   border: 1px solid var(--el-border-color-light, #e2e8f0);
@@ -4240,6 +4239,36 @@ html.dark .tts-history-item {
   color: var(--el-text-color-regular, #374151);
 }
 
+.driving-mode-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  gap: 6px;
+}
+
+.driving-mode-group .el-radio-button {
+  width: 100%;
+}
+
+.driving-mode-group .el-radio-button__inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 8px !important;
+  white-space: normal;
+  line-height: 1.2;
+  box-shadow: none !important;
+}
+
+.driving-mode-group .el-radio-button:first-child .el-radio-button__inner,
+.driving-mode-group .el-radio-button:last-child .el-radio-button__inner {
+  border-radius: 8px !important;
+}
+
 .control-actions {
   display: flex;
   gap: 8px;
@@ -4250,10 +4279,101 @@ html.dark .tts-history-item {
   width: 100%;
 }
 
+.driving-model-card {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--el-border-color-light, #e2e8f0);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter, #f8fafc);
+}
+
+.driving-model-card span {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.driving-model-card strong {
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  overflow-wrap: anywhere;
+}
+
+.driving-perception-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light, #e2e8f0);
+  border-left: 4px solid #22c55e;
+  border-radius: 8px;
+  background: var(--el-fill-color-light, #f8fafc);
+}
+
+.driving-perception-card.warning {
+  border-left-color: #f59e0b;
+}
+
+.driving-perception-card.critical {
+  border-left-color: #ef4444;
+}
+
+.driving-perception-card strong {
+  color: var(--el-text-color-primary);
+}
+
+.driving-perception-card span {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.45;
+}
+
+.openpilot-state-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.openpilot-state-grid > div {
+  border: 1px solid var(--el-border-color-light, #e2e8f0);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--el-fill-color-blank, #fff);
+}
+
+.openpilot-state-grid span,
+.openpilot-state-grid strong {
+  display: block;
+}
+
+.openpilot-state-grid span {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.openpilot-state-grid strong {
+  margin-top: 2px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 .driving-analysis {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.driving-decision-output {
+  margin: 0;
+  max-height: 92px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-light, #e2e8f0);
+  border-radius: 8px;
+  background: var(--el-fill-color-light, #f8fafc);
+  color: var(--el-text-color-primary);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .analysis-item {

@@ -38,3 +38,26 @@ export class SearchMemoryDto {
   @MaxLength(36)
   agentId?: string;
 }
+
+export class UpdateMemoryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  namespace?: string;
+
+  @IsOptional()
+  @IsIn(['fact', 'preference', 'procedure', 'episode'])
+  memoryType?: 'fact' | 'preference' | 'procedure' | 'episode';
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(12000)
+  content?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  importance?: number;
+}

@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../database/database.service';
-import { CreateMemoryDto } from './dto/memory.dto';
+import { CreateMemoryDto, UpdateMemoryDto } from './dto/memory.dto';
 
 export interface MemoryItem {
   id: string;
@@ -93,6 +93,32 @@ export class MemoryService {
       .slice(0, limit);
   }
 
+  async update(userId: string, id: string, dto: UpdateMemoryDto): Promise<MemoryItem> {
+    const current = await this.getOwned(userId, id);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE memories
+       SET namespace = ?, memory_type = ?, content = ?, importance = ?, updated_at = ?
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(
+      dto.namespace?.trim() || current.namespace,
+      dto.memoryType ?? current.memoryType,
+      dto.content?.trim() || current.content,
+      dto.importance ?? current.importance,
+      now,
+      id,
+      userId,
+    );
+    return this.getOwned(userId, id);
+  }
+
+  async remove(userId: string, id: string): Promise<void> {
+    await this.getOwned(userId, id);
+    await this.databaseService.connection.prepare(
+      `UPDATE memories SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(this.databaseService.now(), this.databaseService.now(), id, userId);
+  }
+
   async autoRemember(userId: string, agentId: string, input: string, output: string): Promise<MemoryItem | null> {
     const content = `用户任务: ${input.slice(0, 500)}\nAgent 结果摘要: ${output.slice(0, 800)}`;
     if (content.trim().length < 20) return null;
@@ -103,6 +129,17 @@ export class MemoryService {
       content,
       importance: 2,
     });
+  }
+
+  private async getOwned(userId: string, id: string): Promise<MemoryItem> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, agent_id as agentId, namespace, memory_type as memoryType,
+              content, importance, metadata, created_at as createdAt, updated_at as updatedAt
+       FROM memories
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).get(id, userId) as unknown as MemoryRow | undefined;
+    if (!row) throw new NotFoundException('记忆不存在或无权访问');
+    return this.mapMemory(row);
   }
 
   private terms(query: string): string[] {

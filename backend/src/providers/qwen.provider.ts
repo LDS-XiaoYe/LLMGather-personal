@@ -37,7 +37,7 @@ export class QwenProvider extends OpenAiCompatibleProvider {
           'qwen-vl-plus-latest',
           'qwen2.5-14b-instruct',
           'qwen2.5-7b-instruct',
-          'qwen3.6-plus',
+          'qwen3.7-max',
         ].join(',')
       )
         .split(',')

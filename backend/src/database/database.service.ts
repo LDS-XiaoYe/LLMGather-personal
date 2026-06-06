@@ -33,11 +33,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.seedBuiltinTools();
     await this.seedDefaultAgentSkills();
     await this.seedProviderConfigs();
+    await this.ensureQwen37ProviderConfig();
     await this.ensureGeminiProviderConfig();
     await this.seedSystemSettings();
     await this.ensureGeminiSystemSettings();
+    await this.ensureQwen37SystemSettings();
     await this.seedRouterRules();
     await this.ensureGeminiRouterRules();
+    await this.ensureQwen37RouterRules();
     console.log('[Database] Tables & seed data ready.');
   }
 
@@ -1112,7 +1115,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         providerName: 'qwen',
         displayName: 'Qwen (通义千问)',
         baseUrl: process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        models: 'qwen-turbo,qwen-plus,qwen-max,qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,qwen2.5-14b-instruct,qwen2.5-7b-instruct,qwen3.6-plus',
+        models: 'qwen-turbo,qwen-plus,qwen-max,qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,qwen2.5-14b-instruct,qwen2.5-7b-instruct,qwen3.7-max',
         modelPrefix: null,
         timeoutMs: 25000,
         retryCount: 2,
@@ -1202,6 +1205,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     console.log(`[Database] Seeded ${defaults.length} default provider configs.`);
   }
 
+  private async ensureQwen37ProviderConfig(): Promise<void> {
+    const existing = (await this.adapter
+      .prepare('SELECT id, models FROM provider_configs WHERE provider_name = ?')
+      .get('qwen')) as { id: string; models: string } | undefined;
+    if (!existing?.models) return;
+
+    const values = existing.models.split(',').map((item) => item.trim()).filter(Boolean);
+    const next = Array.from(new Set(values
+      .map((model) => ['qwen3.6-plus', 'qwen-3.6-plus', 'qwen-3.7-max'].includes(model) ? 'qwen3.7-max' : model)
+      .concat('qwen3.7-max')));
+    if (next.join(',') === values.join(',')) return;
+    await this.adapter
+      .prepare('UPDATE provider_configs SET models = ?, updated_at = ? WHERE id = ?')
+      .run(next.join(','), dbNow(), existing.id);
+  }
+
   private async ensureGeminiProviderConfig(): Promise<void> {
     const existing = (await this.adapter
       .prepare('SELECT id, models FROM provider_configs WHERE provider_name = ?')
@@ -1246,7 +1265,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       'qwen2.5-vl-72b-instruct': ['language', 'vision'],
       'qwen2.5-14b-instruct': ['language'],
       'qwen2.5-7b-instruct': ['language'],
-      'qwen3.6-plus': ['language', 'vision'],
+      'qwen3.7-max': ['language', 'vision'],
       'glm-5': ['language'],
       'glm-5.1': ['language'],
       'glm-4.5-air': ['language'],
@@ -1269,7 +1288,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ['page_models_chat', '*', '聊天页面可用模型（* 表示全部，或逗号分隔模型 ID）'],
       ['page_models_battle', '*', 'Battle 页面可用模型'],
       ['page_models_group', '*', '群组讨论参与模型（* 表示全部，或逗号分隔模型 ID）'],
-      ['page_models_vision', 'qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,qwen3.6-plus,kimi-k2.6,gui-plus,gemini-3.5-flash', '视觉理解页面可用模型'],
+      ['page_models_vision', 'qwen3.7-max,qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,kimi-k2.6,gui-plus,gemini-3.5-flash', '视觉理解页面可用模型'],
       ['page_models_tts', 'mimo-v2.5-tts,mimo-v2.5-tts-voicedesign,mimo-v2.5-tts-voiceclone', '语音生成页面可用模型'],
       ['model_tags', JSON.stringify(modelTags), '模型能力标签（JSON）：language=语言, vision=视觉, audio=音频'],
       // Runtime configuration keys (can be edited via管理后台)
@@ -1281,7 +1300,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ['model_tier_mapping', JSON.stringify({
         tier_budget: ['qwen-turbo','qwen2.5-7b-instruct','deepseek-r1-distill-qwen-7b','mimo-latest'],
         tier_mainstream: ['qwen-plus','qwen2.5-14b-instruct','deepseek-v3.2','deepseek-v4-flash','glm-4.5-air','MiniMax-M2.5','gui-plus'],
-        tier_flagship: ['qwen-max','qwen3.6-plus','glm-5','glm-5.1','deepseek-r1','deepseek-v4-pro','kimi-k2.6'],
+        tier_flagship: ['qwen-max','qwen3.7-max','glm-5','glm-5.1','deepseek-r1','deepseek-v4-pro','kimi-k2.6'],
         tier_super_flagship: [] as string[],
         tier_ultra: [] as string[],
         tier_vision: ['qwen-vl-plus-latest','qwen-vl-max-latest','qwen-vl-ocr-latest','qwen2.5-vl-7b-instruct','qwen2.5-vl-72b-instruct','gemini-3.5-flash'],
@@ -1306,7 +1325,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         tier_budget: 'qwen-turbo-latest, glm-4.5-flash, deepseek-v4-flash',
         tier_mainstream: 'qwen-plus-latest, glm-4.6, kimi-k2.6',
         tier_flagship: 'qwen-max-latest, deepseek-v4-pro, glm-4.5',
-        tier_super_flagship: 'qwen3.6-plus, gui-plus',
+        tier_super_flagship: 'qwen3.7-max, gui-plus',
         tier_ultra: 'qwen3.6-max',
         tier_vision: 'gemini-3.5-flash, qwen-vl-max-latest',
         tier_audio: 'qwen-audio-asr-latest, qwen-tts-latest',
@@ -1377,6 +1396,53 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async ensureQwen37SystemSettings(): Promise<void> {
+    const legacyModels = new Set(['qwen3.6-plus', 'qwen-3.6-plus', 'qwen-3.7-max']);
+    const nextModel = 'qwen3.7-max';
+    for (const key of ['page_models_vision', 'page_models_chat', 'page_models_battle', 'page_models_group']) {
+      await this.replaceLegacyModelInCsvSetting(key, legacyModels, nextModel);
+    }
+
+    const tagRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('model_tags')) as { value: string } | undefined;
+    if (tagRow?.value) {
+      try {
+        const tags = JSON.parse(tagRow.value) as Record<string, string[]>;
+        let changed = false;
+        for (const legacy of legacyModels) {
+          if (tags[legacy]) {
+            tags[nextModel] = Array.from(new Set([...(tags[nextModel] || []), ...tags[legacy], 'language', 'vision']));
+            delete tags[legacy];
+            changed = true;
+          }
+        }
+        if (!tags[nextModel]) {
+          tags[nextModel] = ['language', 'vision'];
+          changed = true;
+        }
+        if (changed) await this.updateSystemSetting('model_tags', JSON.stringify(tags));
+      } catch {}
+    }
+
+    const tierRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('model_tier_mapping')) as { value: string } | undefined;
+    if (tierRow?.value) {
+      try {
+        const tiers = JSON.parse(tierRow.value) as Record<string, string[]>;
+        let changed = false;
+        for (const [tier, models] of Object.entries(tiers)) {
+          const next = Array.from(new Set((models || []).map((model) => legacyModels.has(model) ? nextModel : model)));
+          if (JSON.stringify(next) !== JSON.stringify(models || [])) changed = true;
+          tiers[tier] = next;
+        }
+        changed = this.appendUnique(tiers, 'tier_flagship', [nextModel]) || changed;
+        if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
+      } catch {}
+    }
+  }
+
   private async seedRouterRules(): Promise<void> {
     const { count } = (await this.adapter
       .prepare('SELECT COUNT(*) as count FROM router_rules')
@@ -1387,10 +1453,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       coding: ['deepseek-v4-pro', 'deepseek-v4-flash', 'qwen-plus'],
       translation: ['qwen-max', 'qwen-plus', 'glm-5'],
       creative: ['qwen-max', 'kimi-k2.6', 'MiniMax-M2.5'],
-      reasoning: ['deepseek-r1', 'qwen3.6-plus', 'glm-5.1'],
+      reasoning: ['deepseek-r1', 'qwen3.7-max', 'glm-5.1'],
       vision: ['gemini-3.5-flash', 'qwen-vl-max-latest', 'qwen-vl-plus-latest'],
       summary: ['qwen-plus', 'glm-4.5-air', 'deepseek-v4-flash'],
-      data: ['deepseek-v4-pro', 'qwen3.6-plus', 'glm-5'],
+      data: ['deepseek-v4-pro', 'qwen3.7-max', 'glm-5'],
       general: ['qwen-plus', 'deepseek-v4-flash', 'glm-4.5-air'],
     };
 
@@ -1418,6 +1484,25 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     } catch {}
   }
 
+  private async ensureQwen37RouterRules(): Promise<void> {
+    const rows = (await this.adapter
+      .prepare('SELECT intent, models FROM router_rules')
+      .all()) as Array<{ intent: string; models: string }>;
+
+    for (const row of rows) {
+      try {
+        const models = JSON.parse(row.models) as string[];
+        const next = Array.from(new Set(models.map((model) =>
+          ['qwen3.6-plus', 'qwen-3.6-plus', 'qwen-3.7-max'].includes(model) ? 'qwen3.7-max' : model,
+        )));
+        if (JSON.stringify(next) === JSON.stringify(models)) continue;
+        await this.adapter
+          .prepare('UPDATE router_rules SET models = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE intent = ?')
+          .run(JSON.stringify(next), row.intent);
+      } catch {}
+    }
+  }
+
   private async appendModelsToCsvSetting(key: string, models: string[]): Promise<void> {
     const row = (await this.adapter
       .prepare('SELECT value FROM system_settings WHERE `key` = ?')
@@ -1438,6 +1523,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
     const next = Array.from(new Set([...values.filter((model) => !model.startsWith('gemini-')), ...models]));
+    if (next.join(',') === values.join(',')) return;
+    await this.updateSystemSetting(key, next.join(','));
+  }
+
+  private async replaceLegacyModelInCsvSetting(key: string, legacyModels: Set<string>, nextModel: string): Promise<void> {
+    const row = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get(key)) as { value: string } | undefined;
+    if (!row?.value || row.value.trim() === '*') return;
+
+    const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
+    const replaced = values.map((model) => legacyModels.has(model) ? nextModel : model);
+    const next = Array.from(new Set(replaced.includes(nextModel) ? replaced : [nextModel, ...replaced]));
     if (next.join(',') === values.join(',')) return;
     await this.updateSystemSetting(key, next.join(','));
   }

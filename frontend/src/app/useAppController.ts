@@ -23,6 +23,7 @@ import {
   deleteAdminUser,
   deleteAgent as apiDeleteAgent,
   deleteConversation,
+  deleteMemory as apiDeleteMemory,
   deleteSkill as apiDeleteSkill,
   evaluateAgentRun as apiEvaluateAgentRun,
   exportAdminBillingCsv,
@@ -84,6 +85,7 @@ import {
   topUp,
   updateAgent as apiUpdateAgent,
   updateAgentPublication as apiUpdateAgentPublication,
+  updateMemory as apiUpdateMemory,
   restoreAgentVersion as apiRestoreAgentVersion,
   testMcpServer as apiTestMcpServer,
   updateAdminBillingRule,
@@ -448,6 +450,7 @@ export function useAppController() {
     content: '',
     importance: 3,
   });
+  const editingMemoryId = ref('');
   const skillForm = ref({
     name: '',
     description: '',
@@ -789,8 +792,10 @@ export function useAppController() {
     if (!key) return;
     const saved = getStoredValue(key);
     const visions = visionModels.value;
-    if (saved && visions.some((m) => m.id === saved)) {
+    if (saved && saved !== 'qwen3.6-plus' && saved !== 'qwen-3.6-plus' && saved !== 'qwen-3.7-max' && visions.some((m) => m.id === saved)) {
       multimodalModel.value = saved;
+    } else if (visions.some((m) => m.id === DRIVING_VISION_MODEL)) {
+      multimodalModel.value = DRIVING_VISION_MODEL;
     } else if (visions.length > 0) {
       multimodalModel.value = visions[0].id;
     }
@@ -2373,6 +2378,63 @@ export function useAppController() {
       status.value = error instanceof Error ? error.message : '写入记忆失败';
     } finally {
       memorySaving.value = false;
+    }
+  }
+
+  function startEditAgentMemory(memory: MemoryItem) {
+    editingMemoryId.value = memory.id;
+    memoryForm.value = {
+      content: memory.content,
+      importance: memory.importance,
+    };
+    showMemoryCreateDialog.value = true;
+  }
+
+  function resetMemoryEditor() {
+    editingMemoryId.value = '';
+    memoryForm.value = { content: '', importance: 3 };
+  }
+
+  async function saveAgentMemory() {
+    if (editingMemoryId.value) {
+      const content = memoryForm.value.content.trim();
+      if (!content || memorySaving.value) return;
+      memorySaving.value = true;
+      try {
+        await apiUpdateMemory(editingMemoryId.value, {
+          content,
+          importance: memoryForm.value.importance,
+        }, backendBaseUrl.value);
+        showMemoryCreateDialog.value = false;
+        resetMemoryEditor();
+        await loadAgentMemories(agentForm.value.id);
+        status.value = '记忆已更新';
+      } catch (error) {
+        status.value = error instanceof Error ? error.message : '更新记忆失败';
+      } finally {
+        memorySaving.value = false;
+      }
+      return;
+    }
+    await createAgentMemory();
+  }
+
+  async function deleteAgentMemory(memory: MemoryItem) {
+    try {
+      await ElMessageBox.confirm(`确定删除这条长期记忆吗？\n\n${memory.content.slice(0, 120)}`, '删除记忆', {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      });
+    } catch {
+      return;
+    }
+    try {
+      await apiDeleteMemory(memory.id, backendBaseUrl.value);
+      agentMemories.value = agentMemories.value.filter((item) => item.id !== memory.id);
+      status.value = '记忆已删除';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '删除记忆失败';
     }
   }
 
@@ -5242,6 +5304,14 @@ export function useAppController() {
     }
     return models.value.filter((m) => getModelTags(m.id).includes('vision'));
   });
+  const DRIVING_VISION_MODEL = 'qwen3.7-max';
+
+  function preferredDrivingVisionModel(): string {
+    const visions = visionModels.value;
+    return visions.find((model) => model.id === DRIVING_VISION_MODEL)?.id
+      || visions[0]?.id
+      || selectedModel.value;
+  }
 
   /* ---------- TTS Page ---------- */
   const ttsText = ref('');
@@ -5281,13 +5351,75 @@ export function useAppController() {
   const drivingSpeed = ref(60);
   const drivingSteering = ref(0);
   const drivingAutoPilot = ref(true);
-  const drivingStats = ref({ fps: 0, objects: 0, laneDev: 0, distance: 0 });
+  const drivingStats = ref({
+    fps: 0,
+    objects: 0,
+    laneDev: 0,
+    distance: 0,
+    leadDistance: 999,
+    ttc: 99,
+    risk: 'nominal',
+    fcw: false,
+    ldw: false,
+  });
+  const drivingScenario = ref<'highway' | 'cutin' | 'construction' | 'curve' | 'night_rain'>('highway');
+  const drivingWeather = ref<'clear' | 'rain' | 'fog' | 'night'>('clear');
+  const drivingControlMode = ref<'vision' | 'hybrid' | 'openpilot'>('hybrid');
+  const drivingOpenPilotMode = ref(true);
+  const drivingScenarioOptions = [
+    { label: '高速巡航', value: 'highway' },
+    { label: '前车加塞', value: 'cutin' },
+    { label: '施工收窄', value: 'construction' },
+    { label: '弯道路段', value: 'curve' },
+    { label: '夜雨低能见', value: 'night_rain' },
+  ];
+  const drivingControlModeOptions = [
+    { label: '纯视觉模型', value: 'vision' },
+    { label: '视觉 + openpilot', value: 'hybrid' },
+    { label: '纯 openpilot', value: 'openpilot' },
+  ];
+  const drivingPerception = ref({
+    laneConfidence: 0.98,
+    leadDistance: 999,
+    leadSpeed: 0,
+    ttc: 99,
+    curvature: 0,
+    weather: 'clear',
+    alert: '巡航正常',
+  });
+  const drivingOpenPilotState = ref({
+    longState: 'pid' as 'off' | 'stopping' | 'starting' | 'pid',
+    laneChangeState: 'off' as 'off' | 'preLaneChange' | 'laneChangeStarting' | 'laneChangeFinishing',
+    desiredAccel: 0,
+    outputAccel: 0,
+    steerPid: 0,
+    steerIntegral: 0,
+    accelIntegral: 0,
+    fcwCounter: 0,
+  });
   let drivingAnimationId = 0;
   let drivingLastTime = 0;
   let drivingRoadOffset = 0;
-  interface DrivingObject { x: number; y: number; w: number; h: number; speed: number; color: string; type: string; lane: number; changingLane: boolean }
+  let drivingLastDisplayUpdate = 0;
+  let drivingLeadVehicle: DrivingObject | null = null;
+  let drivingStableRisk: 'nominal' | 'warning' | 'critical' = 'nominal';
+  let drivingRiskHoldFrames = 0;
+  let drivingOvertakeTargetLane: number | null = null;
+  let drivingOvertakeTargetX: number | null = null;
+  let drivingOvertakeUntil = 0;
+  let drivingLaneChangeHoldUntil = 0;
+  let drivingOvertakeLateralVelocity = 0;
+  interface DrivingObject { x: number; y: number; w: number; h: number; speed: number; color: string; type: string; lane: number; changingLane: boolean; behavior?: string }
   let drivingVehicles: DrivingObject[] = [];
   let drivingEgoX = 0;
+  const drivingFilteredPerception = {
+    laneConfidence: 0.98,
+    leadMeters: 999,
+    leadSpeed: 0,
+    ttc: 99,
+    curvature: 0,
+    laneDev: 0,
+  };
 
   // Image-text retrieval
   const retrievalQuery = ref('');
@@ -5327,7 +5459,7 @@ export function useAppController() {
     if (drivingRunning.value && drivingAiIntervalId) {
       clearInterval(drivingAiIntervalId);
       drivingAiIntervalId = setInterval(() => {
-        if (drivingRunning.value && isAuthenticated.value) analyzeDrivingScene();
+        if (drivingRunning.value && isAuthenticated.value && drivingControlMode.value !== 'openpilot') analyzeDrivingScene();
       }, drivingAiIntervalSec.value * 1000);
     }
   });
@@ -5337,6 +5469,13 @@ export function useAppController() {
       applyBuilderConfigs();
     }
   }, { deep: true });
+
+  function supportsDirectImageInput(modelId: string): boolean {
+    const normalized = modelId.toLowerCase();
+    if (!normalized) return true;
+    if (normalized.includes('vl') || normalized.includes('vision') || normalized.includes('gemini') || normalized.includes('gui')) return true;
+    return !/^qwen3(?:[.-]|$)/.test(normalized);
+  }
 
   /* ---------- Vision Page Handlers ---------- */
 
@@ -5568,7 +5707,27 @@ export function useAppController() {
     drivingRoadOffset = 0;
     drivingEgoX = 0;
     drivingLastTime = 0;
-    drivingStats.value = { fps: 0, objects: 0, laneDev: 0, distance: 0 };
+    drivingLastDisplayUpdate = 0;
+    drivingLeadVehicle = null;
+    drivingStableRisk = 'nominal';
+    drivingRiskHoldFrames = 0;
+    drivingOvertakeTargetLane = null;
+    drivingOvertakeTargetX = null;
+    drivingOvertakeUntil = 0;
+    drivingLaneChangeHoldUntil = 0;
+    drivingOvertakeLateralVelocity = 0;
+    Object.assign(drivingFilteredPerception, {
+      laneConfidence: 0.98,
+      leadMeters: 999,
+      leadSpeed: drivingSpeed.value,
+      ttc: 99,
+      curvature: 0,
+      laneDev: 0,
+    });
+    if (drivingScenario.value === 'night_rain') drivingWeather.value = 'night';
+    else if (drivingScenario.value === 'construction') drivingWeather.value = 'clear';
+    drivingStats.value = { fps: 0, objects: 0, laneDev: 0, distance: 0, leadDistance: 999, ttc: 99, risk: 'nominal', fcw: false, ldw: false };
+    drivingPerception.value = { laneConfidence: 0.98, leadDistance: 999, leadSpeed: 0, ttc: 99, curvature: 0, weather: drivingWeather.value, alert: '巡航正常' };
   }
 
   const LANE_COLORS = ['#e74c3c', '#f39c12', '#2ecc71', '#3498db', '#9b59b6', '#1abc9c'];
@@ -5581,8 +5740,8 @@ export function useAppController() {
 
   function spawnVehicle(canvasW: number, egoCX: number, egoLane: number) {
     const laneW = canvasW / 3;
-    // Prefer lanes away from ego
-    const laneWeights = [0, 1, 2].map(l => l === egoLane ? 1 : 3);
+    // Aggressive sim: put slower lead vehicles in ego lane often enough to force overtakes.
+    const laneWeights = [0, 1, 2].map(l => l === egoLane ? 4 : 2);
     const totalW = laneWeights.reduce((a, b) => a + b, 0);
     let r = Math.random() * totalW;
     let lane = 0;
@@ -5594,20 +5753,29 @@ export function useAppController() {
     const h = isTruck ? w * 2.5 : isMotorcycle ? w * 1.8 : w * 1.8;
     const cx = getLaneCenter(lane, canvasW) + (Math.random() - 0.5) * laneW * 0.15;
 
-    // Don't spawn on top of another vehicle just entering the scene
+    // Don't spawn on top of another vehicle just entering the scene.
     for (const v of drivingVehicles) {
       if (v.y < 0 && Math.abs(cx - (v.x + v.w / 2)) < laneW * 0.4) return;
     }
 
-    const baseSpeed = 35 + Math.random() * 75;
+    const sameLaneAsEgo = lane === egoLane;
+    const baseSpeed = sameLaneAsEgo
+      ? Math.max(24, drivingSpeed.value - (18 + Math.random() * 26))
+      : drivingScenario.value === 'cutin'
+      ? 35 + Math.random() * 35
+      : drivingScenario.value === 'construction'
+        ? 25 + Math.random() * 45
+        : 35 + Math.random() * 75;
     drivingVehicles.push({
-      x: cx - w / 2, y: -h - Math.random() * 350,
+      x: cx - w / 2,
+      y: sameLaneAsEgo ? -h - 70 - Math.random() * 130 : -h - Math.random() * 350,
       w, h,
       speed: baseSpeed,
       color: LANE_COLORS[Math.floor(Math.random() * LANE_COLORS.length)],
       type: isTruck ? 'truck' : isMotorcycle ? 'motorcycle' : 'car',
       lane,
       changingLane: false,
+      behavior: drivingScenario.value === 'cutin' && Math.random() < 0.35 ? 'cutin' : undefined,
     });
   }
 
@@ -5684,6 +5852,320 @@ export function useAppController() {
     ctx.restore();
   }
 
+  function clamp01(value: number) {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  function lowPass(prev: number, next: number, alpha: number) {
+    return prev + (next - prev) * clamp01(alpha);
+  }
+
+  function roundStep(value: number, step: number) {
+    return Math.round(value / step) * step;
+  }
+
+  function computeDrivingPerception(W: number, H: number, egoCX: number, egoCY: number, egoH: number, dt: number) {
+    const laneW = W / 3;
+    const egoLane = Math.max(0, Math.min(2, Math.floor(egoCX / laneW)));
+    const laneDev = ((egoCX % laneW + laneW) % laneW - laneW / 2);
+    const metersPerPx = 0.22;
+    const leadCandidates = drivingVehicles
+      .map((v) => {
+        const vcx = v.x + v.w / 2;
+        const vLane = Math.floor(vcx / laneW);
+        return {
+          vehicle: v,
+          vLane,
+          aheadPx: egoCY - (v.y + v.h),
+          lateralPx: Math.abs(vcx - egoCX),
+        };
+      })
+      .filter((item) => item.vLane === egoLane && item.aheadPx > 0 && item.lateralPx < laneW * 0.52)
+      .sort((a, b) => a.aheadPx - b.aheadPx);
+    const tracked = drivingLeadVehicle
+      ? leadCandidates.find((item) => item.vehicle === drivingLeadVehicle)
+      : undefined;
+    const nearest = leadCandidates[0];
+    if (tracked && nearest && nearest.vehicle !== tracked.vehicle) {
+      const trackedM = tracked.aheadPx * metersPerPx;
+      const nearestM = nearest.aheadPx * metersPerPx;
+      if (nearestM < trackedM - 8) drivingLeadVehicle = nearest.vehicle;
+    } else if (tracked) {
+      drivingLeadVehicle = tracked.vehicle;
+    } else if (nearest) {
+      drivingLeadVehicle = nearest.vehicle;
+    } else if (drivingLeadVehicle && !drivingVehicles.includes(drivingLeadVehicle)) {
+      drivingLeadVehicle = null;
+    } else if (!nearest) {
+      drivingLeadVehicle = null;
+    }
+
+    let leadDistancePx = 999;
+    let leadSpeed = drivingSpeed.value;
+    if (drivingLeadVehicle) {
+      const vcx = drivingLeadVehicle.x + drivingLeadVehicle.w / 2;
+      const vLane = Math.floor(vcx / laneW);
+      const aheadPx = egoCY - (drivingLeadVehicle.y + drivingLeadVehicle.h);
+      if (vLane === egoLane && aheadPx > 0 && Math.abs(vcx - egoCX) < laneW * 0.62) {
+        leadDistancePx = aheadPx;
+        leadSpeed = drivingLeadVehicle.speed;
+      } else {
+        drivingLeadVehicle = nearest?.vehicle || null;
+        if (nearest) {
+          leadDistancePx = nearest.aheadPx;
+          leadSpeed = nearest.vehicle.speed;
+        }
+      }
+    }
+
+    const rawLeadMeters = leadDistancePx === 999 ? 999 : Math.max(0, leadDistancePx * metersPerPx);
+    const rawClosingMps = Math.max(0, (drivingSpeed.value - leadSpeed) / 3.6);
+    const rawTtc = rawLeadMeters >= 999 || rawClosingMps < 0.4 ? 99 : rawLeadMeters / rawClosingMps;
+    const curvature = drivingScenario.value === 'curve' ? Math.sin(drivingRoadOffset / 90) * 0.55 : 0;
+    const visibilityPenalty = drivingWeather.value === 'fog' ? 0.22 : drivingWeather.value === 'rain' ? 0.12 : drivingWeather.value === 'night' ? 0.18 : 0;
+    const rawLaneConfidence = Math.max(0.42, Math.min(0.99, 0.97 - Math.abs(laneDev) / (laneW * 1.6) - visibilityPenalty - Math.abs(curvature) * 0.12));
+
+    const alphaFast = Math.min(0.22, dt / 0.55);
+    const alphaSlow = Math.min(0.14, dt / 0.9);
+    if (rawLeadMeters >= 999 && drivingFilteredPerception.leadMeters < 999) {
+      drivingFilteredPerception.leadMeters = lowPass(drivingFilteredPerception.leadMeters, 999, Math.min(0.04, dt / 2.4));
+    } else if (drivingFilteredPerception.leadMeters >= 998 && rawLeadMeters < 999) {
+      drivingFilteredPerception.leadMeters = rawLeadMeters;
+    } else {
+      drivingFilteredPerception.leadMeters = lowPass(drivingFilteredPerception.leadMeters, rawLeadMeters, alphaFast);
+    }
+    drivingFilteredPerception.leadSpeed = lowPass(drivingFilteredPerception.leadSpeed || leadSpeed, leadSpeed, alphaSlow);
+    drivingFilteredPerception.ttc = rawTtc >= 99 && drivingFilteredPerception.ttc < 99
+      ? lowPass(drivingFilteredPerception.ttc, 99, Math.min(0.04, dt / 2.4))
+      : lowPass(drivingFilteredPerception.ttc >= 99 && rawTtc < 99 ? rawTtc : drivingFilteredPerception.ttc, rawTtc, alphaSlow);
+    drivingFilteredPerception.curvature = lowPass(drivingFilteredPerception.curvature, curvature, alphaSlow);
+    drivingFilteredPerception.laneDev = lowPass(drivingFilteredPerception.laneDev, laneDev, alphaFast);
+    drivingFilteredPerception.laneConfidence = lowPass(drivingFilteredPerception.laneConfidence, rawLaneConfidence, alphaSlow);
+
+    const leadMeters = Math.min(999, drivingFilteredPerception.leadMeters);
+    const ttc = Math.min(99, drivingFilteredPerception.ttc);
+    const laneConfidence = drivingFilteredPerception.laneConfidence;
+    const stableLaneDev = drivingFilteredPerception.laneDev;
+    const closingMps = Math.max(0, (drivingSpeed.value - drivingFilteredPerception.leadSpeed) / 3.6);
+    const hardBrakeDistance = Math.max(5.5, egoH * metersPerPx * 1.05);
+    const fcw = (ttc < 1.25 && closingMps > 1.2)
+      || (leadMeters < hardBrakeDistance && closingMps > 2.2)
+      || (leadMeters < 3.8);
+    const ldw = Math.abs(stableLaneDev) > laneW * 0.3 || laneConfidence < 0.6;
+    const closeFollowing = (ttc < 3.0 && closingMps > 0.8) || leadMeters < Math.max(9, egoH * metersPerPx * 1.45);
+    const rawRisk: 'nominal' | 'warning' | 'critical' = fcw ? 'critical' : ldw || closeFollowing ? 'warning' : 'nominal';
+    if (rawRisk !== drivingStableRisk) {
+      drivingRiskHoldFrames += 1;
+      const threshold = rawRisk === 'critical' ? 4 : 10;
+      if (drivingRiskHoldFrames >= threshold) {
+        drivingStableRisk = rawRisk;
+        drivingRiskHoldFrames = 0;
+      }
+    } else {
+      drivingRiskHoldFrames = 0;
+    }
+    const risk = drivingStableRisk;
+    const alert = risk === 'critical'
+      ? 'FCW 前向碰撞预警'
+      : risk === 'warning'
+        ? (ldw ? 'LDW 车道偏离/低置信' : '跟车距离偏近')
+        : '巡航正常';
+    const now = performance.now();
+    if (now - drivingLastDisplayUpdate > 180 || drivingPerception.value.alert !== alert) {
+      drivingLastDisplayUpdate = now;
+      drivingPerception.value = {
+        laneConfidence: Math.round(laneConfidence * 100) / 100,
+        leadDistance: leadMeters >= 999 ? 999 : Math.round(roundStep(leadMeters, 0.5) * 10) / 10,
+        leadSpeed: Math.round(drivingFilteredPerception.leadSpeed),
+        ttc: ttc >= 99 ? 99 : Math.round(roundStep(ttc, 0.5) * 10) / 10,
+        curvature: Math.round(drivingFilteredPerception.curvature * 100) / 100,
+        weather: drivingWeather.value,
+        alert,
+      };
+    }
+    return { egoLane, laneDev: stableLaneDev, leadMeters, leadSpeed: drivingFilteredPerception.leadSpeed, ttc, fcw, ldw, risk, curvature: drivingFilteredPerception.curvature, laneConfidence };
+  }
+
+  function interp(x: number, xs: number[], ys: number[]) {
+    if (x <= xs[0]) return ys[0];
+    for (let i = 1; i < xs.length; i++) {
+      if (x <= xs[i]) {
+        const t = (x - xs[i - 1]) / Math.max(0.0001, xs[i] - xs[i - 1]);
+        return ys[i - 1] + (ys[i] - ys[i - 1]) * t;
+      }
+    }
+    return ys[ys.length - 1];
+  }
+
+  function laneClearanceScore(lane: number, laneW: number, egoCY: number, egoH: number, aggressive = false) {
+    let aheadGap = Infinity;
+    let rearGap = Infinity;
+    let speedPenalty = 0;
+    for (const v of drivingVehicles) {
+      const vLane = Math.floor((v.x + v.w / 2) / laneW);
+      if (vLane !== lane) continue;
+      const centerY = v.y + v.h / 2;
+      const gap = centerY - egoCY;
+      if (gap < 0) {
+        const ahead = Math.abs(gap);
+        aheadGap = Math.min(aheadGap, ahead);
+        if (v.speed < drivingSpeed.value) speedPenalty += (drivingSpeed.value - v.speed) * 0.7;
+      } else {
+        rearGap = Math.min(rearGap, gap);
+        if (v.speed > drivingSpeed.value) speedPenalty += (v.speed - drivingSpeed.value) * 1.2;
+      }
+    }
+    const minAhead = (aggressive ? egoH * 1.75 : egoH * 2.35) + Math.max(0, drivingSpeed.value - 55) * (aggressive ? 0.45 : 0.7);
+    const minRear = (aggressive ? egoH * 1.25 : egoH * 1.65) + Math.max(0, drivingSpeed.value - 70) * (aggressive ? 0.35 : 0.55);
+    const safe = aheadGap > minAhead && rearGap > minRear;
+    const score = (Number.isFinite(aheadGap) ? aheadGap : egoH * 12)
+      + (Number.isFinite(rearGap) ? rearGap * 0.45 : egoH * 4)
+      - speedPenalty;
+    return { safe, score, aheadGap, rearGap };
+  }
+
+  function gapClearanceScore(targetX: number, W: number, laneW: number, egoCY: number, egoW: number, egoH: number, aggressive = false) {
+    let aheadGap = Infinity;
+    let rearGap = Infinity;
+    let lateralRisk = 0;
+    const targetCanvasX = W / 2 + targetX;
+    const halfWidth = egoW * (aggressive ? 0.42 : 0.5);
+    for (const v of drivingVehicles) {
+      const vcx = v.x + v.w / 2;
+      const centerY = v.y + v.h / 2;
+      const dy = centerY - egoCY;
+      const lateralClearance = Math.abs(vcx - targetCanvasX) - (v.w / 2 + halfWidth);
+      if (lateralClearance < laneW * 0.1 && Math.abs(dy) < egoH * 4.5) {
+        lateralRisk += (laneW * 0.1 - lateralClearance) * (1 + (egoH * 4.5 - Math.abs(dy)) / Math.max(1, egoH * 4.5));
+      }
+      if (Math.abs(vcx - targetCanvasX) < laneW * 0.42) {
+        if (dy < 0) aheadGap = Math.min(aheadGap, Math.abs(dy));
+        else rearGap = Math.min(rearGap, dy);
+      }
+    }
+    const roadMargin = laneW * 0.16;
+    const withinRoad = targetCanvasX > roadMargin && targetCanvasX < W - roadMargin;
+    const minAhead = egoH * (aggressive ? 1.0 : 1.45);
+    const minRear = egoH * (aggressive ? 0.72 : 1.0);
+    const safe = withinRoad && aheadGap > minAhead && rearGap > minRear && lateralRisk < laneW * (aggressive ? 0.42 : 0.25);
+    const laneCenterBias = Math.abs(((targetCanvasX % laneW) + laneW) % laneW - laneW / 2);
+    const score = (Number.isFinite(aheadGap) ? aheadGap : egoH * 12)
+      + (Number.isFinite(rearGap) ? rearGap * 0.35 : egoH * 3)
+      + laneCenterBias * (aggressive ? 0.55 : 0.2)
+      - lateralRisk * 1.8;
+    return { safe, score, aheadGap, rearGap, lateralRisk, targetX };
+  }
+
+  function chooseAggressiveGapTarget(W: number, laneW: number, egoCY: number, egoW: number, egoH: number, perception: any) {
+    const urgent = perception.fcw || perception.ttc < 2.2;
+    const shouldThreadGap = urgent || perception.leadMeters < 105 || drivingSpeed.value < 136;
+    if (!shouldThreadGap) return null;
+    const samples: number[] = [];
+    const step = laneW / 6;
+    for (let x = laneW * 0.18; x <= W - laneW * 0.18; x += step) {
+      samples.push(x - W / 2);
+    }
+    const currentBias = drivingEgoX;
+    const candidates = samples
+      .map((x) => gapClearanceScore(x, W, laneW, egoCY, egoW, egoH, true))
+      .filter((item) => item.safe || (urgent && item.aheadGap > egoH * 0.75 && item.rearGap > egoH * 0.55))
+      .sort((a, b) => {
+        const directionBiasA = Math.abs(a.targetX - currentBias) < laneW * 0.12 ? -40 : 0;
+        const directionBiasB = Math.abs(b.targetX - currentBias) < laneW * 0.12 ? -40 : 0;
+        return (b.score + directionBiasB) - (a.score + directionBiasA);
+      });
+    return candidates[0]?.targetX ?? null;
+  }
+
+  function chooseAggressiveOvertakeLane(egoLane: number, laneW: number, egoCY: number, egoH: number, perception: any, aggressive = false) {
+    const hasSlowLead = perception.leadMeters < (aggressive ? 105 : 82) && perception.leadSpeed < drivingSpeed.value - (aggressive ? 0.5 : 2) && perception.ttc > (aggressive ? 1.35 : 1.7);
+    const needsEvasiveSteer = aggressive && perception.fcw && perception.leadMeters < 55;
+    const wantsProgress = needsEvasiveSteer || hasSlowLead || (drivingSpeed.value < (aggressive ? 132 : 120) && perception.leadMeters > (aggressive ? 18 : 28) && perception.ttc > (aggressive ? 1.9 : 2.4));
+    if (!wantsProgress || (perception.fcw && !aggressive)) return null;
+    const lanes = [egoLane - 1, egoLane + 1].filter((lane) => lane >= 0 && lane <= 2);
+    const candidates = lanes
+      .map((lane) => ({ lane, ...laneClearanceScore(lane, laneW, egoCY, egoH, aggressive) }))
+      .filter((item) => item.safe);
+    if (!candidates.length && aggressive && (hasSlowLead || needsEvasiveSteer) && perception.ttc > (needsEvasiveSteer ? 0.55 : 1.8)) {
+      const fallback = lanes
+        .map((lane) => ({ lane, ...laneClearanceScore(lane, laneW, egoCY, egoH, true) }))
+        .sort((a, b) => b.score - a.score)[0];
+      if (fallback && fallback.aheadGap > egoH * (needsEvasiveSteer ? 0.85 : 1.15) && fallback.rearGap > egoH * (needsEvasiveSteer ? 0.65 : 0.9)) return fallback.lane;
+    }
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => {
+      const leftBiasA = a.lane < egoLane ? 24 : 0;
+      const leftBiasB = b.lane < egoLane ? 24 : 0;
+      return (b.score + leftBiasB) - (a.score + leftBiasA);
+    });
+    return candidates[0].lane;
+  }
+
+  function applyOpenPilotControl(dt: number, laneW: number, perception: any, aiCmdActive: boolean, aiCmd: any) {
+    const state = drivingOpenPilotState.value;
+    const vEgo = drivingSpeed.value / 3.6;
+    const leadM = perception.leadMeters;
+    const leadV = perception.leadSpeed / 3.6;
+    const closing = vEgo - leadV;
+    const aggressiveGapSeconds = drivingOvertakeTargetLane !== null ? 0.95 : 1.15;
+    const desiredGap = Math.max(6, vEgo * aggressiveGapSeconds);
+    const stopping = leadM < Math.max(4.5, desiredGap * 0.38) || perception.ttc < 1.45;
+    const starting = state.longState === 'stopping' && leadM > desiredGap * 1.3 && perception.ttc > 4.5;
+    let longState: typeof state.longState = 'pid';
+    if (!drivingAutoPilot.value) longState = 'off';
+    else if (stopping) longState = 'stopping';
+    else if (starting) longState = 'starting';
+
+    const accelMaxBySpeed = interp(drivingSpeed.value, [0, 30, 60, 115, 150], [3.4, 2.9, 2.2, 1.4, 0.65]);
+    const turnAccelPenalty = Math.abs(perception.curvature) * Math.max(0, drivingSpeed.value - 35) * 0.012;
+    const accelMax = Math.max(0.15, accelMaxBySpeed - turnAccelPenalty);
+    const accelMin = perception.fcw ? -4.2 : -2.8;
+    const gapError = leadM >= 999 ? 20 : leadM - desiredGap;
+    let targetAccel = 0.45 + Math.min(1.35, gapError * 0.052) - Math.max(0, closing) * 0.42;
+    if (aiCmdActive) {
+      if (aiCmd.speed === '加速') targetAccel += 0.45;
+      else if (aiCmd.speed === '减速') targetAccel -= 0.85;
+    }
+    if (longState === 'stopping') targetAccel = accelMin;
+    else if (longState === 'starting') targetAccel = 0.9;
+    targetAccel = Math.max(accelMin, Math.min(accelMax, targetAccel));
+    state.accelIntegral = Math.max(-1.2, Math.min(1.2, state.accelIntegral + targetAccel * dt * 0.22));
+    const rawOutputAccel = Math.max(accelMin, Math.min(accelMax, targetAccel + state.accelIntegral));
+    const jerkLimit = (rawOutputAccel < state.outputAccel ? 2.8 : 1.2) * dt;
+    const outputAccel = state.outputAccel + Math.max(-jerkLimit, Math.min(jerkLimit, rawOutputAccel - state.outputAccel));
+    drivingSpeed.value = Math.max(0, Math.min(150, drivingSpeed.value + outputAccel * 3.6 * dt));
+
+    const laneErr = -perception.laneDev / Math.max(1, laneW / 2);
+    const desiredCurvatureSteer = -perception.curvature * 0.55;
+    state.steerIntegral = Math.max(-0.6, Math.min(0.6, state.steerIntegral + laneErr * dt * 0.35));
+    const laneKeepGain = drivingOvertakeTargetLane !== null ? 0.18 : 0.45;
+    const integralGain = drivingOvertakeTargetLane !== null ? 0.45 : 1;
+    const steerPid = Math.max(-1, Math.min(1, laneErr * laneKeepGain + state.steerIntegral * integralGain + desiredCurvatureSteer));
+
+    if (perception.fcw) state.fcwCounter += 1;
+    else state.fcwCounter = Math.max(0, state.fcwCounter - 1);
+
+    const laneChangeActive = drivingOvertakeTargetLane !== null || (aiCmdActive && (aiCmd.action === '左转' || aiCmd.action === '右转'));
+    let laneChangeState: typeof state.laneChangeState = Date.now() < drivingLaneChangeHoldUntil ? state.laneChangeState : 'off';
+    if (laneChangeActive) {
+      drivingLaneChangeHoldUntil = Date.now() + 1400;
+      laneChangeState = state.laneChangeState === 'off' ? 'preLaneChange' : 'laneChangeStarting';
+    } else if (state.laneChangeState === 'laneChangeStarting' && Date.now() < drivingLaneChangeHoldUntil) {
+      laneChangeState = 'laneChangeFinishing';
+    }
+
+    drivingOpenPilotState.value = {
+      ...state,
+      longState,
+      laneChangeState,
+      desiredAccel: Math.round(targetAccel * 100) / 100,
+      outputAccel: Math.round(outputAccel * 100) / 100,
+      steerPid: Math.round(steerPid * 100) / 100,
+      fcwCounter: state.fcwCounter,
+    };
+    return steerPid;
+  }
+
   function tickDrivingSim(ts: number) {
     const canvas = drivingCanvasRef.value || document.querySelector('.driving-canvas') as HTMLCanvasElement | null;
     if (!canvas) { drivingAnimationId = requestAnimationFrame(tickDrivingSim); return; }
@@ -5705,14 +6187,59 @@ export function useAppController() {
     const egoCX = W / 2 + drivingEgoX;
     const egoCY = H * 0.78;
     const egoW = laneW * 0.36, egoH = egoW * 1.7;
+    const perception = computeDrivingPerception(W, H, egoCX, egoCY, egoH, dt);
 
     // Steering - auto pilot
     if (drivingAutoPilot.value) {
-      const egoLane = Math.floor(egoCX / laneW);
-      let targetSteer = 0;
+      const egoLane = perception.egoLane;
+      let targetSteer = -perception.curvature * 0.35;
       let closestThreatDist = Infinity;
       const aiCmd = drivingAiCommand.value;
       const aiCmdActive = aiCmd && Date.now() < aiCmd.until;
+      const useOpenPilot = drivingControlMode.value === 'hybrid' || drivingControlMode.value === 'openpilot';
+      const useVisionControl = drivingControlMode.value === 'hybrid' || drivingControlMode.value === 'vision';
+      const pureOpenPilot = drivingControlMode.value === 'openpilot';
+
+      if (useOpenPilot) {
+        targetSteer += applyOpenPilotControl(dt, laneW, perception, Boolean(aiCmdActive), aiCmd);
+      }
+
+      if (useOpenPilot) {
+        const now = performance.now();
+        const chosenGap = pureOpenPilot ? chooseAggressiveGapTarget(W, laneW, egoCY, egoW, egoH, perception) : null;
+        const chosenLane = chooseAggressiveOvertakeLane(egoLane, laneW, egoCY, egoH, perception, pureOpenPilot);
+        if (chosenGap !== null && (drivingOvertakeTargetX === null || now > drivingOvertakeUntil)) {
+          drivingOvertakeTargetX = chosenGap;
+          drivingOvertakeTargetLane = Math.max(0, Math.min(2, Math.floor((W / 2 + chosenGap) / laneW)));
+          drivingOvertakeUntil = now + 7200;
+        } else if (chosenLane !== null && (drivingOvertakeTargetLane === null || now > drivingOvertakeUntil)) {
+          drivingOvertakeTargetLane = chosenLane;
+          drivingOvertakeTargetX = chosenLane * laneW + laneW / 2 - W / 2;
+          drivingOvertakeUntil = now + (pureOpenPilot ? 9500 : 8000);
+        }
+        if (drivingOvertakeTargetLane !== null || drivingOvertakeTargetX !== null) {
+          const targetCX = drivingOvertakeTargetX ?? ((drivingOvertakeTargetLane ?? egoLane) * laneW + laneW / 2 - W / 2);
+          const targetLaneForScore = drivingOvertakeTargetLane ?? Math.max(0, Math.min(2, Math.floor((W / 2 + targetCX) / laneW)));
+          const laneScore = laneClearanceScore(targetLaneForScore, laneW, egoCY, egoH, pureOpenPilot);
+          const laneErrPx = targetCX - drivingEgoX;
+          targetSteer += laneErrPx * (pureOpenPilot ? 0.018 : 0.011) + Math.sign(laneErrPx) * (pureOpenPilot ? 0.95 : 0.62);
+          const gapScore = drivingOvertakeTargetX !== null ? gapClearanceScore(drivingOvertakeTargetX, W, laneW, egoCY, egoW, egoH, pureOpenPilot) : null;
+          const pathSafe = gapScore?.safe ?? laneScore.safe;
+          if (!perception.fcw && pathSafe && perception.ttc > (pureOpenPilot ? 1.25 : 2.8)) {
+            drivingSpeed.value = Math.min(pureOpenPilot ? 150 : 136, drivingSpeed.value + (pureOpenPilot ? 24 : 9) * dt);
+          }
+          drivingOpenPilotState.value = {
+            ...drivingOpenPilotState.value,
+            laneChangeState: Math.abs(laneErrPx) < laneW * 0.18 ? 'laneChangeFinishing' : 'laneChangeStarting',
+          };
+          if (Math.abs(targetCX - drivingEgoX) < laneW * 0.055 || now > drivingOvertakeUntil || (!perception.fcw && !laneScore.safe && Math.abs(laneErrPx) > laneW * (pureOpenPilot ? 0.45 : 0.3))) {
+            drivingOvertakeTargetLane = null;
+            drivingOvertakeTargetX = null;
+            drivingOvertakeUntil = 0;
+            drivingOvertakeLateralVelocity = 0;
+          }
+        }
+      }
 
       // ── AEB: emergency brake + evade before collision ──
       const egoLeft = egoCX - egoW / 2 - 4, egoRight = egoCX + egoW / 2 + 4;
@@ -5750,16 +6277,28 @@ export function useAppController() {
 
       if (!emergency) {
       // AI command override (valid for 4 seconds)
-      if (aiCmdActive) {
+      if (useVisionControl && aiCmdActive) {
         // Steer toward the target lane center
         let targetLane = egoLane;
         if (aiCmd.action === '左转') targetLane = Math.max(0, egoLane - 1);
         else if (aiCmd.action === '右转') targetLane = Math.min(2, egoLane + 1);
         // '直行' keeps current lane (lane-keep toward current lane center)
         const targetCX = targetLane * laneW + laneW / 2 - W / 2;
-        targetSteer = (targetCX - drivingEgoX) * 0.05;
-        // Speed is applied once in onDone, not per-frame here
-      } else {
+        targetSteer += (targetCX - drivingEgoX) * (useOpenPilot ? 0.035 : 0.07);
+        if (!useOpenPilot) {
+          if (aiCmd.speed === '加速' && !perception.fcw) drivingSpeed.value = Math.min(138, drivingSpeed.value + 10 * dt);
+          else if (aiCmd.speed === '减速' || perception.ttc < 3.2) drivingSpeed.value = Math.max(0, drivingSpeed.value - 18 * dt);
+        }
+      } else if (!useOpenPilot) {
+        targetSteer += -perception.laneDev * 0.01;
+        if (perception.fcw) drivingSpeed.value = Math.max(0, drivingSpeed.value - 35 * dt);
+        const overtakeLane = chooseAggressiveOvertakeLane(egoLane, laneW, egoCY, egoH, perception);
+        if (overtakeLane !== null) {
+          const targetCX = overtakeLane * laneW + laneW / 2 - W / 2;
+          const laneErrPx = targetCX - drivingEgoX;
+          targetSteer += laneErrPx * 0.012 + Math.sign(laneErrPx) * 0.58;
+          drivingSpeed.value = Math.min(134, drivingSpeed.value + 7 * dt);
+        }
         // Rule-based fallback
         for (const v of drivingVehicles) {
         const vcx = v.x + v.w / 2;
@@ -5805,22 +6344,38 @@ export function useAppController() {
 
       // No threat: keep current course
       if (closestThreatDist === Infinity || closestThreatDist > egoH * 8) {
-        targetSteer = 0;
+        targetSteer += -perception.laneDev * 0.012;
       }
 
       } // end rule-based fallback
       } // end !emergency
 
       // Smoothing: higher damping for AI commands to prevent oscillation during lane changes
-      const smooth = closestThreatDist < egoH * 3 ? 12 : (aiCmdActive ? 10 : 6);
-      drivingSteering.value += (targetSteer - drivingSteering.value) * smooth * dt;
+      targetSteer = Math.max(-1, Math.min(1, targetSteer));
+      const smooth = closestThreatDist < egoH * 3 ? 9 : (drivingOvertakeTargetLane !== null && pureOpenPilot ? 10 : aiCmdActive ? 7 : 4.5);
+      const desiredSteer = drivingSteering.value + (targetSteer - drivingSteering.value) * Math.min(1, smooth * dt);
+      const maxSteerRate = (perception.fcw && drivingOvertakeTargetLane !== null ? 4.8 : perception.fcw ? 2.4 : drivingOvertakeTargetLane !== null ? (pureOpenPilot ? 3.8 : 2.35) : 1.15) * dt;
+      drivingSteering.value += Math.max(-maxSteerRate, Math.min(maxSteerRate, desiredSteer - drivingSteering.value));
     }
 
-    drivingEgoX += drivingSteering.value * 200 * dt;
-    drivingEgoX = Math.max(-laneW * 1.0, Math.min(laneW * 1.0, drivingEgoX));
+    if (drivingControlMode.value === 'openpilot' && (drivingOvertakeTargetLane !== null || drivingOvertakeTargetX !== null)) {
+      const targetCX = drivingOvertakeTargetX ?? ((drivingOvertakeTargetLane ?? perception.egoLane) * laneW + laneW / 2 - W / 2);
+      const laneErrPx = targetCX - drivingEgoX;
+      const latVelLimit = perception.fcw ? 620 : 520;
+      const desiredLatVel = Math.max(-latVelLimit, Math.min(latVelLimit, laneErrPx * (perception.fcw ? 5.2 : 4.4) + Math.sign(laneErrPx) * (perception.fcw ? 180 : 125)));
+      drivingOvertakeLateralVelocity += (desiredLatVel - drivingOvertakeLateralVelocity) * Math.min(1, (perception.fcw ? 13 : 9) * dt);
+      drivingEgoX += drivingOvertakeLateralVelocity * dt;
+    } else {
+      drivingOvertakeLateralVelocity *= Math.max(0, 1 - 8 * dt);
+      drivingEgoX += drivingSteering.value * 155 * dt;
+    }
+    drivingEgoX = Math.max(-laneW * 1.22, Math.min(laneW * 1.22, drivingEgoX));
 
     // Spawn vehicles (avoid ego lane)
-    if (drivingVehicles.length < 12 && Math.random() < 0.012 * (drivingSpeed.value / 40)) {
+    const spawnRate = drivingControlMode.value === 'openpilot'
+      ? 0.024
+      : drivingScenario.value === 'cutin' ? 0.02 : drivingScenario.value === 'construction' ? 0.018 : 0.012;
+    if (drivingVehicles.length < 14 && Math.random() < spawnRate * (drivingSpeed.value / 40)) {
       const egoLane = Math.floor(egoCX / laneW);
       spawnVehicle(W, egoCX, egoLane);
     }
@@ -5846,6 +6401,13 @@ export function useAppController() {
       }
 
       // Lane change to pass slower vehicle ahead
+      if (v.behavior === 'cutin' && v.y > H * 0.12 && v.y < H * 0.58) {
+        const egoLane = Math.floor(egoCX / laneW);
+        if (v.lane !== egoLane) {
+          v.changingLane = true;
+          v.lane = egoLane;
+        }
+      }
       if (!v.changingLane) {
         for (const other of drivingVehicles) {
           if (other === v) continue;
@@ -5908,6 +6470,17 @@ export function useAppController() {
     ctx.fillStyle = roadGrad;
     ctx.fillRect(0, 0, W, H);
 
+    if (drivingScenario.value === 'curve') {
+      ctx.save();
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = '#60a5fa';
+      const curveX = W / 2 + Math.sin(drivingRoadOffset / 90) * laneW * 0.5;
+      ctx.beginPath();
+      ctx.ellipse(curveX, H * 0.25, W * 0.38, H * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // Road edge rumble strips
     ctx.fillStyle = isDark ? 'rgba(255,200,50,0.3)' : 'rgba(255,200,50,0.25)';
     const rumH = 6, rumGap = 10;
@@ -5940,6 +6513,46 @@ export function useAppController() {
     ctx.fillStyle = 'rgba(59,130,246,0.06)';
     ctx.fillRect(currentLane * laneW, 0, laneW, H);
 
+    if (drivingOvertakeTargetLane !== null || drivingOvertakeTargetX !== null) {
+      const targetCenterX = drivingOvertakeTargetX !== null
+        ? W / 2 + drivingOvertakeTargetX
+        : (drivingOvertakeTargetLane ?? currentLane) * laneW + laneW / 2;
+      const targetX = Math.max(0, targetCenterX - laneW * 0.28);
+      ctx.save();
+      const evasive = perception.fcw;
+      ctx.fillStyle = evasive ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.14)';
+      ctx.fillRect(targetX, 0, laneW * 0.56, H);
+      ctx.strokeStyle = evasive ? '#ef4444' : '#22c55e';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 6]);
+      ctx.strokeRect(targetX + 6, 10, laneW * 0.56 - 12, H - 20);
+      ctx.setLineDash([]);
+      ctx.fillStyle = evasive ? '#ef4444' : '#22c55e';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(evasive ? 'EVASIVE GAP' : 'FAST GAP', targetX + 12, 52);
+      ctx.restore();
+    }
+
+    if (drivingScenario.value === 'construction') {
+      ctx.save();
+      const closedLane = 2;
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+      ctx.fillRect(closedLane * laneW, 0, laneW, H);
+      for (let y = (drivingRoadOffset % 72) - 72; y < H + 72; y += 72) {
+        const x = closedLane * laneW + laneW * 0.18;
+        ctx.fillStyle = '#f97316';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 9, y + 24);
+        ctx.lineTo(x + 9, y + 24);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(x - 7, y + 12, 14, 3);
+      }
+      ctx.restore();
+    }
+
     // Draw AI vehicles
     for (const v of drivingVehicles) {
       drawCar(ctx, v.x, v.y, v.w, v.h, v.color, false, v.type);
@@ -5954,12 +6567,55 @@ export function useAppController() {
     // Draw ego vehicle
     drawCar(ctx, egoCX - egoW / 2, egoCY - egoH / 2, egoW, egoH, '#3b82f6', true, 'car');
 
+    // OpenPilot-style perception overlay
+    ctx.save();
+    ctx.strokeStyle = perception.fcw ? '#ef4444' : perception.ldw ? '#f59e0b' : 'rgba(34,197,94,0.75)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.strokeRect(currentLane * laneW + 8, 8, laneW - 16, H - 16);
+    ctx.setLineDash([]);
+    ctx.fillStyle = perception.fcw ? 'rgba(239,68,68,0.18)' : perception.ldw ? 'rgba(245,158,11,0.16)' : 'rgba(34,197,94,0.10)';
+    ctx.fillRect(0, 0, W, 34);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText(`${drivingPerception.value.alert} | lead ${drivingPerception.value.leadDistance}m | TTC ${drivingPerception.value.ttc}s | lane conf ${drivingPerception.value.laneConfidence}`, 12, 22);
+    ctx.restore();
+
+    if (drivingWeather.value === 'rain' || drivingWeather.value === 'night') {
+      ctx.save();
+      ctx.strokeStyle = drivingWeather.value === 'night' ? 'rgba(180,210,255,0.25)' : 'rgba(210,230,255,0.38)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 80; i++) {
+        const x = (i * 73 + drivingRoadOffset * 5) % W;
+        const y = (i * 41 + drivingRoadOffset * 8) % H;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 5, y + 18);
+        ctx.stroke();
+      }
+      if (drivingWeather.value === 'night') {
+        ctx.fillStyle = 'rgba(2,6,23,0.42)';
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.restore();
+    } else if (drivingWeather.value === 'fog') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(226,232,240,0.22)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
     // Update stats
     drivingStats.value = {
       fps: Math.round(1 / (dt || 0.016)),
       objects: drivingVehicles.length,
-      laneDev: Math.round(((egoCX % laneW + laneW) % laneW - laneW / 2) * 10) / 10,
+      laneDev: Math.round(perception.laneDev * 10) / 10,
       distance: Math.round(drivingRoadOffset / 60 * 10) / 10,
+      leadDistance: perception.leadMeters >= 999 ? 999 : Math.round(roundStep(perception.leadMeters, 0.5) * 10) / 10,
+      ttc: perception.ttc >= 99 ? 99 : Math.round(roundStep(perception.ttc, 0.5) * 10) / 10,
+      risk: perception.risk,
+      fcw: perception.fcw,
+      ldw: perception.ldw || drivingOpenPilotState.value.fcwCounter >= 3,
     };
 
     if (drivingRunning.value) {
@@ -5976,7 +6632,7 @@ export function useAppController() {
     // Auto AI analysis
     if (drivingAiIntervalId) clearInterval(drivingAiIntervalId);
     drivingAiIntervalId = setInterval(() => {
-      if (drivingRunning.value && isAuthenticated.value) analyzeDrivingScene();
+      if (drivingRunning.value && isAuthenticated.value && drivingControlMode.value !== 'openpilot') analyzeDrivingScene();
     }, drivingAiIntervalSec.value * 1000);
   }
 
@@ -6235,7 +6891,9 @@ export function useAppController() {
         });
 
       // Use selected multimodal model, fallback to first vision model
-      const modelToUse = multimodalModel.value || visionModels.value[0]?.id || selectedModel.value;
+      const modelToUse = (multimodalModel.value && multimodalModel.value !== 'qwen3.6-plus' && multimodalModel.value !== 'qwen-3.6-plus' && multimodalModel.value !== 'qwen-3.7-max')
+        ? multimodalModel.value
+        : preferredDrivingVisionModel();
 
       await streamCompletion(
         {
@@ -6294,6 +6952,10 @@ export function useAppController() {
 
   async function analyzeDrivingScene() {
     if (drivingAiAnalyzing.value) return;
+    if (drivingControlMode.value === 'openpilot') {
+      status.value = '纯 openpilot 模式不调用视觉模型';
+      return;
+    }
     if (!isAuthenticated.value) { status.value = '请先登录'; return; }
 
     const canvas = drivingCanvasRef.value || document.querySelector('.driving-canvas') as HTMLCanvasElement | null;
@@ -6309,57 +6971,101 @@ export function useAppController() {
     const egoCX = (canvas.width || 800) / 2 + drivingEgoX;
     const egoLane = Math.floor(egoCX / laneW);
     const laneNames = ['左车道', '中车道', '右车道'];
-    const sceneCtx = `当前车速${Math.round(drivingSpeed.value)}km/h，主车在${laneNames[Math.min(2, Math.max(0, egoLane))]}。`;
+    const p = drivingPerception.value;
+    const modelToUse = multimodalModel.value || visionModels.value[0]?.id || selectedModel.value;
+    const usesImageInput = supportsDirectImageInput(modelToUse);
+    const nearbyVehicles = drivingVehicles
+      .filter((vehicle) => vehicle.y > -120 && vehicle.y < (canvas.height || 520) + 80)
+      .sort((a, b) => b.y - a.y)
+      .slice(0, 6)
+      .map((vehicle, index) => {
+        const lane = laneNames[Math.min(2, Math.max(0, vehicle.lane))] || `车道${vehicle.lane + 1}`;
+        const relY = Math.round((canvas.height || 520) - vehicle.y);
+        return `${index + 1}. ${vehicle.type} 位于${lane}, 相对纵向距离约${relY}px, 速度${Math.round(vehicle.speed)}km/h${vehicle.changingLane ? ', 正在变道' : ''}`;
+      });
+    const sceneCtx = [
+      `当前车速${Math.round(drivingSpeed.value)}km/h，主车在${laneNames[Math.min(2, Math.max(0, egoLane))]}。`,
+      `OpenPilot风格感知: 场景=${drivingScenario.value}, 天气=${p.weather}, 前车距离=${p.leadDistance}m, 前车速度=${p.leadSpeed}km/h, TTC=${p.ttc}s, 车道置信度=${p.laneConfidence}, 曲率=${p.curvature}, 告警=${p.alert}。`,
+      `OpenPilot控制状态: LongControl=${drivingOpenPilotState.value.longState}, LaneChange=${drivingOpenPilotState.value.laneChangeState}, 纵向加速度=${drivingOpenPilotState.value.outputAccel}m/s², 横向PID=${drivingOpenPilotState.value.steerPid}。`,
+      nearbyVehicles.length ? `仿真感知目标:\n${nearbyVehicles.join('\n')}` : '仿真感知目标: 近距离内无明显车辆。',
+    ].join('\n');
+
+    const parseDrivingCommand = (txt: string) => {
+      let action = '直行', speed = '匀速';
+      const jsonMatch = txt.match(/\{[\s\S]*?\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]) as { action?: string; speed?: string };
+          if (/左转|向左|左道|左变道/.test(parsed.action || '')) action = '左转';
+          else if (/右转|向右|右道|右变道/.test(parsed.action || '')) action = '右转';
+          if (/加速|提速/.test(parsed.speed || '')) speed = '加速';
+          else if (/减速|刹车|降速/.test(parsed.speed || '')) speed = '减速';
+          return { action, speed };
+        } catch {
+          // Fall through to compact text parsing.
+        }
+      }
+      const allMatches = [...txt.matchAll(/【决策[：:]([^】]+)】/g)];
+      const m = allMatches.length > 0 ? allMatches[allMatches.length - 1] : null;
+      const cmds = m ? m[1].split(/[,，、]/).map(s => s.trim()).filter(Boolean) : [];
+      const tokens = cmds.length ? cmds : [txt];
+      for (const c of tokens) {
+        if (/左转|向左|左道|左变道/.test(c)) action = '左转';
+        else if (/右转|向右|右道|右变道/.test(c)) action = '右转';
+        if (/加速|提速|加快|快一[点些]/.test(c)) speed = '加速';
+        else if (/减速|降速|刹车|减慢|慢一[点些]/.test(c)) speed = '减速';
+      }
+      return { action, speed };
+    };
+    const applyDrivingCommand = (cmd: { action: string; speed: string }) => {
+      drivingAiCommand.value = { ...cmd, until: Date.now() + 4500 };
+      if (cmd.action === '左转' || cmd.action === '右转') {
+        drivingLaneChangeHoldUntil = Date.now() + 2200;
+        drivingOpenPilotState.value = {
+          ...drivingOpenPilotState.value,
+          laneChangeState: drivingOpenPilotState.value.laneChangeState === 'off' ? 'preLaneChange' : 'laneChangeStarting',
+        };
+      }
+      if (cmd.speed === '加速') drivingSpeed.value = Math.min(140, Math.round((drivingSpeed.value + 10) / 5) * 5);
+      else if (cmd.speed === '减速') drivingSpeed.value = Math.max(10, Math.round((drivingSpeed.value - 10) / 5) * 5);
+    };
 
     try {
-      const modelToUse = multimodalModel.value || visionModels.value[0]?.id || selectedModel.value;
+      status.value = `正在用 ${modelToUse} 分析驾驶场景`;
+      const drivingPrompt = `${sceneCtx}\n你是激进高效自动驾驶决策器。输出必须很短，最多两行，不要Markdown。第1行必须是JSON: {"action":"左转|右转|直行","speed":"加速|减速|匀速","risk":"low|mid|high"}。第2行用不超过18个中文说明原因。能安全超车就优先左转或右转并加速；TTC<2或FCW时减速；车道不安全才直行。`;
+      const drivingContent = usesImageInput
+        ? [
+            { type: 'image_url', image_url: { url: imageBase64 } },
+            { type: 'text', text: drivingPrompt },
+          ]
+        : `${drivingPrompt}\n\n注意：当前模型不接收 image_url 内容，本次请仅基于上述仿真感知、openpilot状态和场景参数进行驾驶策略判断。`;
       await streamCompletion(
         {
           model: modelToUse,
           messages: [{
             role: 'user',
-            content: [
-              { type: 'image_url', image_url: { url: imageBase64 } },
-              { type: 'text', text: `${sceneCtx}蓝色车是主车。你是自动驾驶AI，根据画面和车速信息给出驾驶决策。必须在回复末尾以【决策:左转,加速】格式给出指令。其中方向三选一：左转/右转/直行，速度三选一：加速/减速/匀速。示例：【决策:直行,减速】。` },
-            ],
+            content: drivingContent as any,
           }],
           temperature: 0.5,
+          max_tokens: 80,
         },
         {
           onChunk: (chunk) => {
             const token = chunk.choices?.[0]?.delta?.content;
             if (token) {
               drivingAiAnalysis.value += token;
+              const compact = drivingAiAnalysis.value.trim();
+              if (!drivingAiCommand.value || Date.now() > drivingAiCommand.value.until - 3800) {
+                if (/\{[\s\S]*?\}/.test(compact) || /【决策[：:][^】]+】/.test(compact)) {
+                  applyDrivingCommand(parseDrivingCommand(compact));
+                }
+              }
             }
           },
           onDone: () => {
-            status.value = '场景分析完成';
+            status.value = `${modelToUse} 场景分析完成`;
             const txt = drivingAiAnalysis.value;
-            let action = '直行', speed = '匀速';
-            // Match the last occurrence of 【决策:...】 (model may put it at the end as instructed)
-            const allMatches = [...txt.matchAll(/【决策[：:]([^】]+)】/g)];
-            const m = allMatches.length > 0 ? allMatches[allMatches.length - 1] : null;
-            const cmds = m ? m[1].split(/[,，、]/).map(s => s.trim()).filter(Boolean) : [];
-            if (cmds.length > 0) {
-              for (const c of cmds) {
-                if (/左转|向左|左道|左变道/.test(c)) action = '左转';
-                else if (/右转|向右|右道|右变道/.test(c)) action = '右转';
-                else if (/直行|保持|维持/.test(c) && action === '直行') action = '直行';
-                if (/加速|提速|加快|快一[点些]/.test(c)) speed = '加速';
-                else if (/减速|降速|刹车|减慢|慢一[点些]/.test(c)) speed = '减速';
-                else if (/匀速|保持速度|维持速度/.test(c) && speed === '匀速') speed = '匀速';
-              }
-            } else {
-              // Fallback: keyword from full text
-              if (/左侧|向左|左转|左道|左变道/.test(txt)) action = '左转';
-              else if (/右侧|向右|右转|右道|右变道/.test(txt)) action = '右转';
-              if (/加速|提速|加快/.test(txt)) speed = '加速';
-              else if (/减速|降速|刹车|减慢/.test(txt)) speed = '减速';
-            }
-            drivingAiCommand.value = { action, speed, until: Date.now() + 4000 };
-            // Apply speed change instantly (once per command)
-            if (speed === '加速') drivingSpeed.value = Math.min(120, Math.round((drivingSpeed.value + 10) / 5) * 5);
-            else if (speed === '减速') drivingSpeed.value = Math.max(10, Math.round((drivingSpeed.value - 10) / 5) * 5);
+            applyDrivingCommand(parseDrivingCommand(txt));
           },
           onAbort: () => { status.value = '分析已停止'; },
         },
@@ -6634,6 +7340,7 @@ export function useAppController() {
     ragLabSearching,
     ragLabResults,
     memoryForm,
+    editingMemoryId,
     skillForm,
     teamForm,
     mcpForm,
@@ -6859,6 +7566,10 @@ export function useAppController() {
     formatDate,
     runRagLabSearch,
     createAgentMemory,
+    startEditAgentMemory,
+    resetMemoryEditor,
+    saveAgentMemory,
+    deleteAgentMemory,
     createSkillFromForm,
     exportSkillAsMarkdown,
     agentExportPreview,
@@ -7049,6 +7760,14 @@ export function useAppController() {
     drivingSteering,
     drivingAutoPilot,
     drivingStats,
+    drivingScenario,
+    drivingWeather,
+    drivingControlMode,
+    drivingOpenPilotMode,
+    drivingScenarioOptions,
+    drivingControlModeOptions,
+    drivingPerception,
+    drivingOpenPilotState,
     drivingAnimationId,
     drivingLastTime,
     drivingRoadOffset,

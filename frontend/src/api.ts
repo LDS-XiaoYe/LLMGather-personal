@@ -1510,6 +1510,31 @@ export async function createMemory(
   return data.data;
 }
 
+export async function updateMemory(
+  id: string,
+  payload: { content?: string; namespace?: string; memoryType?: string; importance?: number },
+  baseUrl = defaultBaseUrl,
+): Promise<MemoryItem> {
+  const response = await fetch(`${baseUrl}/memory/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: MemoryItem };
+  return data.data;
+}
+
+export async function deleteMemory(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/memory/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
 export async function searchMemory(
   query: string,
   agentId?: string,

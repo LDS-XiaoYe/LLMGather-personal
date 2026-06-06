@@ -606,6 +606,41 @@ export interface AgentRunStats {
   evaluatedRuns: number;
 }
 
+export type AgentRunStreamEvent =
+  | { type: 'run_created'; run: AgentRun }
+  | { type: 'step_started'; step: AgentRunStep }
+  | { type: 'step_updated'; step: AgentRunStep }
+  | { type: 'step_completed'; step: AgentRunStep }
+  | { type: 'llm_delta'; runId: string; delta: string; output: string }
+  | { type: 'run_completed'; run: AgentRun }
+  | { type: 'error'; runId?: string; error: string };
+
+export interface AgentTestRun {
+  id: string;
+  suiteId: string;
+  agentId: string;
+  userId: string;
+  status: string;
+  summary: Record<string, unknown>;
+  caseResults: Array<Record<string, unknown>>;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentTraceNode {
+  id: string;
+  label: string;
+  type: string;
+  status: AgentRunStep['status'];
+  latencyMs: number;
+  active: boolean;
+}
+
+export interface AgentTraceEdge {
+  from: string;
+  to: string;
+}
+
 export async function fetchAgents(baseUrl = defaultBaseUrl): Promise<AgentDefinition[]> {
   const response = await fetch(`${baseUrl}/agents`, { headers: buildHeaders(), ...credOpts });
   if (!response.ok) throw new Error(await readError(response));
@@ -685,6 +720,100 @@ export async function runAgent(
   return data.data;
 }
 
+export async function streamAgentRun(
+  id: string,
+  payload: { input: string; imageUrls?: string[] },
+  handlers: {
+    onEvent?: (event: AgentRunStreamEvent) => void;
+    onDone?: () => void;
+    onAbort?: () => void;
+  },
+  baseUrl = defaultBaseUrl,
+  externalSignal?: AbortSignal,
+): Promise<void> {
+  const { signal: timeoutSignal, cleanup } = withTimeoutSignal(120_000);
+  const controller = new AbortController();
+  const onAnyAbort = () => controller.abort();
+  timeoutSignal.addEventListener('abort', onAnyAbort);
+  externalSignal?.addEventListener('abort', onAnyAbort);
+  if (timeoutSignal.aborted || externalSignal?.aborted) controller.abort();
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs/stream`, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+      credentials: 'include',
+    });
+  } catch (error) {
+    cleanup();
+    timeoutSignal.removeEventListener('abort', onAnyAbort);
+    externalSignal?.removeEventListener('abort', onAnyAbort);
+    if (error instanceof DOMException && error.name === 'AbortError' && externalSignal?.aborted) {
+      handlers.onAbort?.();
+      return;
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    cleanup();
+    throw new Error(await readError(response));
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    cleanup();
+    throw new Error('Agent 流式响应不可用');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consumeEvent = (rawEvent: string): boolean => {
+    const dataLines = rawEvent
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trim());
+    const data = dataLines.join('\n');
+    if (!data) return false;
+    if (data === '[DONE]') {
+      handlers.onDone?.();
+      return true;
+    }
+    try {
+      handlers.onEvent?.(JSON.parse(data) as AgentRunStreamEvent);
+    } catch {}
+    return false;
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? '';
+      for (const event of events) {
+        if (consumeEvent(event)) return;
+      }
+    }
+    if (buffer.trim()) consumeEvent(buffer);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError' && externalSignal?.aborted) {
+      handlers.onAbort?.();
+      return;
+    }
+    throw error;
+  } finally {
+    cleanup();
+    timeoutSignal.removeEventListener('abort', onAnyAbort);
+    externalSignal?.removeEventListener('abort', onAnyAbort);
+    reader.releaseLock();
+  }
+}
+
 export async function fetchAgentRuns(id: string, baseUrl = defaultBaseUrl): Promise<AgentRun[]> {
   const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs`, {
     headers: buildHeaders(),
@@ -697,7 +826,7 @@ export async function fetchAgentRuns(id: string, baseUrl = defaultBaseUrl): Prom
 
 export async function evaluateAgentRun(
   runId: string,
-  payload: { expectedOutput?: string; rubric?: string } = {},
+  payload: { expectedOutput?: string; rubric?: string; judgeModel?: string; mode?: 'rules' | 'llm' | 'hybrid' } = {},
   baseUrl = defaultBaseUrl,
 ): Promise<AgentEvaluation> {
   const response = await fetch(`${baseUrl}/agents/runs/${encodeURIComponent(runId)}/evaluations`, {
@@ -1239,15 +1368,52 @@ export async function createAgentTestCase(
   return data.data;
 }
 
-export async function runAgentTestSuite(suiteId: string, baseUrl = defaultBaseUrl): Promise<Record<string, unknown>> {
+export async function runAgentTestSuite(
+  suiteId: string,
+  optionsOrBaseUrl: { judgeModel?: string; evaluationMode?: 'rules' | 'llm' | 'hybrid' } | string = {},
+  maybeBaseUrl = defaultBaseUrl,
+): Promise<AgentTestRun> {
+  const options = typeof optionsOrBaseUrl === 'string' ? {} : optionsOrBaseUrl;
+  const baseUrl = typeof optionsOrBaseUrl === 'string' ? optionsOrBaseUrl : maybeBaseUrl;
   const response = await fetch(`${baseUrl}/agents/test-suites/${encodeURIComponent(suiteId)}/runs`, {
     method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(options),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentTestRun };
+  return data.data;
+}
+
+export async function fetchAgentTestRuns(suiteId: string, baseUrl = defaultBaseUrl): Promise<AgentTestRun[]> {
+  const response = await fetch(`${baseUrl}/agents/test-suites/${encodeURIComponent(suiteId)}/runs`, {
     headers: buildHeaders(),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
-  const data = (await response.json()) as { data: Record<string, unknown> };
-  return data.data;
+  const payload = (await response.json()) as { data?: AgentTestRun[] };
+  return payload.data ?? [];
+}
+
+export async function fetchAgentRun(runId: string, baseUrl = defaultBaseUrl): Promise<AgentRun> {
+  const response = await fetch(`${baseUrl}/agents/runs/${encodeURIComponent(runId)}`, {
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: AgentRun };
+  return payload.data;
+}
+
+export async function fetchAgentTestRun(runId: string, baseUrl = defaultBaseUrl): Promise<AgentTestRun> {
+  const response = await fetch(`${baseUrl}/agents/test-runs/${encodeURIComponent(runId)}`, {
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: AgentTestRun };
+  return payload.data;
 }
 
 export async function invokeTool(

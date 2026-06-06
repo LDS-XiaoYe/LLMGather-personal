@@ -35,8 +35,10 @@ import {
   fetchAdminUsers,
   fetchAgents,
   fetchAgentRuns,
+  fetchAgentRun,
   fetchAgentEvaluations,
   fetchAgentStats,
+  fetchAgentTestRuns,
   fetchBillingLedger,
   fetchBillingRules,
   fetchConversations,
@@ -78,6 +80,7 @@ import {
   syncConversations,
   testSkill as apiTestSkill,
   streamCompletion,
+  streamAgentRun,
   topUp,
   updateAgent as apiUpdateAgent,
   updateAgentPublication as apiUpdateAgentPublication,
@@ -111,6 +114,7 @@ import {
   type AgentTeam,
   type AgentTeamRun,
   type AgentTestCase,
+  type AgentTestRun,
   type AgentTestSuite,
   type AgentVersion,
   type AgentMarketplaceTemplate,
@@ -223,6 +227,7 @@ export function useAppController() {
   const rechargeOrdersLoading = ref(false);
   const billingRules = ref<BillingRule[]>([]);
   const billingLedger = ref<BillingLedgerItem[]>([]);
+  let agentRunAbortController: AbortController | null = null;
 
   // Agent Studio
   const agents = ref<AgentDefinition[]>([]);
@@ -236,6 +241,9 @@ export function useAppController() {
   const agentImageUrlInput = ref('');
   const agentRuns = ref<AgentRun[]>([]);
   const activeAgentRun = ref<AgentRun | null>(null);
+  const activeAgentTraceStepId = ref<number | null>(null);
+  const agentTraceReplayIndex = ref(0);
+  const agentTraceReplayPlaying = ref(false);
   const agentWorkspaceMode = ref<'develop' | 'invoke'>('develop');
   const agentPageTab = ref<'overview' | 'basic' | 'capabilities' | 'tools' | 'workflow' | 'collab' | 'integration' | 'publish' | 'prompt' | 'marketplace'>('basic');
   const agentConsoleTab = ref<'history' | 'memory' | 'team' | 'workflow' | 'versions' | 'tests' | 'mcp' | 'eval'>('memory');
@@ -253,6 +261,7 @@ export function useAppController() {
   const agentVersions = ref<AgentVersion[]>([]);
   const agentTestSuites = ref<AgentTestSuite[]>([]);
   const agentTestCases = ref<AgentTestCase[]>([]);
+  const agentTestRuns = ref<AgentTestRun[]>([]);
   const marketplaceTemplates = ref<AgentMarketplaceTemplate[]>([]);
   const agentResourceLoading = ref(false);
   const knowledgeCreating = ref(false);
@@ -305,7 +314,7 @@ export function useAppController() {
   const teamInput = ref('');
   const activeTeamRun = ref<AgentTeamRun | null>(null);
   const activeTestSuiteId = ref('');
-  const activeTestRun = ref<Record<string, unknown> | null>(null);
+  const activeTestRun = ref<AgentTestRun | null>(null);
   const activeMcpTestServerId = ref('');
   const agentEvaluations = ref<AgentEvaluation[]>([]);
   const agentStats = ref<AgentRunStats | null>(null);
@@ -314,10 +323,17 @@ export function useAppController() {
   const evaluationForm = ref({
     expectedOutput: '',
     rubric: '',
+    judgeModel: '',
+    mode: 'hybrid' as 'rules' | 'llm' | 'hybrid',
   });
   const generatorForm = ref({
     requirement: '',
   });
+  const agentCreateWizardStep = ref(0);
+  const agentCreateWizardAdvancedOpen = ref<string[]>([]);
+  const selectedAgentTemplateId = ref('general');
+  const agentCreationGoal = ref('');
+  const showAgentExportDialog = ref(false);
 
   // ===== Tool相关状态 =====
   interface CustomTool {
@@ -508,6 +524,86 @@ export function useAppController() {
     memory: { enabled: true },
     constraints: { rules: '' },
   });
+  const agentCreationTemplates = [
+    {
+      id: 'general',
+      name: '通用任务助手',
+      description: '适合问答、总结、写作和轻量任务处理。',
+      icon: 'Sparkles',
+      prompt: '你是一个可靠的通用任务型 AI Agent。先理解用户目标，再给出清晰、可执行、可复盘的结果。',
+      example: '请总结这段需求，并给出下一步行动清单。',
+      toolNames: ['current_time', 'calculator', 'text_stats'],
+      skillNames: [],
+      memoryEnabled: true,
+      temperature: 0.7,
+      maxTokens: 2048,
+    },
+    {
+      id: 'support',
+      name: '客服支持 Agent',
+      description: '适合基于知识库回答客户问题、整理工单和生成回复。',
+      icon: 'Headphones',
+      prompt: '你是一个专业、耐心的客服支持 Agent。优先基于可用知识库和上下文回答，语气友好，结论明确；无法确定时说明需要补充的信息。',
+      example: '客户询问退款规则，请基于知识库给出一段可直接发送的回复。',
+      toolNames: ['current_time', 'text_stats'],
+      skillNames: ['Research Planner'],
+      memoryEnabled: true,
+      temperature: 0.4,
+      maxTokens: 2048,
+    },
+    {
+      id: 'research',
+      name: '研究分析 Agent',
+      description: '适合资料梳理、观点对比、报告提纲和结论提炼。',
+      icon: 'Search',
+      prompt: '你是一个严谨的研究分析 Agent。先拆解问题，再汇总证据、比较观点，最后给出结论、风险和待验证事项。',
+      example: '请把这个主题拆成研究问题，并输出一份调研提纲。',
+      toolNames: ['current_time', 'text_stats'],
+      skillNames: ['Research Planner', 'Data Analyst'],
+      memoryEnabled: true,
+      temperature: 0.5,
+      maxTokens: 4096,
+    },
+    {
+      id: 'code',
+      name: '代码协作 Agent',
+      description: '适合代码解释、方案设计、调试建议和实现规划。',
+      icon: 'Code',
+      prompt: '你是一个资深代码协作 Agent。先阅读上下文，优先给出最小可行修改；解释风险、测试方式和边界条件。',
+      example: '请分析这个报错原因，并给出最小修复方案。',
+      toolNames: ['javascript_runner', 'text_stats'],
+      skillNames: ['Code Operator'],
+      memoryEnabled: false,
+      temperature: 0.3,
+      maxTokens: 4096,
+    },
+    {
+      id: 'data',
+      name: '数据分析 Agent',
+      description: '适合指标解释、表格分析、趋势归因和洞察输出。',
+      icon: 'DataAnalysis',
+      prompt: '你是一个数据分析 Agent。先确认指标口径，再进行对比、趋势和异常分析，输出结论、证据和后续建议。',
+      example: '请分析这组业务指标，找出异常变化和可能原因。',
+      toolNames: ['calculator', 'text_stats', 'javascript_runner'],
+      skillNames: ['Data Analyst'],
+      memoryEnabled: true,
+      temperature: 0.4,
+      maxTokens: 4096,
+    },
+    {
+      id: 'workflow',
+      name: '工作流编排 Agent',
+      description: '适合多步骤任务拆解、工具调用和结果自检。',
+      icon: 'Promotion',
+      prompt: '你是一个工作流编排 Agent。你会把目标拆成步骤，选择合适工具或能力执行，并在输出前进行自检。',
+      example: '请把这个任务拆成执行计划，并说明每一步需要的工具。',
+      toolNames: ['current_time', 'calculator', 'javascript_runner'],
+      skillNames: ['Workflow Orchestrator', 'Research Planner'],
+      memoryEnabled: true,
+      temperature: 0.5,
+      maxTokens: 4096,
+    },
+  ];
 
   // ===== 新DAG节点类型定义 =====
   type DagNodeType = 
@@ -1146,6 +1242,9 @@ export function useAppController() {
     };
     agentRuns.value = [];
     activeAgentRun.value = null;
+    activeAgentTraceStepId.value = null;
+    agentTraceReplayIndex.value = 0;
+    agentTraceReplayPlaying.value = false;
     agentMemories.value = [];
   }
 
@@ -1282,6 +1381,7 @@ export function useAppController() {
     if (!isAuthenticated.value || !agentId) {
       agentTestSuites.value = [];
       agentTestCases.value = [];
+      agentTestRuns.value = [];
       activeTestSuiteId.value = '';
       return;
     }
@@ -1292,6 +1392,7 @@ export function useAppController() {
       }
       if (activeTestSuiteId.value) {
         agentTestCases.value = await fetchAgentTestCases(activeTestSuiteId.value, backendBaseUrl.value);
+        agentTestRuns.value = await fetchAgentTestRuns(activeTestSuiteId.value, backendBaseUrl.value);
       }
     } catch (error) {
       console.error('[loadAgentTestSuites] failed:', error);
@@ -1347,7 +1448,83 @@ export function useAppController() {
   function createAgentDraft() {
     activeAgentId.value = '';
     resetAgentForm();
+    agentCreateWizardStep.value = 0;
+    selectedAgentTemplateId.value = 'general';
+    agentCreationGoal.value = '';
+    agentCreateWizardAdvancedOpen.value = [];
+    agentWorkspaceMode.value = 'develop';
+    agentPageTab.value = 'basic';
     status.value = '已创建本地 Agent 草稿';
+  }
+
+  function resolveAgentTemplate() {
+    return agentCreationTemplates.find((template) => template.id === selectedAgentTemplateId.value)
+      ?? agentCreationTemplates[0];
+  }
+
+  function resolveToolIdsByNames(names: string[]) {
+    return availableTools.value
+      .filter((tool) => names.includes(tool.name) || names.includes(tool.displayName))
+      .map((tool) => tool.id);
+  }
+
+  function resolveSkillIdsByNames(names: string[]) {
+    return availableSkills.value
+      .filter((skill) => names.includes(skill.name))
+      .map((skill) => skill.id);
+  }
+
+  function applyAgentTemplate(templateId = selectedAgentTemplateId.value) {
+    selectedAgentTemplateId.value = templateId;
+    const template = resolveAgentTemplate();
+    const defaultModel = agentForm.value.model || (selectedModel.value && selectedModel.value !== 'auto'
+      ? selectedModel.value
+      : (chatModels.value[0]?.id || models.value[0]?.id || ''));
+    const goal = agentCreationGoal.value.trim();
+    agentForm.value.name = agentForm.value.id ? agentForm.value.name : template.name;
+    agentForm.value.description = goal || template.description;
+    agentForm.value.model = defaultModel;
+    agentForm.value.systemPrompt = goal
+      ? `${template.prompt}\n\n# 当前目标\n${goal}`
+      : template.prompt;
+    agentForm.value.temperature = template.temperature;
+    agentForm.value.maxTokens = template.maxTokens;
+    agentForm.value.memoryEnabled = template.memoryEnabled;
+    agentForm.value.toolIds = Array.from(new Set([...agentForm.value.toolIds, ...resolveToolIdsByNames(template.toolNames)]));
+    agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, ...resolveSkillIdsByNames(template.skillNames)]));
+    if (knowledgeBases.value[0] && ['support', 'research', 'workflow'].includes(template.id)) {
+      agentForm.value.knowledgeBaseIds = Array.from(new Set([...agentForm.value.knowledgeBaseIds, knowledgeBases.value[0].id]));
+    }
+    agentPrompt.value = template.example;
+    status.value = `已应用模板：${template.name}`;
+  }
+
+  function nextAgentWizardStep() {
+    if (agentCreateWizardStep.value === 0) {
+      applyAgentTemplate();
+    }
+    agentCreateWizardStep.value = Math.min(3, agentCreateWizardStep.value + 1);
+  }
+
+  function previousAgentWizardStep() {
+    agentCreateWizardStep.value = Math.max(0, agentCreateWizardStep.value - 1);
+  }
+
+  async function saveAgentFromWizard(runAfterSave = false) {
+    if (!agentForm.value.name.trim() || !agentForm.value.model.trim()) {
+      status.value = '请填写 Agent 名称并选择模型';
+      return;
+    }
+    if (!agentForm.value.systemPrompt.trim()) {
+      const template = resolveAgentTemplate();
+      agentForm.value.systemPrompt = template.prompt;
+    }
+    const saved = await persistAgent();
+    if (!saved) return;
+    if (runAfterSave) {
+      agentWorkspaceMode.value = 'invoke';
+      if (!agentPrompt.value.trim()) agentPrompt.value = resolveAgentTemplate().example;
+    }
   }
 
   function selectAgent(agent: AgentDefinition) {
@@ -1655,6 +1832,9 @@ export function useAppController() {
       activeAgentId.value = generated.id;
       fillAgentForm(generated);
       generatorForm.value.requirement = '';
+      agentCreateWizardStep.value = 3;
+      agentWorkspaceMode.value = 'develop';
+      agentPageTab.value = 'basic';
       status.value = 'Agent 已自动生成';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '自动生成 Agent 失败';
@@ -1767,29 +1947,104 @@ export function useAppController() {
 
     agentRunning.value = true;
     activeAgentRun.value = null;
+    activeAgentTraceStepId.value = null;
+    agentTraceReplayIndex.value = 0;
+    agentTraceReplayPlaying.value = false;
     status.value = 'Agent 正在执行';
+    agentRunAbortController = new AbortController();
     try {
       const imageUrls = agentImageUrlInput.value
         .split(/\n|,/)
         .map((item) => item.trim())
         .filter(Boolean);
-      const run = await apiRunAgent(agent.id, input, { imageUrls }, backendBaseUrl.value);
-      activeAgentRun.value = run;
-      agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id)].slice(0, 20);
+      await streamAgentRun(agent.id, { input, imageUrls }, {
+        onEvent: (event) => {
+          applyAgentRunStreamEvent(event);
+        },
+        onDone: () => {
+          status.value = activeAgentRun.value?.status === 'failed' ? 'Agent 执行失败' : 'Agent 执行完成';
+        },
+        onAbort: () => {
+          status.value = 'Agent 执行已停止';
+        },
+      }, backendBaseUrl.value, agentRunAbortController.signal);
       agentPrompt.value = '';
-      status.value = run.status === 'succeeded' ? 'Agent 执行完成' : 'Agent 执行失败';
       try { authUser.value = await fetchMe(backendBaseUrl.value); } catch {}
       try { billingLedger.value = await fetchBillingLedger(backendBaseUrl.value); } catch {}
+      if (agent.id) {
+        try { agentRuns.value = await fetchAgentRuns(agent.id, backendBaseUrl.value); } catch {}
+      }
       void loadAgents();
     } catch (error) {
       status.value = error instanceof Error ? error.message : '运行 Agent 失败';
     } finally {
       agentRunning.value = false;
+      agentRunAbortController = null;
+    }
+  }
+
+  function applyAgentRunStreamEvent(event: any) {
+    if (event.type === 'run_created') {
+      activeAgentRun.value = event.run;
+      agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
+      status.value = 'Agent Trace 已开始';
+      return;
+    }
+    if (!activeAgentRun.value && event.runId) return;
+    if (event.type === 'step_started' || event.type === 'step_updated' || event.type === 'step_completed') {
+      const step = event.step;
+      if (!activeAgentRun.value) return;
+      const steps = activeAgentRun.value.steps.filter((item) => item.id !== step.id);
+      activeAgentRun.value = {
+        ...activeAgentRun.value,
+        steps: [...steps, step].sort((a, b) => a.id - b.id),
+      };
+      activeAgentTraceStepId.value = step.id;
+      agentTraceReplayIndex.value = Math.max(0, activeAgentRun.value.steps.findIndex((item) => item.id === step.id));
+      status.value = `${step.name} · ${step.status}`;
+      return;
+    }
+    if (event.type === 'llm_delta' && activeAgentRun.value) {
+      activeAgentRun.value = {
+        ...activeAgentRun.value,
+        output: event.output,
+      };
+      return;
+    }
+    if (event.type === 'run_completed') {
+      activeAgentRun.value = event.run;
+      activeAgentTraceStepId.value = event.run.steps[event.run.steps.length - 1]?.id ?? null;
+      agentTraceReplayIndex.value = Math.max(0, event.run.steps.length - 1);
+      agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
+      status.value = event.run.status === 'succeeded' ? 'Agent 执行完成' : 'Agent 执行失败';
+      return;
+    }
+    if (event.type === 'error') {
+      status.value = event.error || 'Agent 执行失败';
+      if (activeAgentRun.value) {
+        activeAgentRun.value = { ...activeAgentRun.value, status: 'failed', error: event.error || activeAgentRun.value.error };
+      }
     }
   }
 
   function selectAgentRun(run: AgentRun) {
     activeAgentRun.value = run;
+    activeAgentTraceStepId.value = run.steps[0]?.id ?? null;
+    agentTraceReplayIndex.value = 0;
+    agentTraceReplayPlaying.value = false;
+  }
+
+  async function openAgentRunTrace(runId: string) {
+    if (!runId) return;
+    try {
+      const run = await fetchAgentRun(runId, backendBaseUrl.value);
+      selectAgentRun(run);
+      agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id)].slice(0, 20);
+      agentWorkspaceMode.value = 'invoke';
+      status.value = '已打开运行 Trace';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '加载运行 Trace 失败';
+    }
   }
 
   function agentRunTagType(statusValue: AgentRun['status'] | AgentRun['steps'][number]['status']) {
@@ -1811,10 +2066,14 @@ export function useAppController() {
       const evaluation = await apiEvaluateAgentRun(activeAgentRun.value.id, {
         expectedOutput: evaluationForm.value.expectedOutput.trim() || undefined,
         rubric: evaluationForm.value.rubric.trim() || undefined,
+        judgeModel: evaluationForm.value.judgeModel.trim() || activeAgentRun.value.model || agentForm.value.model || undefined,
+        mode: evaluationForm.value.mode,
       }, backendBaseUrl.value);
       agentEvaluations.value = [evaluation, ...agentEvaluations.value.filter((item) => item.id !== evaluation.id)];
       evaluationForm.value.expectedOutput = '';
       evaluationForm.value.rubric = '';
+      evaluationForm.value.judgeModel = '';
+      evaluationForm.value.mode = 'hybrid';
       showEvaluationDialog.value = false;
       await loadAgentEvaluations(activeAgentRun.value.agentId);
       status.value = `评测完成：${evaluation.score}/100`;
@@ -1840,6 +2099,95 @@ export function useAppController() {
       return raw;
     }
   }
+
+  const activeAgentTraceStep = computed(() => {
+    const steps = activeAgentRun.value?.steps ?? [];
+    if (activeAgentTraceStepId.value !== null) {
+      return steps.find((step) => step.id === activeAgentTraceStepId.value) ?? steps[agentTraceReplayIndex.value] ?? null;
+    }
+    return steps[agentTraceReplayIndex.value] ?? null;
+  });
+
+  const agentTraceReplayMax = computed(() => Math.max(0, (activeAgentRun.value?.steps.length ?? 1) - 1));
+
+  const agentTraceNodes = computed(() => {
+    const steps = activeAgentRun.value?.steps ?? [];
+    return steps.map((step, index) => ({
+      id: String(step.id),
+      label: step.name,
+      type: step.stepType,
+      status: step.status,
+      latencyMs: step.latencyMs,
+      active: step.id === activeAgentTraceStepId.value || index === agentTraceReplayIndex.value,
+    }));
+  });
+
+  const agentTraceStageGroups = computed(() => {
+    const stages = [
+      { id: 'context', label: 'Context', types: ['context', 'memory_read', 'rag', 'knowledge', 'input'] },
+      { id: 'capability', label: 'Skill / Tool / RAG', types: ['skill', 'tool', 'rag', 'knowledge_search'] },
+      { id: 'llm', label: 'LLM', types: ['llm', 'llm_completion', 'completion'] },
+      { id: 'memory', label: 'Memory Write', types: ['memory_write', 'memory'] },
+      { id: 'other', label: 'Other', types: [] },
+    ];
+    const nodes = agentTraceNodes.value;
+    return stages
+      .map((stage) => ({
+        ...stage,
+        nodes: nodes.filter((node) => {
+          const type = node.type.toLowerCase();
+          if (stage.id === 'other') {
+            return !stages.some((candidate) => candidate.id !== 'other' && candidate.types.some((item) => type.includes(item)));
+          }
+          return stage.types.some((item) => type.includes(item));
+        }),
+      }))
+      .filter((stage) => stage.nodes.length > 0);
+  });
+
+  const agentTraceLatencyMax = computed(() => Math.max(1, ...agentTraceNodes.value.map((node) => node.latencyMs || 0)));
+
+  const agentTraceEdges = computed(() => {
+    const nodes = agentTraceNodes.value;
+    return nodes.slice(1).map((node, index) => ({
+      from: nodes[index].id,
+      to: node.id,
+    }));
+  });
+
+  function selectAgentTraceStep(stepId: number) {
+    const index = activeAgentRun.value?.steps.findIndex((step) => step.id === stepId) ?? -1;
+    activeAgentTraceStepId.value = stepId;
+    if (index >= 0) agentTraceReplayIndex.value = index;
+  }
+
+  function setAgentTraceReplayIndex(index: number) {
+    const steps = activeAgentRun.value?.steps ?? [];
+    const nextIndex = Math.max(0, Math.min(index, Math.max(0, steps.length - 1)));
+    agentTraceReplayIndex.value = nextIndex;
+    activeAgentTraceStepId.value = steps[nextIndex]?.id ?? null;
+  }
+
+  function toggleAgentTraceReplay() {
+    if (!activeAgentRun.value?.steps.length) return;
+    agentTraceReplayPlaying.value = !agentTraceReplayPlaying.value;
+  }
+
+  let agentTraceReplayTimer: ReturnType<typeof setInterval> | null = null;
+  watch(agentTraceReplayPlaying, (playing) => {
+    if (agentTraceReplayTimer) {
+      clearInterval(agentTraceReplayTimer);
+      agentTraceReplayTimer = null;
+    }
+    if (!playing) return;
+    agentTraceReplayTimer = setInterval(() => {
+      if (agentTraceReplayIndex.value >= agentTraceReplayMax.value) {
+        agentTraceReplayPlaying.value = false;
+        return;
+      }
+      setAgentTraceReplayIndex(agentTraceReplayIndex.value + 1);
+    }, 900);
+  });
 
   async function createKnowledgeBaseFromForm() {
     const name = knowledgeForm.value.name.trim();
@@ -2106,41 +2454,127 @@ export function useAppController() {
     status.value = `Skill "${skill.name}" 已导出为 Markdown`;
   }
 
+  function buildAgentExportBundle() {
+    const boundTools = availableTools.value.filter(t => agentForm.value.toolIds.includes(t.id));
+    const boundSkills = availableSkills.value.filter(s => agentForm.value.skillIds.includes(s.id));
+    const boundKBs = knowledgeBases.value.filter(kb => agentForm.value.knowledgeBaseIds.includes(kb.id));
+    const customToolByName = new Map(customTools.value.map((tool) => [tool.name, tool]));
+    return {
+      schemaVersion: 'agent.portable.v1',
+      exportedAt: new Date().toISOString(),
+      agent: {
+        name: agentForm.value.name,
+        description: agentForm.value.description,
+        status: agentForm.value.status,
+      },
+      prompt: {
+        systemPrompt: agentForm.value.systemPrompt,
+      },
+      runtime: {
+        model: agentForm.value.model,
+        temperature: agentForm.value.temperature,
+        maxTokens: agentForm.value.maxTokens,
+        memoryEnabled: agentForm.value.memoryEnabled,
+      },
+      publication: {
+        published: agentForm.value.published,
+        apiEnabled: agentForm.value.apiEnabled,
+        publicSlug: agentForm.value.publicSlug,
+      },
+      tools: boundTools.map((tool) => {
+        const customTool = customToolByName.get(tool.name);
+        const portableTool: Record<string, unknown> = {
+          name: tool.name,
+          displayName: tool.displayName,
+          description: tool.description,
+          schema: tool.schema,
+          implementationType: tool.implementationType,
+          enabled: tool.enabled,
+          portable: Boolean(customTool && customTool.code),
+        };
+        if (customTool) {
+          portableTool.runtime = customTool.runtime;
+          portableTool.code = customTool.code;
+          portableTool.entry = customTool.entry;
+          portableTool.inputSchema = customTool.inputSchema;
+          portableTool.outputSchema = customTool.outputSchema;
+          portableTool.permissions = customTool.permissions;
+          portableTool.timeout = customTool.timeout;
+          portableTool.retries = customTool.retries;
+        }
+        return portableTool;
+      }),
+      skills: boundSkills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          content: skill.content,
+          category: skill.category,
+          icon: skill.icon,
+          source: skill.source,
+          inputSchema: skill.inputSchema,
+          outputSchema: skill.outputSchema,
+          permissions: skill.permissions,
+          exampleInput: skill.exampleInput,
+          exampleOutput: skill.exampleOutput,
+          riskLevel: skill.riskLevel,
+          version: skill.version,
+          enabled: skill.enabled,
+        })),
+      knowledgeBases: boundKBs.map((kb) => ({
+          name: kb.name,
+          description: kb.description,
+          documentCount: kb.documentCount,
+          chunkCount: kb.chunkCount,
+          portable: false,
+          note: '知识库原文未包含在 Agent Bundle 中；请在目标平台重新导入同名知识库或单独迁移文档。',
+        })),
+      excluded: {
+        runHistory: true,
+        evaluations: true,
+        memories: true,
+        knowledgeDocuments: true,
+      },
+    };
+  }
+
+  const agentExportPreview = computed(() => {
+    const bundle = buildAgentExportBundle();
+    return {
+      fileName: `agent-${agentForm.value.name.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.agent.json`,
+      toolCount: bundle.tools.length,
+      skillCount: bundle.skills.length,
+      knowledgeBaseCount: bundle.knowledgeBases.length,
+      portableToolCount: bundle.tools.filter((tool) => tool.portable).length,
+      model: bundle.runtime.model,
+      memoryEnabled: bundle.runtime.memoryEnabled,
+    };
+  });
+
   function exportAgentAsJson() {
     if (!agentForm.value.id) {
       status.value = '请先保存 Agent';
       return;
     }
+    showAgentExportDialog.value = true;
+  }
 
-    const exportData = {
-      name: agentForm.value.name,
-      description: agentForm.value.description,
-      model: agentForm.value.model,
-      systemPrompt: agentForm.value.systemPrompt,
-      temperature: agentForm.value.temperature,
-      maxTokens: agentForm.value.maxTokens,
-      memoryEnabled: agentForm.value.memoryEnabled,
-      toolIds: agentForm.value.toolIds,
-      skillIds: agentForm.value.skillIds,
-      knowledgeBaseIds: agentForm.value.knowledgeBaseIds,
-      status: agentForm.value.status,
-      published: agentForm.value.published,
-      apiEnabled: agentForm.value.apiEnabled,
-      publicSlug: agentForm.value.publicSlug,
-      exportedAt: new Date().toISOString(),
-      version: '1.0',
-    };
-
+  function confirmExportAgentBundle() {
+    if (!agentForm.value.id) {
+      status.value = '请先保存 Agent';
+      return;
+    }
+    const exportData = buildAgentExportBundle();
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `agent-${agentForm.value.name.replace(/\s+/g, '-').toLowerCase()}.json`;
+    a.download = agentExportPreview.value.fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    status.value = `Agent "${agentForm.value.name}" 已导出为 JSON`;
+    showAgentExportDialog.value = false;
+    status.value = `Agent "${agentForm.value.name}" 已导出为 JSON Bundle`;
   }
 
   function exportAgentAsMarkdown() {
@@ -2613,10 +3047,12 @@ export function useAppController() {
   async function loadSelectedTestCases() {
     if (!activeTestSuiteId.value) {
       agentTestCases.value = [];
+      agentTestRuns.value = [];
       return;
     }
     try {
       agentTestCases.value = await fetchAgentTestCases(activeTestSuiteId.value, backendBaseUrl.value);
+      agentTestRuns.value = await fetchAgentTestRuns(activeTestSuiteId.value, backendBaseUrl.value);
     } catch (error) {
       status.value = error instanceof Error ? error.message : '加载测试用例失败';
     }
@@ -2626,7 +3062,11 @@ export function useAppController() {
     if (!activeTestSuiteId.value || testRunning.value) return;
     testRunning.value = true;
     try {
-      activeTestRun.value = await apiRunAgentTestSuite(activeTestSuiteId.value, backendBaseUrl.value);
+      activeTestRun.value = await apiRunAgentTestSuite(activeTestSuiteId.value, {
+        judgeModel: evaluationForm.value.judgeModel.trim() || agentForm.value.model || undefined,
+        evaluationMode: evaluationForm.value.mode,
+      }, backendBaseUrl.value);
+      agentTestRuns.value = await fetchAgentTestRuns(activeTestSuiteId.value, backendBaseUrl.value);
       status.value = '回归测试已完成';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '运行回归测试失败';
@@ -5552,7 +5992,11 @@ export function useAppController() {
     }
   }
 
-  onUnmounted(() => { stopDrivingSim(); });
+  onUnmounted(() => {
+    stopDrivingSim();
+    if (agentTraceReplayTimer) clearInterval(agentTraceReplayTimer);
+    agentRunAbortController?.abort();
+  });
 
   /* ---------- Video Understanding Handlers ---------- */
 
@@ -6081,6 +6525,15 @@ export function useAppController() {
     agentImageUrlInput,
     agentRuns,
     activeAgentRun,
+    activeAgentTraceStepId,
+    activeAgentTraceStep,
+    agentTraceReplayIndex,
+    agentTraceReplayMax,
+    agentTraceReplayPlaying,
+    agentTraceNodes,
+    agentTraceEdges,
+    agentTraceStageGroups,
+    agentTraceLatencyMax,
     agentWorkspaceMode,
     agentPageTab,
     agentConsoleTab,
@@ -6099,6 +6552,7 @@ export function useAppController() {
     agentVersions,
     agentTestSuites,
     agentTestCases,
+    agentTestRuns,
     marketplaceTemplates,
     agentResourceLoading,
     knowledgeCreating,
@@ -6154,6 +6608,11 @@ export function useAppController() {
     agentEvaluationSaving,
     evaluationForm,
     generatorForm,
+    agentCreateWizardStep,
+    agentCreateWizardAdvancedOpen,
+    selectedAgentTemplateId,
+    agentCreationGoal,
+    showAgentExportDialog,
     customTools,
     toolCreateDialogVisible,
     toolPreviewVisible,
@@ -6190,6 +6649,7 @@ export function useAppController() {
     showBuilderGuide,
     activeBuilderBlock,
     builderBlockConfigs,
+    agentCreationTemplates,
     workflowCanvasNodes,
     workflowCanvasConnecting,
     workflowCanvasDrag,
@@ -6357,6 +6817,10 @@ export function useAppController() {
     loadAgents,
     loadAgentRuns,
     createAgentDraft,
+    applyAgentTemplate,
+    nextAgentWizardStep,
+    previousAgentWizardStep,
+    saveAgentFromWizard,
     selectAgent,
     selectAgentById,
     startAgentBuilderDrag,
@@ -6377,6 +6841,10 @@ export function useAppController() {
     removeAgent,
     runCurrentAgent,
     selectAgentRun,
+    openAgentRunTrace,
+    selectAgentTraceStep,
+    setAgentTraceReplayIndex,
+    toggleAgentTraceReplay,
     agentRunTagType,
     agentEvalTagType,
     evaluateActiveAgentRun,
@@ -6393,7 +6861,9 @@ export function useAppController() {
     createAgentMemory,
     createSkillFromForm,
     exportSkillAsMarkdown,
+    agentExportPreview,
     exportAgentAsJson,
+    confirmExportAgentBundle,
     exportAgentAsMarkdown,
     previewSkill,
     previewSkillById,

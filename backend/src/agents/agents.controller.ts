@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -13,6 +14,7 @@ import {
   GenerateAgentDto,
   InstallAgentTemplateDto,
   RunAgentDto,
+  RunAgentTestSuiteDto,
   UpdateAgentDto,
   UpdateAgentPublicationDto,
 } from './dto/agent.dto';
@@ -125,6 +127,31 @@ export class AgentsController {
     return { data: await this.agentsService.run(user.id, id, payload) };
   }
 
+  @Post(':id/runs/stream')
+  async streamRun(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: RunAgentDto,
+    @Res() res: Response,
+  ) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    const write = (event: unknown) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      (res as Response & { flush?: () => void }).flush?.();
+    };
+    try {
+      await this.agentsService.runStream(user.id, id, payload, write);
+      res.write('data: [DONE]\n\n');
+    } catch (error) {
+      write({ type: 'error', error: error instanceof Error ? error.message : String(error) });
+      res.write('data: [DONE]\n\n');
+    } finally {
+      res.end();
+    }
+  }
+
   @Get(':id/runs')
   async listRuns(
     @CurrentUser() user: AuthenticatedRequestUser,
@@ -201,7 +228,21 @@ export class AgentsController {
   }
 
   @Post('test-suites/:suiteId/runs')
-  async runTestSuite(@CurrentUser() user: AuthenticatedRequestUser, @Param('suiteId') suiteId: string) {
-    return { data: await this.agentsService.runTestSuite(user.id, suiteId) };
+  async runTestSuite(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('suiteId') suiteId: string,
+    @Body() payload: RunAgentTestSuiteDto = {},
+  ) {
+    return { data: await this.agentsService.runTestSuite(user.id, suiteId, payload) };
+  }
+
+  @Get('test-suites/:suiteId/runs')
+  async listTestRuns(@CurrentUser() user: AuthenticatedRequestUser, @Param('suiteId') suiteId: string) {
+    return { data: await this.agentsService.listTestRuns(user.id, suiteId) };
+  }
+
+  @Get('test-runs/:runId')
+  async getTestRun(@CurrentUser() user: AuthenticatedRequestUser, @Param('runId') runId: string) {
+    return { data: await this.agentsService.getTestRun(user.id, runId) };
   }
 }

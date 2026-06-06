@@ -14,9 +14,11 @@ import {
   CreateAgentTestCaseDto,
   CreateAgentTestSuiteDto,
   CreateAgentVersionDto,
+  EvaluateAgentRunDto,
   GenerateAgentDto,
   InstallAgentTemplateDto,
   RunAgentDto,
+  RunAgentTestSuiteDto,
   UpdateAgentDto,
   UpdateAgentPublicationDto,
 } from './dto/agent.dto';
@@ -100,6 +102,30 @@ export interface AgentRunStats {
   averageScore: number;
   evaluatedRuns: number;
 }
+
+export type AgentRunStreamEvent =
+  | { type: 'run_created'; run: AgentRun }
+  | { type: 'step_started'; step: AgentRunStep }
+  | { type: 'step_updated'; step: AgentRunStep }
+  | { type: 'step_completed'; step: AgentRunStep }
+  | { type: 'llm_delta'; runId: string; delta: string; output: string }
+  | { type: 'run_completed'; run: AgentRun }
+  | { type: 'error'; runId?: string; error: string };
+
+type EmitAgentRunEvent = (event: AgentRunStreamEvent) => void;
+
+type AgentRunStepInput = {
+  stepType: string;
+  name: string;
+  status: 'running' | 'succeeded' | 'failed';
+  input: string;
+  output: string;
+  error?: string;
+  startedAt: string;
+  endedAt: string | null;
+  latencyMs: number;
+  metadata: string;
+};
 
 type AgentRow = {
   id: string;
@@ -736,6 +762,274 @@ export class AgentsService {
     }
   }
 
+  async runStream(
+    userId: string,
+    agentId: string,
+    dto: RunAgentDto,
+    emit: EmitAgentRunEvent,
+  ): Promise<AgentRun> {
+    const agent = await this.getById(userId, agentId);
+    if (agent.status !== 'active') throw new BadRequestException('Agent 已归档，无法运行');
+
+    const runId = randomUUID();
+    const startedAt = Date.now();
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_runs
+        (id, agent_id, user_id, status, input, output, model, error, prompt_tokens, completion_tokens, total_tokens, latency_ms, created_at)
+       VALUES (?, ?, ?, 'running', ?, '', ?, '', 0, 0, 0, 0, ?)`,
+    ).run(runId, agent.id, userId, dto.input, agent.model, now);
+    emit({ type: 'run_created', run: await this.getRun(userId, runId) });
+
+    const insertAndEmit = async (step: AgentRunStepInput) => {
+      const id = await this.insertStep(runId, agent.id, userId, step);
+      const inserted = await this.getStep(userId, runId, id);
+      emit({
+        type: inserted.status === 'running' ? 'step_started' : 'step_completed',
+        step: inserted,
+      });
+      return inserted;
+    };
+
+    await insertAndEmit({
+      stepType: 'context',
+      name: '上下文组装',
+      status: 'succeeded',
+      input: dto.input,
+      output: JSON.stringify({
+        systemPrompt: Boolean(agent.systemPrompt),
+        historyMessages: dto.messages?.length ?? 0,
+        model: agent.model,
+      }),
+      startedAt: now,
+      endedAt: this.databaseService.now(),
+      latencyMs: 0,
+      metadata: '',
+    });
+
+    const contextBlocks: string[] = [];
+
+    if (agent.skillIds.length > 0) {
+      const stepStarted = Date.now();
+      try {
+        const skills = await this.skillsService.getAgentSkills(userId, agent.id);
+        if (skills.length > 0) {
+          contextBlocks.push(`Agent Skills:\n${skills.map((skill) => `## ${skill.name}\n${skill.content}`).join('\n\n')}`);
+        }
+        await insertAndEmit({
+          stepType: 'skill_context',
+          name: 'Skill 能力注入',
+          status: 'succeeded',
+          input: dto.input,
+          output: JSON.stringify(skills.map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            category: skill.category,
+          })), null, 2),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ skillIds: agent.skillIds, count: skills.length }),
+        });
+      } catch (error) {
+        await insertAndEmit({
+          stepType: 'skill_context',
+          name: 'Skill 能力注入',
+          status: 'failed',
+          input: dto.input,
+          output: '',
+          error: error instanceof Error ? error.message : String(error),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ skillIds: agent.skillIds }),
+        });
+      }
+    }
+
+    if (agent.memoryEnabled) {
+      const stepStarted = Date.now();
+      try {
+        const memories = await this.memoryService.search(userId, dto.input, agent.id, 5);
+        if (memories.length > 0) {
+          contextBlocks.push(`长期记忆:\n${memories.map((m, idx) => `[${idx + 1}] ${m.content}`).join('\n')}`);
+        }
+        await insertAndEmit({
+          stepType: 'memory_retrieval',
+          name: '长期记忆检索',
+          status: 'succeeded',
+          input: dto.input,
+          output: JSON.stringify(memories, null, 2),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ count: memories.length }),
+        });
+      } catch (error) {
+        await insertAndEmit({
+          stepType: 'memory_retrieval',
+          name: '长期记忆检索',
+          status: 'failed',
+          input: dto.input,
+          output: '',
+          error: error instanceof Error ? error.message : String(error),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: '',
+        });
+      }
+    }
+
+    if (agent.knowledgeBaseIds.length > 0) {
+      const stepStarted = Date.now();
+      try {
+        const chunks = await this.knowledgeService.search(userId, agent.knowledgeBaseIds, dto.input, 6);
+        if (chunks.length > 0) {
+          contextBlocks.push(`知识库检索:\n${chunks.map((c, idx) => `[${idx + 1}] ${c.title}\n${c.content}`).join('\n\n')}`);
+        }
+        await insertAndEmit({
+          stepType: 'rag_retrieval',
+          name: '知识库检索',
+          status: 'succeeded',
+          input: dto.input,
+          output: JSON.stringify(chunks, null, 2),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ knowledgeBaseIds: agent.knowledgeBaseIds, count: chunks.length }),
+        });
+      } catch (error) {
+        await insertAndEmit({
+          stepType: 'rag_retrieval',
+          name: '知识库检索',
+          status: 'failed',
+          input: dto.input,
+          output: '',
+          error: error instanceof Error ? error.message : String(error),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ knowledgeBaseIds: agent.knowledgeBaseIds }),
+        });
+      }
+    }
+
+    if (agent.toolIds.length > 0) {
+      const stepStarted = Date.now();
+      try {
+        const toolResults = await this.invokePlannedTools(userId, agent, runId, dto)
+          .catch(() => [])
+          .then(async (planned) => planned.length > 0
+            ? planned
+            : this.toolsService.autoInvokeForInput(userId, agent.id, runId, dto.input));
+        if (toolResults.length > 0) {
+          contextBlocks.push(`工具调用结果:\n${toolResults.map((t) => `${t.toolName}: ${t.output || t.error}`).join('\n')}`);
+        }
+        await insertAndEmit({
+          stepType: 'tool_calling',
+          name: '工具自动调用',
+          status: 'succeeded',
+          input: dto.input,
+          output: JSON.stringify(toolResults, null, 2),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ toolIds: agent.toolIds, count: toolResults.length }),
+        });
+      } catch (error) {
+        await insertAndEmit({
+          stepType: 'tool_calling',
+          name: '工具自动调用',
+          status: 'failed',
+          input: dto.input,
+          output: '',
+          error: error instanceof Error ? error.message : String(error),
+          startedAt: this.databaseService.now(),
+          endedAt: this.databaseService.now(),
+          latencyMs: Date.now() - stepStarted,
+          metadata: JSON.stringify({ toolIds: agent.toolIds }),
+        });
+      }
+    }
+
+    const llmStep = await insertAndEmit({
+      stepType: 'llm_completion',
+      name: '模型推理',
+      status: 'running',
+      input: dto.input,
+      output: '',
+      startedAt: this.databaseService.now(),
+      endedAt: null,
+      latencyMs: 0,
+      metadata: JSON.stringify({ model: agent.model }),
+    });
+
+    try {
+      const request = this.buildChatRequest(agent, dto, contextBlocks);
+      const output = await this.collectCompletionStream(request, (delta, full) => {
+        emit({ type: 'llm_delta', runId, delta, output: full });
+      });
+      const usage = this.billingService.reserveForStream(userId, request);
+      const updatedUser = await this.billingService.chargeForCompletion(userId, request, usage, 'agent');
+      const completedAt = this.databaseService.now();
+      const latencyMs = Date.now() - startedAt;
+
+      await this.databaseService.connection.prepare(
+        `UPDATE agent_run_steps
+         SET status = 'succeeded', output = ?, ended_at = ?, latency_ms = ?, metadata = ?
+         WHERE id = ? AND run_id = ?`,
+      ).run(output, completedAt, latencyMs, JSON.stringify({ usage, creditBalance: updatedUser.credits, streamed: true }), llmStep.id, runId);
+      emit({ type: 'step_completed', step: await this.getStep(userId, runId, llmStep.id) });
+
+      await this.databaseService.connection.prepare(
+        `UPDATE agent_runs
+         SET status = 'succeeded', output = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, latency_ms = ?, completed_at = ?
+         WHERE id = ? AND user_id = ?`,
+      ).run(output, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, latencyMs, completedAt, runId, userId);
+
+      if (agent.memoryEnabled) {
+        const memory = await this.memoryService.autoRemember(userId, agent.id, dto.input, output).catch(() => null);
+        if (memory) {
+          await insertAndEmit({
+            stepType: 'memory_write',
+            name: '长期记忆写入',
+            status: 'succeeded',
+            input: dto.input,
+            output: JSON.stringify(memory, null, 2),
+            startedAt: this.databaseService.now(),
+            endedAt: this.databaseService.now(),
+            latencyMs: 0,
+            metadata: JSON.stringify({ memoryId: memory.id }),
+          });
+        }
+      }
+
+      const run = await this.getRun(userId, runId);
+      emit({ type: 'run_completed', run });
+      return run;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const completedAt = this.databaseService.now();
+      const latencyMs = Date.now() - startedAt;
+      await this.databaseService.connection.prepare(
+        `UPDATE agent_run_steps
+         SET status = 'failed', error = ?, ended_at = ?, latency_ms = ?
+         WHERE id = ? AND run_id = ?`,
+      ).run(message, completedAt, latencyMs, llmStep.id, runId);
+      emit({ type: 'step_completed', step: await this.getStep(userId, runId, llmStep.id) });
+      await this.databaseService.connection.prepare(
+        `UPDATE agent_runs
+         SET status = 'failed', error = ?, latency_ms = ?, completed_at = ?
+         WHERE id = ? AND user_id = ?`,
+      ).run(message, latencyMs, completedAt, runId, userId);
+      emit({ type: 'error', runId, error: message });
+      const run = await this.getRun(userId, runId);
+      emit({ type: 'run_completed', run });
+      return run;
+    }
+  }
+
   async getRun(userId: string, runId: string): Promise<AgentRun> {
     const row = await this.databaseService.connection.prepare(
       `SELECT
@@ -811,10 +1105,10 @@ export class AgentsService {
   async evaluateRun(
     userId: string,
     runId: string,
-    options?: { expectedOutput?: string; rubric?: string },
+    options?: EvaluateAgentRunDto,
   ): Promise<AgentEvaluation> {
     const run = await this.getRun(userId, runId);
-    const evaluation = this.scoreRun(run, options);
+    const evaluation = await this.scoreRunWithJudge(run, options);
     const id = randomUUID();
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
@@ -1049,7 +1343,7 @@ export class AgentsService {
     ).all(suiteId, userId) as Array<Record<string, unknown>>;
   }
 
-  async runTestSuite(userId: string, suiteId: string): Promise<Record<string, unknown>> {
+  async runTestSuite(userId: string, suiteId: string, options: RunAgentTestSuiteDto = {}): Promise<Record<string, unknown>> {
     const suite = await this.getTestSuiteRow(userId, suiteId);
     const cases = await this.listTestCases(userId, suiteId);
     if (cases.length === 0) throw new BadRequestException('测试集没有测试用例');
@@ -1067,6 +1361,8 @@ export class AgentsService {
       const evaluation = await this.evaluateRun(userId, run.id, {
         expectedOutput: String(testCase.expectedOutput || ''),
         rubric: String(testCase.rubric || ''),
+        judgeModel: options.judgeModel,
+        mode: options.evaluationMode ?? 'hybrid',
       });
       results.push({ caseId: testCase.id, runId: run.id, status: run.status, score: evaluation.score, grade: evaluation.grade, summary: evaluation.summary });
     }
@@ -1082,6 +1378,33 @@ export class AgentsService {
        WHERE id = ? AND user_id = ?`,
     ).run(JSON.stringify(summary), JSON.stringify(results), this.databaseService.now(), runId, userId);
     return { id: runId, suiteId, agentId: suite.agentId, status: 'succeeded', summary, caseResults: results, createdAt: now, completedAt: this.databaseService.now() };
+  }
+
+  async listTestRuns(userId: string, suiteId: string): Promise<Array<Record<string, unknown>>> {
+    await this.getTestSuiteRow(userId, suiteId);
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, suite_id as suiteId, agent_id as agentId, user_id as userId,
+              status, summary_json as summaryJson, case_results_json as caseResultsJson,
+              created_at as createdAt, completed_at as completedAt
+       FROM agent_test_runs
+       WHERE suite_id = ? AND user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 30`,
+    ).all(suiteId, userId) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapTestRunRow(row));
+  }
+
+  async getTestRun(userId: string, runId: string): Promise<Record<string, unknown>> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, suite_id as suiteId, agent_id as agentId, user_id as userId,
+              status, summary_json as summaryJson, case_results_json as caseResultsJson,
+              created_at as createdAt, completed_at as completedAt
+       FROM agent_test_runs
+       WHERE id = ? AND user_id = ?
+       LIMIT 1`,
+    ).get(runId, userId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundException('Agent 测试运行不存在');
+    return this.mapTestRunRow(row);
   }
 
   private buildChatRequest(agent: AgentDefinition, dto: RunAgentDto, contextBlocks: string[]): ChatCompletionRequest {
@@ -1245,6 +1568,31 @@ export class AgentsService {
     return suite;
   }
 
+  private mapTestRunRow(row: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: String(row.id),
+      suiteId: String(row.suiteId),
+      agentId: String(row.agentId),
+      userId: String(row.userId),
+      status: String(row.status),
+      summary: this.parseJsonRecord(String(row.summaryJson || '{}')),
+      caseResults: this.parseJsonArray(String(row.caseResultsJson || '[]')),
+      createdAt: String(row.createdAt || ''),
+      completedAt: row.completedAt ? String(row.completedAt) : null,
+    };
+  }
+
+  private parseJsonArray(raw: string): Array<Record<string, unknown>> {
+    try {
+      const parsed = JSON.parse(raw || '[]') as unknown;
+      return Array.isArray(parsed)
+        ? parsed.filter((item) => item && typeof item === 'object' && !Array.isArray(item)) as Array<Record<string, unknown>>
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
   private marketplaceTemplates(): Array<Record<string, unknown>> {
     return [
       {
@@ -1287,18 +1635,7 @@ export class AgentsService {
     runId: string,
     agentId: string,
     userId: string,
-    step: {
-      stepType: string;
-      name: string;
-      status: 'running' | 'succeeded' | 'failed';
-      input: string;
-      output: string;
-      error?: string;
-      startedAt: string;
-      endedAt: string | null;
-      latencyMs: number;
-      metadata: string;
-    },
+    step: AgentRunStepInput,
   ): Promise<number> {
     const endedAtSql = step.endedAt === null ? 'NULL' : '?';
     const sql = `INSERT INTO agent_run_steps
@@ -1323,10 +1660,197 @@ export class AgentsService {
     return Number(result.lastInsertRowid ?? 0);
   }
 
+  private async getStep(userId: string, runId: string, stepId: number): Promise<AgentRunStep> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT
+         id,
+         run_id as runId,
+         step_type as stepType,
+         name,
+         status,
+         input,
+         output,
+         error,
+         started_at as startedAt,
+         ended_at as endedAt,
+         latency_ms as latencyMs,
+         metadata
+       FROM agent_run_steps
+       WHERE id = ? AND run_id = ? AND user_id = ?`,
+    ).get(stepId, runId, userId) as unknown as AgentRunStep | undefined;
+    if (!row) throw new NotFoundException('Agent 运行步骤不存在');
+    return {
+      ...row,
+      id: Number(row.id),
+      latencyMs: Number(row.latencyMs),
+      endedAt: row.endedAt || null,
+    };
+  }
+
+  private async collectCompletionStream(
+    request: ChatCompletionRequest,
+    onDelta: (delta: string, output: string) => void,
+  ): Promise<string> {
+    const upstream = await this.chatService.createCompletionStream(request);
+    const reader = upstream.body?.getReader();
+    if (!reader) throw new BadRequestException('模型流式响应不可用');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let output = '';
+
+    const consumeEvent = (rawEvent: string) => {
+      const dataLines = rawEvent
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice('data:'.length).trim());
+      for (const data of dataLines) {
+        if (!data || data === '[DONE]') continue;
+        try {
+          const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+          const delta = json.choices?.[0]?.delta?.content ?? '';
+          if (delta) {
+            output += delta;
+            onDelta(delta, output);
+          }
+        } catch {
+          continue;
+        }
+      }
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? '';
+        for (const event of events) consumeEvent(event);
+      }
+      if (buffer.trim()) consumeEvent(buffer);
+      return output;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   private assertRunnableModel(model: string): void {
     if (!model || model.trim() === 'auto') {
       throw new BadRequestException('Agent 需要绑定一个具体模型，暂不支持 auto 路由');
     }
+  }
+
+  private async scoreRunWithJudge(
+    run: AgentRun,
+    options?: EvaluateAgentRunDto,
+  ): Promise<Pick<AgentEvaluation, 'score' | 'grade' | 'summary' | 'rubric'>> {
+    const mode = options?.mode ?? 'hybrid';
+    const rules = this.scoreRun(run, options);
+    const judgeModel = options?.judgeModel?.trim();
+    if (!judgeModel || mode === 'rules') {
+      return {
+        ...rules,
+        rubric: {
+          rules: rules.rubric,
+          llmJudge: null,
+          finalScore: rules.score,
+          mode: 'rules',
+        },
+      };
+    }
+
+    try {
+      const llmJudge = await this.runLlmJudge(run, options, judgeModel);
+      const llmScore = Number(llmJudge.score ?? rules.score);
+      const finalScore = mode === 'llm'
+        ? llmScore
+        : Math.round((rules.score * 0.45) + (llmScore * 0.55));
+      const grade = this.gradeForScore(finalScore);
+      return {
+        score: finalScore,
+        grade,
+        summary: `Hybrid 评测 ${finalScore}/100。规则分 ${rules.score}/100，Judge 分 ${llmScore}/100。${String(llmJudge.reason || '')}`,
+        rubric: {
+          rules: rules.rubric,
+          llmJudge: { ...llmJudge, model: judgeModel },
+          finalScore,
+          mode,
+        },
+      };
+    } catch (error) {
+      return {
+        ...rules,
+        summary: `${rules.summary} LLM Judge 未完成：${error instanceof Error ? error.message : String(error)}`,
+        rubric: {
+          rules: rules.rubric,
+          llmJudge: {
+            model: judgeModel,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          finalScore: rules.score,
+          mode: 'rules_fallback',
+        },
+      };
+    }
+  }
+
+  private async runLlmJudge(
+    run: AgentRun,
+    options: EvaluateAgentRunDto | undefined,
+    judgeModel: string,
+  ): Promise<Record<string, unknown>> {
+    const request: ChatCompletionRequest = {
+      model: judgeModel,
+      temperature: 0,
+      max_tokens: 900,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是 Agent 质量评测器。只输出 JSON，不要输出 Markdown。',
+            'JSON 格式: {"score":0-100,"reason":"...","failedItems":["..."],"suggestions":["..."]}',
+            '评分要考虑任务完成度、准确性、可执行性、是否符合期望输出和 rubric。',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            input: run.input,
+            output: run.output,
+            status: run.status,
+            error: run.error,
+            expectedOutput: options?.expectedOutput || '',
+            rubric: options?.rubric || '',
+            trace: run.steps.map((step) => ({
+              type: step.stepType,
+              name: step.name,
+              status: step.status,
+              error: step.error,
+              latencyMs: step.latencyMs,
+            })),
+          }, null, 2),
+        },
+      ],
+    };
+    const completion = await this.chatService.createCompletion(request);
+    const content = completion.choices?.[0]?.message?.content ?? '{}';
+    const parsed = this.parseJsonRecord(content.match(/```json\s*([\s\S]*?)```/i)?.[1] ?? content);
+    const score = Math.max(0, Math.min(100, Number(parsed.score ?? 0)));
+    return {
+      score,
+      reason: String(parsed.reason || ''),
+      failedItems: Array.isArray(parsed.failedItems) ? parsed.failedItems.map(String).slice(0, 20) : [],
+      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.map(String).slice(0, 20) : [],
+    };
+  }
+
+  private gradeForScore(score: number): AgentEvaluation['grade'] {
+    return score >= 85 ? 'excellent'
+      : score >= 70 ? 'good'
+      : score >= 55 ? 'fair'
+      : score >= 35 ? 'poor'
+      : 'failed';
   }
 
   private scoreRun(

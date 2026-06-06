@@ -184,6 +184,26 @@ export class EvaluateAgentRunDto {
   @IsString()
   @MaxLength(4000)
   rubric?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  judgeModel?: string;
+
+  @IsOptional()
+  @IsIn(['rules', 'llm', 'hybrid'])
+  mode?: 'rules' | 'llm' | 'hybrid';
+}
+
+export class RunAgentTestSuiteDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  judgeModel?: string;
+
+  @IsOptional()
+  @IsIn(['rules', 'llm', 'hybrid'])
+  evaluationMode?: 'rules' | 'llm' | 'hybrid';
 }
 
 export class UpdateAgentPublicationDto {

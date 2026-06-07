@@ -4273,10 +4273,12 @@ html.dark .tts-history-item {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  min-height: 40px;
 }
 
 .control-actions .el-button {
   width: 100%;
+  height: 40px;
 }
 
 .driving-model-card {
@@ -4301,7 +4303,10 @@ html.dark .tts-history-item {
 
 .driving-perception-card {
   display: grid;
+  grid-template-rows: 20px 18px;
+  align-content: center;
   gap: 4px;
+  min-height: 68px;
   padding: 10px 12px;
   border: 1px solid var(--el-border-color-light, #e2e8f0);
   border-left: 4px solid #22c55e;
@@ -4319,18 +4324,29 @@ html.dark .tts-history-item {
 
 .driving-perception-card strong {
   color: var(--el-text-color-primary);
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .driving-perception-card span {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.45;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .openpilot-state-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(2, 54px);
   gap: 8px;
+  min-height: 116px;
 }
 
 .openpilot-state-grid > div {
@@ -4338,6 +4354,9 @@ html.dark .tts-history-item {
   border-radius: 8px;
   padding: 8px;
   background: var(--el-fill-color-blank, #fff);
+  min-width: 0;
+  height: 54px;
+  overflow: hidden;
 }
 
 .openpilot-state-grid span,
@@ -4354,6 +4373,10 @@ html.dark .tts-history-item {
   margin-top: 2px;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-height: 18px;
 }
 
 .driving-analysis {

@@ -5407,6 +5407,7 @@ export function useAppController() {
   let drivingOvertakeTargetLane: number | null = null;
   let drivingOvertakeTargetX: number | null = null;
   let drivingOvertakeUntil = 0;
+  let drivingOvertakeCooldownUntil = 0;
   let drivingLaneChangeHoldUntil = 0;
   let drivingOvertakeLateralVelocity = 0;
   interface DrivingObject { x: number; y: number; w: number; h: number; speed: number; color: string; type: string; lane: number; changingLane: boolean; behavior?: string }
@@ -5714,6 +5715,7 @@ export function useAppController() {
     drivingOvertakeTargetLane = null;
     drivingOvertakeTargetX = null;
     drivingOvertakeUntil = 0;
+    drivingOvertakeCooldownUntil = 0;
     drivingLaneChangeHoldUntil = 0;
     drivingOvertakeLateralVelocity = 0;
     Object.assign(drivingFilteredPerception, {
@@ -5768,7 +5770,7 @@ export function useAppController() {
         : 35 + Math.random() * 75;
     drivingVehicles.push({
       x: cx - w / 2,
-      y: sameLaneAsEgo ? -h - 70 - Math.random() * 130 : -h - Math.random() * 350,
+      y: sameLaneAsEgo ? -h - 150 - Math.random() * 170 : -h - Math.random() * 390,
       w, h,
       speed: baseSpeed,
       color: LANE_COLORS[Math.floor(Math.random() * LANE_COLORS.length)],
@@ -6028,15 +6030,25 @@ export function useAppController() {
     let aheadGap = Infinity;
     let rearGap = Infinity;
     let lateralRisk = 0;
+    let pathBlocked = false;
     const targetCanvasX = W / 2 + targetX;
+    const currentCanvasX = W / 2 + drivingEgoX;
+    const pathLeft = Math.min(currentCanvasX, targetCanvasX) - egoW * 0.56;
+    const pathRight = Math.max(currentCanvasX, targetCanvasX) + egoW * 0.56;
     const halfWidth = egoW * (aggressive ? 0.42 : 0.5);
     for (const v of drivingVehicles) {
       const vcx = v.x + v.w / 2;
       const centerY = v.y + v.h / 2;
       const dy = centerY - egoCY;
+      const projectedY = centerY + (drivingSpeed.value - v.speed) * 3 * 0.55;
       const lateralClearance = Math.abs(vcx - targetCanvasX) - (v.w / 2 + halfWidth);
-      if (lateralClearance < laneW * 0.1 && Math.abs(dy) < egoH * 4.5) {
-        lateralRisk += (laneW * 0.1 - lateralClearance) * (1 + (egoH * 4.5 - Math.abs(dy)) / Math.max(1, egoH * 4.5));
+      const vehicleInPath = vcx + v.w / 2 > pathLeft && vcx - v.w / 2 < pathRight;
+      if (vehicleInPath && projectedY > egoCY - egoH * 2.25 && projectedY < egoCY + egoH * 1.2) {
+        pathBlocked = true;
+        lateralRisk += laneW * 2;
+      }
+      if (lateralClearance < laneW * 0.16 && Math.abs(dy) < egoH * 5.2) {
+        lateralRisk += (laneW * 0.16 - lateralClearance) * (1 + (egoH * 5.2 - Math.abs(dy)) / Math.max(1, egoH * 5.2));
       }
       if (Math.abs(vcx - targetCanvasX) < laneW * 0.42) {
         if (dy < 0) aheadGap = Math.min(aheadGap, Math.abs(dy));
@@ -6047,18 +6059,19 @@ export function useAppController() {
     const withinRoad = targetCanvasX > roadMargin && targetCanvasX < W - roadMargin;
     const minAhead = egoH * (aggressive ? 1.0 : 1.45);
     const minRear = egoH * (aggressive ? 0.72 : 1.0);
-    const safe = withinRoad && aheadGap > minAhead && rearGap > minRear && lateralRisk < laneW * (aggressive ? 0.42 : 0.25);
+    const safe = withinRoad && !pathBlocked && aheadGap > minAhead && rearGap > minRear && lateralRisk < laneW * (aggressive ? 0.28 : 0.2);
     const laneCenterBias = Math.abs(((targetCanvasX % laneW) + laneW) % laneW - laneW / 2);
     const score = (Number.isFinite(aheadGap) ? aheadGap : egoH * 12)
       + (Number.isFinite(rearGap) ? rearGap * 0.35 : egoH * 3)
       + laneCenterBias * (aggressive ? 0.55 : 0.2)
       - lateralRisk * 1.8;
-    return { safe, score, aheadGap, rearGap, lateralRisk, targetX };
+    return { safe, score, aheadGap, rearGap, lateralRisk, targetX, pathBlocked };
   }
 
   function chooseAggressiveGapTarget(W: number, laneW: number, egoCY: number, egoW: number, egoH: number, perception: any) {
     const urgent = perception.fcw || perception.ttc < 2.2;
-    const shouldThreadGap = urgent || perception.leadMeters < 105 || drivingSpeed.value < 136;
+    const slowLead = perception.leadMeters < 135 && perception.leadSpeed < drivingSpeed.value - 5;
+    const shouldThreadGap = urgent || perception.leadMeters < 86 || slowLead;
     if (!shouldThreadGap) return null;
     const samples: number[] = [];
     const step = laneW / 6;
@@ -6068,7 +6081,7 @@ export function useAppController() {
     const currentBias = drivingEgoX;
     const candidates = samples
       .map((x) => gapClearanceScore(x, W, laneW, egoCY, egoW, egoH, true))
-      .filter((item) => item.safe || (urgent && item.aheadGap > egoH * 0.75 && item.rearGap > egoH * 0.55))
+      .filter((item) => item.safe || (urgent && !item.pathBlocked && item.aheadGap > egoH * 1.05 && item.rearGap > egoH * 0.8 && item.lateralRisk < laneW * 0.34))
       .sort((a, b) => {
         const directionBiasA = Math.abs(a.targetX - currentBias) < laneW * 0.12 ? -40 : 0;
         const directionBiasB = Math.abs(b.targetX - currentBias) < laneW * 0.12 ? -40 : 0;
@@ -6099,6 +6112,43 @@ export function useAppController() {
       return (b.score + leftBiasB) - (a.score + leftBiasA);
     });
     return candidates[0].lane;
+  }
+
+  function resolveEgoCollision(W: number, laneW: number, egoCY: number, egoW: number, egoH: number) {
+    const egoCXNow = W / 2 + drivingEgoX;
+    const egoLeft = egoCXNow - egoW / 2 - 3;
+    const egoRight = egoCXNow + egoW / 2 + 3;
+    const egoTop = egoCY - egoH / 2 - 5;
+    const egoBot = egoCY + egoH / 2 + 5;
+    let corrected = false;
+
+    for (const v of drivingVehicles) {
+      const vLeft = v.x - 4;
+      const vRight = v.x + v.w + 4;
+      const vTop = v.y - 6;
+      const vBot = v.y + v.h + 6;
+      const overlap = !(egoRight < vLeft || egoLeft > vRight || egoBot < vTop || egoTop > vBot);
+      if (!overlap) continue;
+
+      const vCenter = v.x + v.w / 2;
+      const pushDir = egoCXNow <= vCenter ? -1 : 1;
+      const sideTarget = pushDir < 0
+        ? vLeft - egoW / 2 - 10 - W / 2
+        : vRight + egoW / 2 + 10 - W / 2;
+      drivingEgoX = Math.max(-laneW * 1.22, Math.min(laneW * 1.22, sideTarget));
+      drivingSteering.value = Math.max(-1, Math.min(1, pushDir * 0.9));
+      drivingOvertakeLateralVelocity = pushDir * Math.max(220, Math.abs(drivingOvertakeLateralVelocity));
+      drivingSpeed.value = Math.max(0, Math.min(drivingSpeed.value, v.speed + 8));
+      drivingOpenPilotState.value = {
+        ...drivingOpenPilotState.value,
+        laneChangeState: 'laneChangeStarting',
+        fcwCounter: drivingOpenPilotState.value.fcwCounter + 2,
+      };
+      corrected = true;
+      break;
+    }
+
+    return corrected;
   }
 
   function applyOpenPilotControl(dt: number, laneW: number, perception: any, aiCmdActive: boolean, aiCmd: any) {
@@ -6206,13 +6256,14 @@ export function useAppController() {
 
       if (useOpenPilot) {
         const now = performance.now();
-        const chosenGap = pureOpenPilot ? chooseAggressiveGapTarget(W, laneW, egoCY, egoW, egoH, perception) : null;
-        const chosenLane = chooseAggressiveOvertakeLane(egoLane, laneW, egoCY, egoH, perception, pureOpenPilot);
-        if (chosenGap !== null && (drivingOvertakeTargetX === null || now > drivingOvertakeUntil)) {
+        const canRetarget = now > drivingOvertakeCooldownUntil && (drivingOvertakeTargetX === null || now > drivingOvertakeUntil);
+        const chosenGap = pureOpenPilot && canRetarget ? chooseAggressiveGapTarget(W, laneW, egoCY, egoW, egoH, perception) : null;
+        const chosenLane = canRetarget ? chooseAggressiveOvertakeLane(egoLane, laneW, egoCY, egoH, perception, pureOpenPilot) : null;
+        if (chosenGap !== null) {
           drivingOvertakeTargetX = chosenGap;
           drivingOvertakeTargetLane = Math.max(0, Math.min(2, Math.floor((W / 2 + chosenGap) / laneW)));
           drivingOvertakeUntil = now + 7200;
-        } else if (chosenLane !== null && (drivingOvertakeTargetLane === null || now > drivingOvertakeUntil)) {
+        } else if (chosenLane !== null) {
           drivingOvertakeTargetLane = chosenLane;
           drivingOvertakeTargetX = chosenLane * laneW + laneW / 2 - W / 2;
           drivingOvertakeUntil = now + (pureOpenPilot ? 9500 : 8000);
@@ -6225,8 +6276,10 @@ export function useAppController() {
           targetSteer += laneErrPx * (pureOpenPilot ? 0.018 : 0.011) + Math.sign(laneErrPx) * (pureOpenPilot ? 0.95 : 0.62);
           const gapScore = drivingOvertakeTargetX !== null ? gapClearanceScore(drivingOvertakeTargetX, W, laneW, egoCY, egoW, egoH, pureOpenPilot) : null;
           const pathSafe = gapScore?.safe ?? laneScore.safe;
-          if (!perception.fcw && pathSafe && perception.ttc > (pureOpenPilot ? 1.25 : 2.8)) {
-            drivingSpeed.value = Math.min(pureOpenPilot ? 150 : 136, drivingSpeed.value + (pureOpenPilot ? 24 : 9) * dt);
+          if (!perception.fcw && pathSafe && perception.ttc > (pureOpenPilot ? 1.8 : 2.8)) {
+            drivingSpeed.value = Math.min(pureOpenPilot ? 150 : 136, drivingSpeed.value + (pureOpenPilot ? 18 : 9) * dt);
+          } else if (perception.ttc < 1.5 || !pathSafe) {
+            drivingSpeed.value = Math.max(0, drivingSpeed.value - (pureOpenPilot ? 28 : 18) * dt);
           }
           drivingOpenPilotState.value = {
             ...drivingOpenPilotState.value,
@@ -6236,6 +6289,7 @@ export function useAppController() {
             drivingOvertakeTargetLane = null;
             drivingOvertakeTargetX = null;
             drivingOvertakeUntil = 0;
+            drivingOvertakeCooldownUntil = now + (perception.fcw ? 350 : 1700);
             drivingOvertakeLateralVelocity = 0;
           }
         }
@@ -6367,6 +6421,10 @@ export function useAppController() {
       drivingEgoX += drivingOvertakeLateralVelocity * dt;
     } else {
       drivingOvertakeLateralVelocity *= Math.max(0, 1 - 8 * dt);
+      if (Math.abs(drivingOvertakeLateralVelocity) < 8) drivingOvertakeLateralVelocity = 0;
+      if (!drivingOvertakeTargetLane && !drivingOvertakeTargetX && Math.abs(drivingSteering.value) < 0.08) {
+        drivingSteering.value *= Math.max(0, 1 - 6 * dt);
+      }
       drivingEgoX += drivingSteering.value * 155 * dt;
     }
     drivingEgoX = Math.max(-laneW * 1.22, Math.min(laneW * 1.22, drivingEgoX));
@@ -6455,6 +6513,15 @@ export function useAppController() {
       v.y += (drivingSpeed.value - v.speed) * 3 * dt;
     }
     drivingVehicles = drivingVehicles.filter((v) => v.y < H + 150 && v.y > -600);
+
+    const collisionCorrected = resolveEgoCollision(W, laneW, egoCY, egoW, egoH);
+    if (collisionCorrected) {
+      drivingOvertakeTargetX = chooseAggressiveGapTarget(W, laneW, egoCY, egoW, egoH, { ...perception, fcw: true, ttc: Math.min(perception.ttc, 0.9) });
+      if (drivingOvertakeTargetX !== null) {
+        drivingOvertakeTargetLane = Math.max(0, Math.min(2, Math.floor((W / 2 + drivingOvertakeTargetX) / laneW)));
+        drivingOvertakeUntil = performance.now() + 5200;
+      }
+    }
 
     // ---- Draw ----
     const isDark = document.documentElement.classList.contains('dark');

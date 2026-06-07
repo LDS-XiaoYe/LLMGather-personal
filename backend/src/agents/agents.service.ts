@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
 import { BillingService } from '../billing/billing.service';
 import { DatabaseService } from '../database/database.service';
@@ -7,7 +8,7 @@ import { KnowledgeService } from '../knowledge/knowledge.service';
 import { MemoryService } from '../memory/memory.service';
 import { ChatCompletionRequest, ChatCompletionUsage } from '../providers/provider.types';
 import { SkillsService } from '../skills/skills.service';
-import { ToolsService } from '../tools/tools.service';
+import { ToolDefinition, ToolsService } from '../tools/tools.service';
 import { BUILTIN_AGENT_SPECS, BuiltinAgentKey, BuiltinAgentSpec, getBuiltinAgentSpec } from './builtin-agents';
 import {
   CreateAgentDto,
@@ -140,6 +141,22 @@ type AgentRunStepInput = {
   endedAt: string | null;
   latencyMs: number;
   metadata: string;
+};
+
+type ResolvedRunnableTools = {
+  allowed: ToolDefinition[];
+  skipped: Array<{ tool: ToolDefinition; reason: string; requiresApproval: boolean }>;
+};
+
+type AgentGraphState = {
+  contextBlocks: string[];
+  tools: ToolDefinition[];
+  skippedTools: ResolvedRunnableTools['skipped'];
+  observations: string[];
+  action: AgentPlannerAction | null;
+  finalOutput: string;
+  round: number;
+  maxSteps: number;
 };
 
 type AgentRow = {
@@ -561,271 +578,6 @@ export class AgentsService {
     const agent = await this.getById(userId, agentId);
     if (agent.status !== 'active') throw new BadRequestException('Agent 已归档，无法运行');
     return this.executeAgentRun(userId, agent, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
-
-    const runId = randomUUID();
-    const startedAt = Date.now();
-    const now = this.databaseService.now();
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_runs
-        (id, agent_id, user_id, status, input, output, model, error, prompt_tokens, completion_tokens, total_tokens, latency_ms, created_at)
-       VALUES (?, ?, ?, 'running', ?, '', ?, '', 0, 0, 0, 0, ?)`,
-    ).run(runId, agent.id, userId, dto.input, agent.model, now);
-
-    await this.insertStep(runId, agent.id, userId, {
-      stepType: 'context',
-      name: '上下文组装',
-      status: 'succeeded',
-      input: dto.input,
-      output: JSON.stringify({
-        systemPrompt: Boolean(agent.systemPrompt),
-        historyMessages: dto.messages?.length ?? 0,
-        model: agent.model,
-      }),
-      startedAt: now,
-      endedAt: this.databaseService.now(),
-      latencyMs: 0,
-      metadata: '',
-    });
-
-    const contextBlocks: string[] = [];
-
-    if (agent.skillIds.length > 0) {
-      const stepStarted = Date.now();
-      try {
-        const skills = await this.skillsService.getAgentSkills(userId, agent.id);
-        if (skills.length > 0) {
-          contextBlocks.push(`Agent Skills:\n${skills.map((skill) => `## ${skill.name}\n${skill.content}`).join('\n\n')}`);
-        }
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'skill_context',
-          name: 'Skill 能力注入',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(skills.map((skill) => ({
-            id: skill.id,
-            name: skill.name,
-            category: skill.category,
-          })), null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ skillIds: agent.skillIds, count: skills.length }),
-        });
-      } catch (error) {
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'skill_context',
-          name: 'Skill 能力注入',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ skillIds: agent.skillIds }),
-        });
-      }
-    }
-
-    if (agent.memoryEnabled) {
-      const stepStarted = Date.now();
-      try {
-        const memories = await this.memoryService.search(userId, dto.input, agent.id, 5);
-        if (memories.length > 0) {
-          contextBlocks.push(`长期记忆:\n${memories.map((m, idx) => `[${idx + 1}] ${m.content}`).join('\n')}`);
-        }
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'memory_retrieval',
-          name: '长期记忆检索',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(memories, null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ count: memories.length }),
-        });
-      } catch (error) {
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'memory_retrieval',
-          name: '长期记忆检索',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: '',
-        });
-      }
-    }
-
-    if (agent.knowledgeBaseIds.length > 0) {
-      const stepStarted = Date.now();
-      try {
-        const chunks = await this.knowledgeService.search(userId, agent.knowledgeBaseIds, dto.input, 6);
-        if (chunks.length > 0) {
-          contextBlocks.push(`知识库检索:\n${chunks.map((c, idx) => `[${idx + 1}] ${c.title}\n${c.content}`).join('\n\n')}`);
-        }
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'rag_retrieval',
-          name: '知识库检索',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(chunks, null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ knowledgeBaseIds: agent.knowledgeBaseIds, count: chunks.length }),
-        });
-      } catch (error) {
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'rag_retrieval',
-          name: '知识库检索',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ knowledgeBaseIds: agent.knowledgeBaseIds }),
-        });
-      }
-    }
-
-    if (agent.toolIds.length > 0) {
-      const stepStarted = Date.now();
-      try {
-      const toolResults = await this.invokePlannedTools(userId, agent, runId, dto)
-          .catch(() => [])
-          .then(async (planned) => planned.length > 0
-            ? planned
-            : this.toolsService.autoInvokeForInput(userId, agent.id, runId, dto.input));
-        if (toolResults.length > 0) {
-          contextBlocks.push(`工具调用结果:\n${toolResults.map((t) => `${t.toolName}: ${t.output || t.error}`).join('\n')}`);
-        }
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'tool_calling',
-          name: '工具自动调用',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(toolResults, null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ toolIds: agent.toolIds, count: toolResults.length }),
-        });
-      } catch (error) {
-        await this.insertStep(runId, agent.id, userId, {
-          stepType: 'tool_calling',
-          name: '工具自动调用',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ toolIds: agent.toolIds }),
-        });
-      }
-    }
-
-    const llmStepId = await this.insertStep(runId, agent.id, userId, {
-      stepType: 'llm_completion',
-      name: '模型推理',
-      status: 'running',
-      input: dto.input,
-      output: '',
-      startedAt: this.databaseService.now(),
-      endedAt: null,
-      latencyMs: 0,
-      metadata: JSON.stringify({ model: agent.model }),
-    });
-
-    try {
-      const request = this.buildChatRequest(agent, dto, contextBlocks);
-      const completion = await this.chatService.createCompletion(request);
-      const output = completion.choices?.[0]?.message?.content ?? '';
-      const usage = completion.usage ?? {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      };
-
-      const updatedUser = await this.billingService.chargeForCompletion(
-        userId,
-        request,
-        usage,
-        'agent',
-      );
-
-      const completedAt = this.databaseService.now();
-      const latencyMs = Date.now() - startedAt;
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_run_steps
-         SET status = 'succeeded', output = ?, ended_at = ?, latency_ms = ?, metadata = ?
-         WHERE id = ? AND run_id = ?`,
-      ).run(
-        output,
-        completedAt,
-        latencyMs,
-        JSON.stringify({ usage, creditBalance: updatedUser.credits }),
-        llmStepId,
-        runId,
-      );
-
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_runs
-         SET status = 'succeeded', output = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, latency_ms = ?, completed_at = ?
-         WHERE id = ? AND user_id = ?`,
-      ).run(
-        output,
-        usage.prompt_tokens,
-        usage.completion_tokens,
-        usage.total_tokens,
-        latencyMs,
-        completedAt,
-        runId,
-        userId,
-      );
-
-      if (agent.memoryEnabled) {
-        const memory = await this.memoryService.autoRemember(userId, agent.id, dto.input, output).catch(() => null);
-        if (memory) {
-          await this.insertStep(runId, agent.id, userId, {
-            stepType: 'memory_write',
-            name: '长期记忆写入',
-            status: 'succeeded',
-            input: dto.input,
-            output: JSON.stringify(memory, null, 2),
-            startedAt: this.databaseService.now(),
-            endedAt: this.databaseService.now(),
-            latencyMs: 0,
-            metadata: JSON.stringify({ memoryId: memory?.id ?? '' }),
-          });
-        }
-      }
-
-      return this.getRun(userId, runId);
-    } catch (error) {
-      const message = this.errorMessage(error);
-      const completedAt = this.databaseService.now();
-      const latencyMs = Date.now() - startedAt;
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_run_steps
-         SET status = 'failed', error = ?, ended_at = ?, latency_ms = ?
-         WHERE id = ? AND run_id = ?`,
-      ).run(message, completedAt, latencyMs, llmStepId, runId);
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_runs
-         SET status = 'failed', error = ?, latency_ms = ?, completed_at = ?
-         WHERE id = ? AND user_id = ?`,
-      ).run(message, latencyMs, completedAt, runId, userId);
-      return this.getRun(userId, runId);
-    }
   }
 
   async runStream(
@@ -837,264 +589,6 @@ export class AgentsService {
     const agent = await this.getById(userId, agentId);
     if (agent.status !== 'active') throw new BadRequestException('Agent 已归档，无法运行');
     return this.executeAgentRun(userId, agent, dto, emit, { emitRunCreated: true, delegationDepth: 0 });
-
-    const runId = randomUUID();
-    const startedAt = Date.now();
-    const now = this.databaseService.now();
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_runs
-        (id, agent_id, user_id, status, input, output, model, error, prompt_tokens, completion_tokens, total_tokens, latency_ms, created_at)
-       VALUES (?, ?, ?, 'running', ?, '', ?, '', 0, 0, 0, 0, ?)`,
-    ).run(runId, agent.id, userId, dto.input, agent.model, now);
-    emit({ type: 'run_created', run: await this.getRun(userId, runId) });
-
-    const insertAndEmit = async (step: AgentRunStepInput) => {
-      const id = await this.insertStep(runId, agent.id, userId, step);
-      const inserted = await this.getStep(userId, runId, id);
-      emit({
-        type: inserted.status === 'running' ? 'step_started' : 'step_completed',
-        step: inserted,
-      });
-      return inserted;
-    };
-
-    await insertAndEmit({
-      stepType: 'context',
-      name: '上下文组装',
-      status: 'succeeded',
-      input: dto.input,
-      output: JSON.stringify({
-        systemPrompt: Boolean(agent.systemPrompt),
-        historyMessages: dto.messages?.length ?? 0,
-        model: agent.model,
-      }),
-      startedAt: now,
-      endedAt: this.databaseService.now(),
-      latencyMs: 0,
-      metadata: '',
-    });
-
-    const contextBlocks: string[] = [];
-
-    if (agent.skillIds.length > 0) {
-      const stepStarted = Date.now();
-      try {
-        const skills = await this.skillsService.getAgentSkills(userId, agent.id);
-        if (skills.length > 0) {
-          contextBlocks.push(`Agent Skills:\n${skills.map((skill) => `## ${skill.name}\n${skill.content}`).join('\n\n')}`);
-        }
-        await insertAndEmit({
-          stepType: 'skill_context',
-          name: 'Skill 能力注入',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(skills.map((skill) => ({
-            id: skill.id,
-            name: skill.name,
-            category: skill.category,
-          })), null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ skillIds: agent.skillIds, count: skills.length }),
-        });
-      } catch (error) {
-        await insertAndEmit({
-          stepType: 'skill_context',
-          name: 'Skill 能力注入',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ skillIds: agent.skillIds }),
-        });
-      }
-    }
-
-    if (agent.memoryEnabled) {
-      const stepStarted = Date.now();
-      try {
-        const memories = await this.memoryService.search(userId, dto.input, agent.id, 5);
-        if (memories.length > 0) {
-          contextBlocks.push(`长期记忆:\n${memories.map((m, idx) => `[${idx + 1}] ${m.content}`).join('\n')}`);
-        }
-        await insertAndEmit({
-          stepType: 'memory_retrieval',
-          name: '长期记忆检索',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(memories, null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ count: memories.length }),
-        });
-      } catch (error) {
-        await insertAndEmit({
-          stepType: 'memory_retrieval',
-          name: '长期记忆检索',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: '',
-        });
-      }
-    }
-
-    if (agent.knowledgeBaseIds.length > 0) {
-      const stepStarted = Date.now();
-      try {
-        const chunks = await this.knowledgeService.search(userId, agent.knowledgeBaseIds, dto.input, 6);
-        if (chunks.length > 0) {
-          contextBlocks.push(`知识库检索:\n${chunks.map((c, idx) => `[${idx + 1}] ${c.title}\n${c.content}`).join('\n\n')}`);
-        }
-        await insertAndEmit({
-          stepType: 'rag_retrieval',
-          name: '知识库检索',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(chunks, null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ knowledgeBaseIds: agent.knowledgeBaseIds, count: chunks.length }),
-        });
-      } catch (error) {
-        await insertAndEmit({
-          stepType: 'rag_retrieval',
-          name: '知识库检索',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ knowledgeBaseIds: agent.knowledgeBaseIds }),
-        });
-      }
-    }
-
-    if (agent.toolIds.length > 0) {
-      const stepStarted = Date.now();
-      try {
-        const toolResults = await this.invokePlannedTools(userId, agent, runId, dto)
-          .catch(() => [])
-          .then(async (planned) => planned.length > 0
-            ? planned
-            : this.toolsService.autoInvokeForInput(userId, agent.id, runId, dto.input));
-        if (toolResults.length > 0) {
-          contextBlocks.push(`工具调用结果:\n${toolResults.map((t) => `${t.toolName}: ${t.output || t.error}`).join('\n')}`);
-        }
-        await insertAndEmit({
-          stepType: 'tool_calling',
-          name: '工具自动调用',
-          status: 'succeeded',
-          input: dto.input,
-          output: JSON.stringify(toolResults, null, 2),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ toolIds: agent.toolIds, count: toolResults.length }),
-        });
-      } catch (error) {
-        await insertAndEmit({
-          stepType: 'tool_calling',
-          name: '工具自动调用',
-          status: 'failed',
-          input: dto.input,
-          output: '',
-          error: this.errorMessage(error),
-          startedAt: this.databaseService.now(),
-          endedAt: this.databaseService.now(),
-          latencyMs: Date.now() - stepStarted,
-          metadata: JSON.stringify({ toolIds: agent.toolIds }),
-        });
-      }
-    }
-
-    const llmStep = await insertAndEmit({
-      stepType: 'llm_completion',
-      name: '模型推理',
-      status: 'running',
-      input: dto.input,
-      output: '',
-      startedAt: this.databaseService.now(),
-      endedAt: null,
-      latencyMs: 0,
-      metadata: JSON.stringify({ model: agent.model }),
-    });
-
-    try {
-      const request = this.buildChatRequest(agent, dto, contextBlocks);
-      const output = await this.collectCompletionStream(request, (delta, full) => {
-        emit({ type: 'llm_delta', runId, delta, output: full });
-      });
-      const usage = this.billingService.reserveForStream(userId, request);
-      const updatedUser = await this.billingService.chargeForCompletion(userId, request, usage, 'agent');
-      const completedAt = this.databaseService.now();
-      const latencyMs = Date.now() - startedAt;
-
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_run_steps
-         SET status = 'succeeded', output = ?, ended_at = ?, latency_ms = ?, metadata = ?
-         WHERE id = ? AND run_id = ?`,
-      ).run(output, completedAt, latencyMs, JSON.stringify({ usage, creditBalance: updatedUser.credits, streamed: true }), llmStep.id, runId);
-      emit({ type: 'step_completed', step: await this.getStep(userId, runId, llmStep.id) });
-
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_runs
-         SET status = 'succeeded', output = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, latency_ms = ?, completed_at = ?
-         WHERE id = ? AND user_id = ?`,
-      ).run(output, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, latencyMs, completedAt, runId, userId);
-
-      if (agent.memoryEnabled) {
-        const memory = await this.memoryService.autoRemember(userId, agent.id, dto.input, output).catch(() => null);
-        if (memory) {
-          await insertAndEmit({
-            stepType: 'memory_write',
-            name: '长期记忆写入',
-            status: 'succeeded',
-            input: dto.input,
-            output: JSON.stringify(memory, null, 2),
-            startedAt: this.databaseService.now(),
-            endedAt: this.databaseService.now(),
-            latencyMs: 0,
-            metadata: JSON.stringify({ memoryId: memory?.id ?? '' }),
-          });
-        }
-      }
-
-      const run = await this.getRun(userId, runId);
-      emit({ type: 'run_completed', run });
-      return run;
-    } catch (error) {
-      const message = this.errorMessage(error);
-      const completedAt = this.databaseService.now();
-      const latencyMs = Date.now() - startedAt;
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_run_steps
-         SET status = 'failed', error = ?, ended_at = ?, latency_ms = ?
-         WHERE id = ? AND run_id = ?`,
-      ).run(message, completedAt, latencyMs, llmStep.id, runId);
-      emit({ type: 'step_completed', step: await this.getStep(userId, runId, llmStep.id) });
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_runs
-         SET status = 'failed', error = ?, latency_ms = ?, completed_at = ?
-         WHERE id = ? AND user_id = ?`,
-      ).run(message, latencyMs, completedAt, runId, userId);
-      emit({ type: 'error', runId, error: message });
-      const run = await this.getRun(userId, runId);
-      emit({ type: 'run_completed', run });
-      return run;
-    }
   }
 
   private async executeAgentRun(
@@ -1143,109 +637,19 @@ export class AgentsService {
     };
 
     try {
-      const contextBlocks = await this.collectAgentContext(userId, agent, dto, runId, options, insertAndEmit);
-      const tools = await this.resolveRunnableTools(userId, agent, dto.approvedToolIds ?? []);
-      const observations: string[] = [];
-      let finalOutput = '';
       const maxSteps = Math.max(1, Math.min(10, dto.maxSteps ?? 6));
-
-      for (let index = 0; index < maxSteps; index++) {
-        const planStarted = this.databaseService.now();
-        let action: AgentPlannerAction;
-        try {
-          const planned = await this.planNextAgentAction(agent, dto, contextBlocks, observations, tools, options.delegationDepth ?? 0);
-          this.addUsage(usageTotal, planned.usage);
-          action = planned.action;
-          await insertAndEmit({
-            stepType: 'plan',
-            name: `执行规划 ${index + 1}`,
-            status: 'succeeded',
-            input: dto.input,
-            output: JSON.stringify(action, null, 2),
-            startedAt: planStarted,
-            endedAt: this.databaseService.now(),
-            latencyMs: 0,
-            metadata: JSON.stringify({ round: index + 1, availableTools: tools.map((tool) => tool.name) }),
-          });
-        } catch (error) {
-          action = { action: 'final', reason: `规划失败，直接回答：${this.errorMessage(error)}` };
-          await insertAndEmit({
-            stepType: 'plan',
-            name: `执行规划 ${index + 1}`,
-            status: 'failed',
-            input: dto.input,
-            output: '',
-            error: this.errorMessage(error),
-            startedAt: planStarted,
-            endedAt: this.databaseService.now(),
-            latencyMs: 0,
-            metadata: JSON.stringify({ round: index + 1 }),
-          });
-        }
-
-        if (action.action === 'tool') {
-          const tool = tools.find((item) => item.id === action.toolId || item.name === action.toolName || item.name === action.toolId);
-          if (!tool) {
-            const denied = `工具不可用或未授权: ${action.toolName || action.toolId || 'unknown'}`;
-            observations.push(denied);
-            await insertAndEmit({
-              stepType: 'observation',
-              name: '工具不可用',
-              status: 'failed',
-              input: JSON.stringify(action, null, 2),
-              output: '',
-              error: denied,
-              startedAt: this.databaseService.now(),
-              endedAt: this.databaseService.now(),
-              latencyMs: 0,
-              metadata: JSON.stringify({ round: index + 1 }),
-            });
-            continue;
-          }
-          const stepStarted = Date.now();
-          const result = await this.toolsService.invoke(userId, tool.id, action.args ?? {}, { agentId: agent.id, runId });
-          await insertAndEmit({
-            stepType: 'tool_call',
-            name: `工具调用：${tool.displayName || tool.name}`,
-            status: result.status,
-            input: JSON.stringify(action.args ?? {}, null, 2),
-            output: result.output,
-            error: result.error,
-            startedAt: this.databaseService.now(),
-            endedAt: this.databaseService.now(),
-            latencyMs: Date.now() - stepStarted,
-            metadata: JSON.stringify({ toolId: tool.id, toolName: tool.name, round: index + 1, reason: action.reason ?? '' }),
-          });
-          const observation = `${tool.name} ${result.status}: ${result.output || result.error}`;
-          observations.push(observation.slice(0, 6000));
-          await insertAndEmit({
-            stepType: 'observation',
-            name: '工具观察',
-            status: result.status,
-            input: tool.name,
-            output: observation,
-            error: result.error,
-            startedAt: this.databaseService.now(),
-            endedAt: this.databaseService.now(),
-            latencyMs: 0,
-            metadata: JSON.stringify({ round: index + 1 }),
-          });
-          continue;
-        }
-
-        if (action.action === 'delegate') {
-          const delegated = await this.delegateBuiltinAgent(userId, agent, dto, action, runId, options, insertAndEmit);
-          observations.push(delegated.observation);
-          continue;
-        }
-
-        finalOutput = await this.generateFinalAgentOutput(userId, agent, dto, contextBlocks, observations, action.answer || action.reason || '', runId, emit, insertAndEmit, completeAndEmit, usageTotal);
-        break;
-      }
-
-      if (!finalOutput) {
-        finalOutput = await this.generateFinalAgentOutput(userId, agent, dto, contextBlocks, observations, '已达到最大执行轮数，请基于已有观察输出最终结果。', runId, emit, insertAndEmit, completeAndEmit, usageTotal);
-      }
+      const graph = this.buildAgentExecutionGraph(userId, agent, dto, runId, options, emit, insertAndEmit, completeAndEmit, usageTotal);
+      const graphState = await graph.invoke({
+        contextBlocks: [],
+        tools: [],
+        skippedTools: [],
+        observations: [],
+        action: null,
+        finalOutput: '',
+        round: 0,
+        maxSteps,
+      } as AgentGraphState) as AgentGraphState;
+      const finalOutput = graphState.finalOutput || '';
 
       await this.applySmartMemory(userId, agent, dto, finalOutput, runId, insertAndEmit, usageTotal);
       const completedAt = this.databaseService.now();
@@ -1284,6 +688,222 @@ export class AgentsService {
       emit({ type: 'run_completed', run });
       return run;
     }
+  }
+
+  private buildAgentExecutionGraph(
+    userId: string,
+    agent: AgentDefinition,
+    dto: RunAgentDto,
+    runId: string,
+    options: AgentExecutionOptions,
+    emit: EmitAgentRunEvent,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+    completeAndEmit: (stepId: number, status: 'succeeded' | 'failed', output: string, error?: string, metadata?: Record<string, unknown>) => Promise<AgentRunStep>,
+    usageTotal: ChatCompletionUsage,
+  ) {
+    const State = Annotation.Root({
+      contextBlocks: Annotation<string[]>(),
+      tools: Annotation<ToolDefinition[]>(),
+      skippedTools: Annotation<ResolvedRunnableTools['skipped']>(),
+      observations: Annotation<string[]>(),
+      action: Annotation<AgentPlannerAction | null>(),
+      finalOutput: Annotation<string>(),
+      round: Annotation<number>(),
+      maxSteps: Annotation<number>(),
+    });
+
+    type StateType = typeof State.State;
+
+    const graph = new StateGraph(State)
+      .addNode('context', async (state: StateType) => {
+        const contextBlocks = await this.collectAgentContext(userId, agent, dto, runId, options, insertAndEmit);
+        return { ...state, contextBlocks };
+      })
+      .addNode('guardTools', async (state: StateType) => {
+        const { allowed, skipped } = await this.resolveRunnableTools(userId, agent, dto.approvedToolIds ?? []);
+        for (const item of skipped) {
+          await insertAndEmit({
+            stepType: 'tool_call',
+            name: `跳过工具：${item.tool.displayName || item.tool.name}`,
+            status: 'failed',
+            input: JSON.stringify({ toolId: item.tool.id, toolName: item.tool.name }, null, 2),
+            output: '',
+            error: item.reason,
+            startedAt: this.databaseService.now(),
+            endedAt: this.databaseService.now(),
+            latencyMs: 0,
+            metadata: JSON.stringify({
+              skipped: true,
+              requiresApproval: item.requiresApproval,
+              permissionLevel: item.tool.permissionLevel ?? 'auto',
+              riskLevel: this.effectiveToolRisk(item.tool),
+            }),
+          });
+        }
+        return { ...state, tools: allowed, skippedTools: skipped };
+      })
+      .addNode('plan', async (state: StateType) => {
+        const round = state.round + 1;
+        const planStarted = this.databaseService.now();
+        let action: AgentPlannerAction;
+        try {
+          const planned = await this.planNextAgentAction(agent, dto, state.contextBlocks, state.observations, state.tools, options.delegationDepth ?? 0);
+          this.addUsage(usageTotal, planned.usage);
+          action = planned.action;
+          await insertAndEmit({
+            stepType: 'plan',
+            name: `LangGraph 规划 ${round}`,
+            status: 'succeeded',
+            input: dto.input,
+            output: JSON.stringify(action, null, 2),
+            startedAt: planStarted,
+            endedAt: this.databaseService.now(),
+            latencyMs: 0,
+            metadata: JSON.stringify({
+              round,
+              graphNode: 'plan',
+              availableTools: state.tools.map((tool) => tool.name),
+            }),
+          });
+        } catch (error) {
+          action = { action: 'final', reason: `规划失败，直接回答：${this.errorMessage(error)}` };
+          await insertAndEmit({
+            stepType: 'plan',
+            name: `LangGraph 规划 ${round}`,
+            status: 'failed',
+            input: dto.input,
+            output: '',
+            error: this.errorMessage(error),
+            startedAt: planStarted,
+            endedAt: this.databaseService.now(),
+            latencyMs: 0,
+            metadata: JSON.stringify({ round, graphNode: 'plan' }),
+          });
+        }
+        return { ...state, action, round };
+      })
+      .addNode('tool', async (state: StateType) => this.runGraphToolNode(userId, agent, dto, runId, state, insertAndEmit))
+      .addNode('delegate', async (state: StateType) => this.runGraphDelegateNode(userId, agent, dto, runId, options, state, insertAndEmit))
+      .addNode('shouldContinue', async (state: StateType) => state)
+      .addNode('final', async (state: StateType) => {
+        const hint = state.round >= state.maxSteps
+          ? '已达到最大执行轮数，请基于已有观察输出最终结果。'
+          : state.action?.action === 'final'
+            ? state.action.answer || state.action.reason || ''
+            : '';
+        const finalOutput = await this.generateFinalAgentOutput(
+          userId,
+          agent,
+          dto,
+          state.contextBlocks,
+          state.observations,
+          hint,
+          runId,
+          emit,
+          insertAndEmit,
+          completeAndEmit,
+          usageTotal,
+        );
+        return { ...state, finalOutput };
+      })
+      .addEdge(START, 'context')
+      .addEdge('context', 'guardTools')
+      .addEdge('guardTools', 'plan')
+      .addConditionalEdges('plan', (state: StateType) => this.routePlannedAction(state), {
+        tool: 'tool',
+        delegate: 'delegate',
+        final: 'final',
+      })
+      .addEdge('tool', 'shouldContinue')
+      .addEdge('delegate', 'shouldContinue')
+      .addConditionalEdges('shouldContinue', (state: StateType) => state.round >= state.maxSteps ? 'final' : 'plan', {
+        plan: 'plan',
+        final: 'final',
+      })
+      .addEdge('final', END);
+
+    return graph.compile({ name: 'agent-execution-graph' });
+  }
+
+  private routePlannedAction(state: AgentGraphState): 'tool' | 'delegate' | 'final' {
+    if (state.round >= state.maxSteps) return 'final';
+    if (state.action?.action === 'tool') return 'tool';
+    if (state.action?.action === 'delegate') return 'delegate';
+    return 'final';
+  }
+
+  private async runGraphToolNode(
+    userId: string,
+    agent: AgentDefinition,
+    dto: RunAgentDto,
+    runId: string,
+    state: AgentGraphState,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+  ): Promise<Partial<AgentGraphState>> {
+    const action = state.action?.action === 'tool' ? state.action : null;
+    const tool = action
+      ? state.tools.find((item) => item.id === action.toolId || item.name === action.toolName || item.name === action.toolId)
+      : undefined;
+    if (!action || !tool) {
+      const denied = `工具不可用或未授权: ${action?.toolName || action?.toolId || 'unknown'}`;
+      await insertAndEmit({
+        stepType: 'observation',
+        name: '工具不可用',
+        status: 'failed',
+        input: JSON.stringify(action ?? {}, null, 2),
+        output: '',
+        error: denied,
+        startedAt: this.databaseService.now(),
+        endedAt: this.databaseService.now(),
+        latencyMs: 0,
+        metadata: JSON.stringify({ round: state.round, graphNode: 'tool' }),
+      });
+      return { observations: [...state.observations, denied], action: null };
+    }
+
+    const stepStarted = Date.now();
+    const result = await this.toolsService.invoke(userId, tool.id, action.args ?? {}, { agentId: agent.id, runId });
+    await insertAndEmit({
+      stepType: 'tool_call',
+      name: `工具调用：${tool.displayName || tool.name}`,
+      status: result.status,
+      input: JSON.stringify(action.args ?? {}, null, 2),
+      output: result.output,
+      error: result.error,
+      startedAt: this.databaseService.now(),
+      endedAt: this.databaseService.now(),
+      latencyMs: Date.now() - stepStarted,
+      metadata: JSON.stringify({ toolId: tool.id, toolName: tool.name, round: state.round, reason: action.reason ?? '', graphNode: 'tool' }),
+    });
+    const observation = `${tool.name} ${result.status}: ${result.output || result.error}`;
+    await insertAndEmit({
+      stepType: 'observation',
+      name: '工具观察',
+      status: result.status,
+      input: tool.name,
+      output: observation,
+      error: result.error,
+      startedAt: this.databaseService.now(),
+      endedAt: this.databaseService.now(),
+      latencyMs: 0,
+      metadata: JSON.stringify({ round: state.round, graphNode: 'tool' }),
+    });
+    return { observations: [...state.observations, observation.slice(0, 6000)], action: null };
+  }
+
+  private async runGraphDelegateNode(
+    userId: string,
+    agent: AgentDefinition,
+    dto: RunAgentDto,
+    runId: string,
+    options: AgentExecutionOptions,
+    state: AgentGraphState,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+  ): Promise<Partial<AgentGraphState>> {
+    const action = state.action?.action === 'delegate' ? state.action : null;
+    if (!action) return { action: null };
+    const delegated = await this.delegateBuiltinAgent(userId, agent, dto, action, runId, options, insertAndEmit);
+    return { observations: [...state.observations, delegated.observation], action: null };
   }
 
   private async collectAgentContext(
@@ -1411,19 +1031,30 @@ export class AgentsService {
     return skills.filter((skill) => ids.has(skill.id));
   }
 
-  private async resolveRunnableTools(userId: string, agent: AgentDefinition, approvedToolIds: string[]) {
+  private async resolveRunnableTools(userId: string, agent: AgentDefinition, approvedToolIds: string[]): Promise<ResolvedRunnableTools> {
     const approved = new Set(approvedToolIds);
     const tools = agent.source === 'builtin'
       ? (await this.toolsService.listForUser(userId)).filter((tool) => agent.toolIds.includes(tool.id))
       : await this.toolsService.getAgentTools(userId, agent.id);
-    return tools.filter((tool) => {
-      if (tool.permissionLevel === 'disabled') return false;
+    const allowed: ToolDefinition[] = [];
+    const skipped: ResolvedRunnableTools['skipped'] = [];
+    for (const tool of tools) {
+      if (tool.permissionLevel === 'disabled') {
+        skipped.push({ tool, reason: '工具权限为 disabled，后端已禁止调用。', requiresApproval: false });
+        continue;
+      }
       const risk = this.effectiveToolRisk(tool);
       if (tool.permissionLevel === 'confirm' || risk === 'high') {
-        return approved.has(tool.id) || approved.has(tool.name);
+        if (approved.has(tool.id) || approved.has(tool.name)) {
+          allowed.push(tool);
+        } else {
+          skipped.push({ tool, reason: '工具需要运行前授权，但本次请求未包含 approvedToolIds。', requiresApproval: true });
+        }
+        continue;
       }
-      return true;
-    });
+      allowed.push(tool);
+    }
+    return { allowed, skipped };
   }
 
   private effectiveToolRisk(tool: { name: string; riskLevel?: string }): 'low' | 'medium' | 'high' {
@@ -2162,121 +1793,6 @@ export class AgentsService {
     return this.mapTestRunRow(row);
   }
 
-  private buildChatRequest(agent: AgentDefinition, dto: RunAgentDto, contextBlocks: string[]): ChatCompletionRequest {
-    const messages: ChatCompletionRequest['messages'] = [];
-    const systemBlocks = [agent.systemPrompt.trim(), ...contextBlocks].filter(Boolean);
-    if (systemBlocks.length > 0) {
-      messages.push({ role: 'system', content: systemBlocks.join('\n\n---\n\n') });
-    }
-    for (const msg of dto.messages ?? []) {
-      messages.push({ role: msg.role, content: msg.content });
-    }
-    if (dto.imageUrls?.length) {
-      messages.push({
-        role: 'user',
-        content: [
-          { type: 'text', text: dto.input },
-          ...dto.imageUrls.map((url) => ({ type: 'image_url' as const, image_url: { url } })),
-        ],
-      });
-    } else {
-      messages.push({ role: 'user', content: dto.input });
-    }
-    return {
-      model: agent.model,
-      messages,
-      temperature: agent.temperature,
-      max_tokens: agent.maxTokens,
-    };
-  }
-
-  private async invokePlannedTools(userId: string, agent: AgentDefinition, runId: string, dto: RunAgentDto) {
-    const tools = await this.toolsService.getAgentTools(userId, agent.id);
-    if (tools.length === 0) return [];
-    const standardTools = tools.map((tool) => ({
-      type: 'function' as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.schema,
-      },
-    }));
-    const plannerRequest: ChatCompletionRequest = {
-      model: agent.model,
-      temperature: 0,
-      max_tokens: 800,
-      tools: standardTools,
-      tool_choice: 'auto',
-      messages: [
-        {
-          role: 'system',
-          content: [
-            '你是工具调用规划器。只输出 JSON，不要输出解释。',
-            'JSON 格式: {"calls":[{"toolId":"...","args":{}}]}',
-            '如果不需要工具，输出 {"calls":[]}.',
-            `可用工具:\n${tools.map((tool) => JSON.stringify({
-              toolId: tool.id,
-              name: tool.name,
-              description: tool.description,
-              schema: tool.schema,
-            })).join('\n')}`,
-          ].join('\n\n'),
-        },
-        dto.imageUrls?.length
-          ? {
-              role: 'user',
-              content: [
-                { type: 'text', text: dto.input },
-                ...dto.imageUrls.map((url) => ({ type: 'image_url' as const, image_url: { url } })),
-              ],
-            }
-          : { role: 'user', content: dto.input },
-      ],
-    };
-    const completion = await this.chatService.createCompletion(plannerRequest);
-    const message = completion.choices?.[0]?.message;
-    const plan = message?.tool_calls?.length
-      ? {
-          calls: message.tool_calls.map((call) => ({
-            toolId: call.function.name,
-            args: this.parseToolArguments(call.function.arguments),
-          })),
-        }
-      : this.extractToolPlan(message?.content ?? '');
-    const results = [];
-    for (const call of plan.calls.slice(0, 5)) {
-      const tool = tools.find((item) => item.id === call.toolId || item.name === call.toolId);
-      if (!tool) continue;
-      results.push(await this.toolsService.invoke(userId, tool.id, call.args ?? {}, { agentId: agent.id, runId }));
-    }
-    return results;
-  }
-
-  private extractToolPlan(content: string): { calls: Array<{ toolId: string; args: Record<string, unknown> }> } {
-    const raw = content.match(/```json\s*([\s\S]*?)```/i)?.[1] ?? content;
-    const parsed = JSON.parse(raw.trim()) as unknown;
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { calls?: unknown }).calls)) {
-      return { calls: [] };
-    }
-    return {
-      calls: (parsed as { calls: Array<{ toolId?: unknown; args?: unknown }> }).calls
-        .filter((call) => typeof call.toolId === 'string')
-        .map((call) => ({
-          toolId: String(call.toolId),
-          args: call.args && typeof call.args === 'object' && !Array.isArray(call.args) ? call.args as Record<string, unknown> : {},
-        })),
-    };
-  }
-
-  private parseToolArguments(raw: string): Record<string, unknown> {
-    try {
-      const parsed = JSON.parse(raw || '{}') as unknown;
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-    } catch {
-      return {};
-    }
-  }
-
   private extractGeneratedAgentSpec(content: string, requirement: string): {
     name: string;
     description: string;
@@ -2618,7 +2134,7 @@ export class AgentsService {
     checks.trace = run.steps.length > 0 && run.steps.every((step) => step.status !== 'failed') ? 15 : 5;
     checks.latency = run.latencyMs <= 15_000 ? 10 : run.latencyMs <= 45_000 ? 6 : 2;
     checks.cost = run.totalTokens <= 4000 ? 10 : run.totalTokens <= 12000 ? 6 : 2;
-    checks.capability = Math.min(10, run.steps.filter((step) => ['tool_calling', 'rag_retrieval', 'memory_retrieval', 'skill_context'].includes(step.stepType)).length * 3);
+    checks.capability = Math.min(10, run.steps.filter((step) => ['tool_call', 'delegate_agent', 'delegate_observation', 'rag_retrieval', 'memory_retrieval', 'skill_context'].includes(step.stepType)).length * 3);
 
     if (options?.expectedOutput?.trim()) {
       const expectedTerms = this.extractEvalTerms(options.expectedOutput);

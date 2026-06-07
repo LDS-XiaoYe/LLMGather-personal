@@ -11,6 +11,7 @@ import {
   OpenAiCompatibleConfig,
 } from './openai-compatible.provider';
 import { GeminiProvider } from './gemini.provider';
+import { QwenProvider } from './qwen.provider';
 import { ApiKeyPool } from './api-key-pool';
 
 type ProviderWithKeyPool = ProviderAdapter & {
@@ -164,6 +165,9 @@ export class ProviderRegistryService implements OnModuleInit {
         timeoutMs: config.timeoutMs,
         retryCount: config.retryCount,
       });
+    }
+    if (normalizedName === 'qwen' || normalizedName === 'dashscope' || normalizedBaseUrl.includes('dashscope.aliyuncs.com')) {
+      return new QwenProvider(config);
     }
     return new OpenAiCompatibleProvider(config);
   }

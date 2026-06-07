@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
 import { AgentsService } from '../agents/agents.service';
 import { DatabaseService } from '../database/database.service';
@@ -50,6 +51,15 @@ type WorkflowRow = {
   status: 'active' | 'archived';
   createdAt: string;
   updatedAt: string;
+};
+
+type WorkflowGraphState = {
+  nodes: WorkflowNodeDto[];
+  current: string;
+  originalInput: string;
+  index: number;
+  status: 'succeeded' | 'failed';
+  error: string;
 };
 
 @Injectable()
@@ -104,28 +114,71 @@ export class WorkflowsService {
        VALUES (?, ?, ?, 'running', ?, '', '', ?)`,
     ).run(runId, workflowId, userId, input, now);
 
-    const originalInput = input;
-    let current = input;
-    let status: 'succeeded' | 'failed' = 'succeeded';
-    let error = '';
-
-    for (const node of this.orderNodes(workflow.nodes)) {
-      try {
-        const output = await this.runNode(userId, node, current, originalInput);
-        await this.insertStep(runId, workflowId, userId, node, current, output, 'succeeded', '');
-        current = output;
-      } catch (err) {
-        status = 'failed';
-        error = err instanceof Error ? err.message : String(err);
-        await this.insertStep(runId, workflowId, userId, node, current, '', 'failed', error);
-        break;
-      }
-    }
+    const graph = this.buildWorkflowGraph(userId, workflow, runId, input);
+    const finalState = await graph.invoke({
+      nodes: [],
+      current: input,
+      originalInput: input,
+      index: 0,
+      status: 'succeeded',
+      error: '',
+    } as WorkflowGraphState) as WorkflowGraphState;
 
     await this.databaseService.connection.prepare(
       `UPDATE workflow_runs SET status = ?, output = ?, error = ?, completed_at = ? WHERE id = ? AND user_id = ?`,
-    ).run(status, current, error, this.databaseService.now(), runId, userId);
+    ).run(finalState.status, finalState.current, finalState.error, this.databaseService.now(), runId, userId);
     return this.getRun(userId, runId);
+  }
+
+  private buildWorkflowGraph(userId: string, workflow: Workflow, runId: string, input: string) {
+    const State = Annotation.Root({
+      nodes: Annotation<WorkflowNodeDto[]>(),
+      current: Annotation<string>(),
+      originalInput: Annotation<string>(),
+      index: Annotation<number>(),
+      status: Annotation<'succeeded' | 'failed'>(),
+      error: Annotation<string>(),
+    });
+    type StateType = typeof State.State;
+
+    return new StateGraph(State)
+      .addNode('prepare', async (state: StateType) => ({
+        ...state,
+        nodes: this.orderNodes(workflow.nodes),
+        current: input,
+        originalInput: input,
+        index: 0,
+        status: 'succeeded' as const,
+        error: '',
+      }))
+      .addNode('node', async (state: StateType) => {
+        const node = state.nodes[state.index];
+        if (!node) return state;
+        try {
+          const output = await this.runNode(userId, node, state.current, state.originalInput);
+          await this.insertStep(runId, workflow.id, userId, node, state.current, output, 'succeeded', '');
+          return { ...state, current: output, index: state.index + 1 };
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          await this.insertStep(runId, workflow.id, userId, node, state.current, '', 'failed', error);
+          return { ...state, status: 'failed' as const, error, index: state.index + 1 };
+        }
+      })
+      .addNode('finalize', async (state: StateType) => state)
+      .addEdge(START, 'prepare')
+      .addConditionalEdges('prepare', (state: StateType) => state.nodes.length > 0 ? 'node' : 'finalize', {
+        node: 'node',
+        finalize: 'finalize',
+      })
+      .addConditionalEdges('node', (state: StateType) => {
+        if (state.status === 'failed') return 'finalize';
+        return state.index >= state.nodes.length ? 'finalize' : 'node';
+      }, {
+        node: 'node',
+        finalize: 'finalize',
+      })
+      .addEdge('finalize', END)
+      .compile({ name: 'workflow-graph' });
   }
 
   async getRun(userId: string, runId: string): Promise<WorkflowRun> {

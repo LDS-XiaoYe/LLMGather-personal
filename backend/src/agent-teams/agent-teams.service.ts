@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
 import { AgentsService } from '../agents/agents.service';
 import { DatabaseService } from '../database/database.service';
@@ -47,6 +48,16 @@ type AgentTeamRow = {
   status: AgentTeam['status'];
   createdAt: string;
   updatedAt: string;
+};
+
+type AgentTeamGraphState = {
+  memberOutputs: AgentTeamRun['memberOutputs'];
+  previousOutput: string;
+  output: string;
+  status: AgentTeamRun['status'];
+  error: string;
+  index: number;
+  members: AgentTeamMemberDto[];
 };
 
 @Injectable()
@@ -123,60 +134,16 @@ export class AgentTeamsService {
        VALUES (?, ?, ?, 'running', ?, '', '', '[]', 0, ?)`,
     ).run(runId, team.id, userId, input, now);
 
-    const memberOutputs: AgentTeamRun['memberOutputs'] = [];
-    let previousOutput = '';
-    let output = '';
-    let status: AgentTeamRun['status'] = 'succeeded';
-    let error = '';
-
-    if (team.strategy === 'parallel' || team.strategy === 'consensus') {
-      const runs = await Promise.all(team.members.map(async (member) => {
-        const memberInput = this.buildMemberInput(team, member, input, '', []);
-        const agentRun = await this.agentsService.run(userId, member.agentId, { input: memberInput });
-        return {
-          agentId: member.agentId,
-          role: member.role ?? '',
-          runId: agentRun.id,
-          status: agentRun.status,
-          output: agentRun.output,
-          error: agentRun.error,
-        };
-      }));
-      memberOutputs.push(...runs);
-      const failed = memberOutputs.find((item) => item.status === 'failed');
-      if (failed) {
-        status = 'failed';
-        error = failed.error || `${failed.role || failed.agentId} 执行失败`;
-      }
-      output = team.strategy === 'consensus'
-        ? this.buildConsensusOutput(memberOutputs)
-        : memberOutputs.map((item, index) => `## ${index + 1}. ${item.role}\n${item.output || item.error}`).join('\n\n');
-    } else {
-      const members = team.strategy === 'router' ? [this.routeMember(team, input)] : team.members;
-      for (const member of members) {
-        const memberInput = this.buildMemberInput(team, member, input, previousOutput, memberOutputs);
-        const agentRun = await this.agentsService.run(userId, member.agentId, { input: memberInput });
-        memberOutputs.push({
-          agentId: member.agentId,
-          role: member.role ?? '',
-          runId: agentRun.id,
-          status: agentRun.status,
-          output: agentRun.output,
-          error: agentRun.error,
-        });
-        if (agentRun.status === 'failed') {
-          status = 'failed';
-          error = agentRun.error || `${member.role || member.agentId} 执行失败`;
-          break;
-        }
-        previousOutput = agentRun.output;
-        output = agentRun.output;
-      }
-    }
-
-    if (team.strategy === 'debate' && memberOutputs.length > 1) {
-      output = memberOutputs.map((item, index) => `## ${index + 1}. ${item.role}\n${item.output}`).join('\n\n');
-    }
+    const graph = this.buildAgentTeamGraph(userId, team, input);
+    const finalState = await graph.invoke({
+      memberOutputs: [],
+      previousOutput: '',
+      output: '',
+      status: 'succeeded',
+      error: '',
+      index: 0,
+      members: [],
+    } as AgentTeamGraphState) as AgentTeamGraphState;
 
     const completedAt = this.databaseService.now();
     const latencyMs = Date.now() - startedAt;
@@ -184,8 +151,99 @@ export class AgentTeamsService {
       `UPDATE agent_team_runs
        SET status = ?, output = ?, error = ?, member_outputs_json = ?, latency_ms = ?, completed_at = ?
        WHERE id = ? AND user_id = ?`,
-    ).run(status, output, error, JSON.stringify(memberOutputs), latencyMs, completedAt, runId, userId);
+    ).run(finalState.status, finalState.output, finalState.error, JSON.stringify(finalState.memberOutputs), latencyMs, completedAt, runId, userId);
     return this.getRun(userId, runId);
+  }
+
+  private buildAgentTeamGraph(userId: string, team: AgentTeam, input: string) {
+    const State = Annotation.Root({
+      memberOutputs: Annotation<AgentTeamRun['memberOutputs']>(),
+      previousOutput: Annotation<string>(),
+      output: Annotation<string>(),
+      status: Annotation<AgentTeamRun['status']>(),
+      error: Annotation<string>(),
+      index: Annotation<number>(),
+      members: Annotation<AgentTeamMemberDto[]>(),
+    });
+    type StateType = typeof State.State;
+
+    return new StateGraph(State)
+      .addNode('prepare', async (state: StateType) => ({
+        ...state,
+        members: team.strategy === 'router' ? [this.routeMember(team, input)] : team.members,
+      }))
+      .addNode('parallelMembers', async (state: StateType) => {
+        const memberOutputs = await Promise.all(team.members.map((member) => this.runTeamMember(userId, team, member, input, '', [])));
+        const failed = memberOutputs.find((item) => item.status === 'failed');
+        return {
+          ...state,
+          memberOutputs,
+          status: failed ? 'failed' as const : 'succeeded' as const,
+          error: failed ? failed.error || `${failed.role || failed.agentId} 执行失败` : '',
+        };
+      })
+      .addNode('member', async (state: StateType) => {
+        const member = state.members[state.index];
+        if (!member) return state;
+        const memberOutput = await this.runTeamMember(userId, team, member, input, state.previousOutput, state.memberOutputs);
+        const memberOutputs = [...state.memberOutputs, memberOutput];
+        const failed = memberOutput.status === 'failed';
+        return {
+          ...state,
+          memberOutputs,
+          previousOutput: failed ? state.previousOutput : memberOutput.output,
+          output: failed ? state.output : memberOutput.output,
+          status: failed ? 'failed' as const : state.status,
+          error: failed ? memberOutput.error || `${memberOutput.role || memberOutput.agentId} 执行失败` : state.error,
+          index: state.index + 1,
+        };
+      })
+      .addNode('finalize', async (state: StateType) => {
+        let output = state.output;
+        if (team.strategy === 'parallel') {
+          output = state.memberOutputs.map((item, index) => `## ${index + 1}. ${item.role}\n${item.output || item.error}`).join('\n\n');
+        } else if (team.strategy === 'consensus') {
+          output = this.buildConsensusOutput(state.memberOutputs);
+        } else if (team.strategy === 'debate' && state.memberOutputs.length > 1) {
+          output = state.memberOutputs.map((item, index) => `## ${index + 1}. ${item.role}\n${item.output}`).join('\n\n');
+        }
+        return { ...state, output };
+      })
+      .addEdge(START, 'prepare')
+      .addConditionalEdges('prepare', () => (team.strategy === 'parallel' || team.strategy === 'consensus') ? 'parallelMembers' : 'member', {
+        parallelMembers: 'parallelMembers',
+        member: 'member',
+      })
+      .addEdge('parallelMembers', 'finalize')
+      .addConditionalEdges('member', (state: StateType) => {
+        if (state.status === 'failed') return 'finalize';
+        return state.index >= state.members.length ? 'finalize' : 'member';
+      }, {
+        member: 'member',
+        finalize: 'finalize',
+      })
+      .addEdge('finalize', END)
+      .compile({ name: 'agent-team-graph' });
+  }
+
+  private async runTeamMember(
+    userId: string,
+    team: AgentTeam,
+    member: AgentTeamMemberDto,
+    originalInput: string,
+    previousOutput: string,
+    memberOutputs: AgentTeamRun['memberOutputs'],
+  ): Promise<AgentTeamRun['memberOutputs'][number]> {
+    const memberInput = this.buildMemberInput(team, member, originalInput, previousOutput, memberOutputs);
+    const agentRun = await this.agentsService.run(userId, member.agentId, { input: memberInput });
+    return {
+      agentId: member.agentId,
+      role: member.role ?? '',
+      runId: agentRun.id,
+      status: agentRun.status,
+      output: agentRun.output,
+      error: agentRun.error,
+    };
   }
 
   async getRun(userId: string, runId: string): Promise<AgentTeamRun> {

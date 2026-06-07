@@ -245,6 +245,10 @@ export class RouterController {
     const lastUserIndex = [...payload.messages].map((message, index) => ({ message, index })).reverse().find((item) => item.message.role === 'user')?.index ?? payload.messages.length - 1;
     const lastUser = payload.messages[lastUserIndex];
     const extracted = this.extractMessageContent(lastUser?.content);
+    const extra = payload.extra_body && typeof payload.extra_body === 'object' ? payload.extra_body as Record<string, unknown> : {};
+    const approvedToolIds = Array.isArray(extra.approvedToolIds)
+      ? extra.approvedToolIds.filter((id): id is string => typeof id === 'string')
+      : [];
     return {
       input: extracted.text || '',
       messages: payload.messages
@@ -254,7 +258,7 @@ export class RouterController {
         .map((message) => ({ role: message.role as 'user' | 'assistant', content: this.extractMessageContent(message.content).text })),
       imageUrls: extracted.imageUrls,
       maxSteps: 6,
-      approvedToolIds: [],
+      approvedToolIds,
     };
   }
 

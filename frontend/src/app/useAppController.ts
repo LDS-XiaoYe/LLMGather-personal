@@ -5582,7 +5582,57 @@ export function useAppController() {
 
   /* ---------- Vision Page Handlers ---------- */
 
-  function handleVisionImageUpload(event: Event) {
+  const VISION_IMAGE_MAX_BYTES = 1.8 * 1024 * 1024;
+  const VISION_IMAGE_MAX_DIMENSION = 1600;
+
+  function loadImageElement(dataUrl: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('图片读取失败'));
+      img.src = dataUrl;
+    });
+  }
+
+  function readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve((e.target?.result as string) || '');
+      reader.onerror = () => reject(new Error('图片读取失败'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function dataUrlByteLength(dataUrl: string): number {
+    const base64 = dataUrl.split(',')[1] || '';
+    return Math.floor((base64.length * 3) / 4);
+  }
+
+  async function compressVisionImage(file: File): Promise<string> {
+    const original = await readFileAsDataUrl(file);
+    const img = await loadImageElement(original);
+    const scale = Math.min(1, VISION_IMAGE_MAX_DIMENSION / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return original;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+
+    let quality = 0.86;
+    let output = canvas.toDataURL('image/jpeg', quality);
+    while (dataUrlByteLength(output) > VISION_IMAGE_MAX_BYTES && quality > 0.5) {
+      quality -= 0.08;
+      output = canvas.toDataURL('image/jpeg', quality);
+    }
+    return output;
+  }
+
+  async function handleVisionImageUpload(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
@@ -5590,12 +5640,15 @@ export function useAppController() {
     if (file.size > 10 * 1024 * 1024) { status.value = '图片大小不能超过 10MB'; return; }
 
     visionImageName.value = file.name;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      visionImageBase64.value = (e.target?.result as string) || '';
-    };
-    reader.readAsDataURL(file);
-    input.value = '';
+    status.value = '正在压缩图片...';
+    try {
+      visionImageBase64.value = await compressVisionImage(file);
+      status.value = '图片已上传';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '图片处理失败';
+    } finally {
+      input.value = '';
+    }
   }
 
   function removeVisionImage() {
@@ -5634,15 +5687,20 @@ export function useAppController() {
     try {
       const visionMsgs = visionMessages.value
         .filter((m) => m.id !== assistantId)
-        .map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.image
+        .map((m) => {
+          const includeImage = m.id === userMsg.id && Boolean(m.image);
+          return {
+            role: m.role as 'user' | 'assistant',
+            content: includeImage
             ? [
-                { type: 'image_url', image_url: { url: m.image } },
                 { type: 'text', text: m.content },
+                { type: 'image_url', image_url: { url: m.image } },
               ]
+            : m.image
+              ? `[上一轮图片已省略]\n${m.content}`
             : m.content,
-        })) as any[];
+          };
+        }) as any[];
 
       await streamCompletion(
         {

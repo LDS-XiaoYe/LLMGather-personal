@@ -124,7 +124,7 @@ export class RouterService implements OnModuleInit {
   /** Route a request: classify intent via LLM → select best available model */
   async route(payload: ChatRequestDto): Promise<{ provider: ProviderAdapter; model: string; decision: RouteDecision }> {
     const lastUserMsg = [...payload.messages].reverse().find((m) => m.role === 'user');
-    const query = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+    const query = this.extractTextContent(lastUserMsg?.content);
 
     const builtinMatch = matchBuiltinAgent(query);
     if (builtinMatch) {
@@ -237,5 +237,18 @@ export class RouterService implements OnModuleInit {
 
   private sanitizeRuleModels(models: string[]): string[] {
     return Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
+  }
+
+  private extractTextContent(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+      .map((part) => {
+        if (!part || typeof part !== 'object') return '';
+        const record = part as Record<string, unknown>;
+        return record.type === 'text' && typeof record.text === 'string' ? record.text : '';
+      })
+      .filter(Boolean)
+      .join('\n');
   }
 }

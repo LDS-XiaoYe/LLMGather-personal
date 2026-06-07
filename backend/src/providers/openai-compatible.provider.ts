@@ -72,10 +72,13 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
   }
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    const { response, rotation } = await this.fetchWithRetry({
+    const payload = this.preparePayload({
       ...request,
       model: this.normalizeModel(request.model),
       stream: false,
+    });
+    const { response, rotation } = await this.fetchWithRetry({
+      ...payload,
     });
 
     if (!response.ok) {
@@ -88,10 +91,13 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
   }
 
   async chatCompletionStream(request: ChatCompletionRequest): Promise<Response> {
-    const { response, rotation } = await this.fetchWithRetry({
+    const payload = this.preparePayload({
       ...request,
       model: this.normalizeModel(request.model),
       stream: true,
+    });
+    const { response, rotation } = await this.fetchWithRetry({
+      ...payload,
     });
 
     if (!response.ok) {
@@ -116,6 +122,10 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
   /** Replace the active key pool at runtime (hot-reload after admin CRUD). */
   setKeyPool(pool: ApiKeyPool): void {
     this.keyPool = pool;
+  }
+
+  protected preparePayload(payload: ChatCompletionRequest): ChatCompletionRequest {
+    return payload;
   }
 
   /* ──────── private ──────── */

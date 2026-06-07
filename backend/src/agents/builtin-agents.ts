@@ -113,7 +113,7 @@ export const BUILTIN_AGENT_SPECS: BuiltinAgentSpec[] = [
     name: 'Knowledge Curator',
     category: 'knowledge',
     description: '把资料整理成知识库条目、发现知识缺口。',
-    intents: ['知识库', '沉淀', '归档', '整理资料', '知识条目', '知识缺口', '手册', 'SOP', 'knowledge', 'kb'],
+    intents: ['知识库', '知识库条目', '沉淀', '归档', '整理', '整理资料', '资料整理', '知识条目', '知识缺口', '手册', 'SOP', 'knowledge', 'kb'],
     tags: ['knowledge', 'curation', 'rag'],
     riskLevel: 'low',
     toolNames: ['text_stats'],

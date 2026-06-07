@@ -3,9 +3,15 @@ import {
   OpenAiCompatibleProvider,
   parseKeysFromEnv,
 } from './openai-compatible.provider';
+import { ChatCompletionRequest, ChatMessage, ContentPart } from './provider.types';
 
 export class QwenProvider extends OpenAiCompatibleProvider {
-  constructor() {
+  constructor(configOverride?: OpenAiCompatibleConfig) {
+    if (configOverride) {
+      super(configOverride);
+      return;
+    }
+
     // Priority: QWEN_API_KEYS > QWEN_API_KEY > DASHSCOPE_API_KEYS > DASHSCOPE_API_KEY
     const primaryKeys = parseKeysFromEnv('QWEN_API_KEYS');
     const fallbackKeys = parseKeysFromEnv('DASHSCOPE_API_KEYS');
@@ -48,5 +54,36 @@ export class QwenProvider extends OpenAiCompatibleProvider {
     };
 
     super(config);
+  }
+
+  protected preparePayload(payload: ChatCompletionRequest): ChatCompletionRequest {
+    return {
+      ...payload,
+      messages: payload.messages.map((message) => this.normalizeMessageContent(message)),
+    };
+  }
+
+  private normalizeMessageContent(message: ChatMessage): ChatMessage {
+    if (!Array.isArray(message.content)) return message;
+
+    const textParts: ContentPart[] = [];
+    const imageParts: ContentPart[] = [];
+
+    for (const part of message.content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
+        textParts.push({ type: 'text', text: part.text });
+        continue;
+      }
+      if (part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string' && part.image_url.url.trim()) {
+        imageParts.push({ type: 'image_url', image_url: { url: part.image_url.url } });
+      }
+    }
+
+    const content = [...textParts, ...imageParts];
+    return {
+      ...message,
+      content: content.length > 0 ? content : '',
+    };
   }
 }

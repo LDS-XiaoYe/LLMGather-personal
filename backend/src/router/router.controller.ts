@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Post, Res, UseGuards, forwardRef } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiKeyOrJwtGuard } from '../api-keys/api-key-or-jwt.guard';
 import { BillingService } from '../billing/billing.service';
@@ -7,7 +7,9 @@ import { ChatRequestDto } from '../gateway/dto/chat-request.dto';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { extractContentDelta } from '../common/stream-utils';
-import { RouterService } from './router.service';
+import { AgentsService } from '../agents/agents.service';
+import { RunAgentDto } from '../agents/dto/agent.dto';
+import { RouteDecision, RouterService } from './router.service';
 
 function flushSse(res: Response): void {
   (res as Response & { flush?: () => void }).flush?.();
@@ -38,6 +40,8 @@ export class RouterController {
     private readonly routerService: RouterService,
     private readonly chatService: ChatService,
     private readonly billingService: BillingService,
+    @Inject(forwardRef(() => AgentsService))
+    private readonly agentsService: AgentsService,
   ) {}
 
   @Get('rules')
@@ -82,6 +86,10 @@ export class RouterController {
     const routedPayload = { ...payload, model };
 
     const startedAt = Date.now();
+
+    if (decision.targetType === 'builtin_agent' && decision.agentKey) {
+      return this.handleAutoAgentRoute(routedPayload, user, res, decision, startedAt);
+    }
 
     if (payload.stream) {
       const usageEstimate = this.billingService.reserveForStream(user.id, routedPayload);
@@ -159,5 +167,111 @@ export class RouterController {
     res.setHeader('x-router-intent', decision.intent);
     res.setHeader('x-router-model', decision.selectedModel);
     res.json({ ...completion, router_decision: decision });
+  }
+
+  private async handleAutoAgentRoute(
+    payload: ChatRequestDto,
+    user: AuthenticatedRequestUser,
+    res: Response,
+    decision: RouteDecision,
+    startedAt: number,
+  ) {
+    const agentKey = decision.agentKey;
+    if (!agentKey) {
+      res.status(500).json({ error: { message: 'Router selected agent target without agentKey' } });
+      return;
+    }
+    const runDto = this.chatPayloadToAgentRun(payload);
+    if (payload.stream) {
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.setHeader('x-router-intent', decision.intent);
+      res.setHeader('x-router-model', decision.selectedModel);
+      res.setHeader('x-router-reason', encodeURIComponent(decision.reason));
+      res.flushHeaders?.();
+      let decisionSent = false;
+      const sendDecision = (runId?: string) => {
+        if (decisionSent) return;
+        decisionSent = true;
+        writeSse(res, { router_decision: { ...decision, runId, traceAvailable: Boolean(runId) } });
+      };
+      try {
+        const run = await this.agentsService.runBuiltinAgent(user.id, agentKey, runDto, payload.model, (event) => {
+          if (event.type === 'run_created') {
+            sendDecision(event.run.id);
+            return;
+          }
+          if (event.type === 'llm_delta') {
+            writeSse(res, {
+              id: event.runId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: payload.model,
+              choices: [{ index: 0, delta: { content: event.delta }, finish_reason: null }],
+            });
+          }
+        });
+        sendDecision(run.id);
+        await this.routerService.recordCompletion(decision.selectedModel, Date.now() - startedAt, run.status === 'succeeded', decision.intent);
+        res.write('data: [DONE]\n\n');
+        flushSse(res);
+      } catch (error) {
+        sendDecision();
+        writeStreamError(res, payload.model, error);
+      } finally {
+        res.end();
+      }
+      return;
+    }
+
+    const run = await this.agentsService.runBuiltinAgent(user.id, agentKey, runDto, payload.model);
+    await this.routerService.recordCompletion(decision.selectedModel, Date.now() - startedAt, run.status === 'succeeded', decision.intent);
+    res.setHeader('x-router-intent', decision.intent);
+    res.setHeader('x-router-model', decision.selectedModel);
+    res.json({
+      id: run.id,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: payload.model,
+      choices: [{ index: 0, message: { role: 'assistant', content: run.output || run.error }, finish_reason: run.status === 'failed' ? 'error' : 'stop' }],
+      usage: { prompt_tokens: run.promptTokens, completion_tokens: run.completionTokens, total_tokens: run.totalTokens },
+      router_decision: { ...decision, runId: run.id, traceAvailable: true },
+    });
+  }
+
+  private chatPayloadToAgentRun(payload: ChatRequestDto): RunAgentDto {
+    const lastUserIndex = [...payload.messages].map((message, index) => ({ message, index })).reverse().find((item) => item.message.role === 'user')?.index ?? payload.messages.length - 1;
+    const lastUser = payload.messages[lastUserIndex];
+    const extracted = this.extractMessageContent(lastUser?.content);
+    return {
+      input: extracted.text || '',
+      messages: payload.messages
+        .slice(0, lastUserIndex)
+        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .slice(-20)
+        .map((message) => ({ role: message.role as 'user' | 'assistant', content: this.extractMessageContent(message.content).text })),
+      imageUrls: extracted.imageUrls,
+      maxSteps: 6,
+      approvedToolIds: [],
+    };
+  }
+
+  private extractMessageContent(content: string | unknown[]): { text: string; imageUrls: string[] } {
+    if (typeof content === 'string') return { text: content, imageUrls: [] };
+    if (!Array.isArray(content)) return { text: '', imageUrls: [] };
+    const text: string[] = [];
+    const imageUrls: string[] = [];
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      const record = part as Record<string, unknown>;
+      if (record.type === 'text' && typeof record.text === 'string') text.push(record.text);
+      if (record.type === 'image_url' && record.image_url && typeof record.image_url === 'object') {
+        const url = (record.image_url as Record<string, unknown>).url;
+        if (typeof url === 'string') imageUrls.push(url);
+      }
+    }
+    return { text: text.join('\n'), imageUrls };
   }
 }

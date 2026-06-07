@@ -375,11 +375,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         name VARCHAR(80) NOT NULL,
         display_name VARCHAR(128) NOT NULL,
         description TEXT NOT NULL,
+        category VARCHAR(64) NOT NULL DEFAULT 'builtin',
         schema_json TEXT NOT NULL,
+        output_schema_json TEXT,
+        permissions_json TEXT,
         implementation_type VARCHAR(32) NOT NULL DEFAULT 'builtin',
+        runtime VARCHAR(32) NOT NULL DEFAULT 'builtin',
+        risk_level VARCHAR(16) NOT NULL DEFAULT 'low',
+        code LONGTEXT,
+        timeout_ms INT NOT NULL DEFAULT 30000,
+        retries INT NOT NULL DEFAULT 0,
         enabled INT NOT NULL DEFAULT 1,
         created_at ${ts},
         updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
         UNIQUE KEY uniq_tools_user_name (user_id, name),
         INDEX idx_tools_enabled (enabled)
       )${fk};`);
@@ -844,6 +853,25 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `ALTER TABLE agent_skills ADD COLUMN version INT NOT NULL DEFAULT 1`,
     ];
     for (const sql of skillColumns) {
+      try {
+        await this.adapter.exec(sql);
+      } catch {
+        // column already exists
+      }
+    }
+
+    const toolColumns = [
+      `ALTER TABLE tools ADD COLUMN category VARCHAR(64) NOT NULL DEFAULT 'builtin'`,
+      `ALTER TABLE tools ADD COLUMN output_schema_json TEXT`,
+      `ALTER TABLE tools ADD COLUMN permissions_json TEXT`,
+      `ALTER TABLE tools ADD COLUMN runtime VARCHAR(32) NOT NULL DEFAULT 'builtin'`,
+      `ALTER TABLE tools ADD COLUMN risk_level VARCHAR(16) NOT NULL DEFAULT 'low'`,
+      `ALTER TABLE tools ADD COLUMN code LONGTEXT`,
+      `ALTER TABLE tools ADD COLUMN timeout_ms INT NOT NULL DEFAULT 30000`,
+      `ALTER TABLE tools ADD COLUMN retries INT NOT NULL DEFAULT 0`,
+      `ALTER TABLE tools ADD COLUMN deleted_at DATETIME(3) DEFAULT NULL`,
+    ];
+    for (const sql of toolColumns) {
       try {
         await this.adapter.exec(sql);
       } catch {

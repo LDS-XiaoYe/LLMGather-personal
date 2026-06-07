@@ -59,6 +59,7 @@ const agentTestSuites = bind(app, 'agentTestSuites');
 const agentTestCases = bind(app, 'agentTestCases');
 const agentTestRuns = bind(app, 'agentTestRuns');
 const marketplaceTemplates = bind(app, 'marketplaceTemplates');
+const builtinAgents = bind(app, 'builtinAgents');
 const agentResourceLoading = bind(app, 'agentResourceLoading');
 const memorySaving = bind(app, 'memorySaving');
 const skillCreating = bind(app, 'skillCreating');
@@ -174,6 +175,7 @@ const clearAgentBuilderCanvas = bind(app, 'clearAgentBuilderCanvas');
 const saveAgentPublication = bind(app, 'saveAgentPublication');
 const generateAgentFromRequirement = bind(app, 'generateAgentFromRequirement');
 const installMarketplaceTemplate = bind(app, 'installMarketplaceTemplate');
+const installBuiltinAgentFromSpec = bind(app, 'installBuiltinAgentFromSpec');
 const publishCurrentAgentToMarketplace = bind(app, 'publishCurrentAgentToMarketplace');
 const saveAgent = bind(app, 'saveAgent');
 const runCurrentAgent = bind(app, 'runCurrentAgent');
@@ -1739,8 +1741,7 @@ const chatModels = bind(app, 'chatModels');
                         <el-select v-model="toolForm.runtime" style="width:100%">
                           <el-option label="Python" value="python" />
                           <el-option label="JavaScript" value="javascript" />
-                          <el-option label="HTTP API" value="http" />
-                          <el-option label="Webhook" value="webhook" />
+                          <el-option label="TypeScript" value="typescript" />
                         </el-select>
                       </el-form-item>
                     </el-col>
@@ -1881,6 +1882,7 @@ const chatModels = bind(app, 'chatModels');
                 <div class="agent-panel-head">
                   <span>市场</span>
                   <div class="agent-head-tags">
+                    <el-tag size="small" type="success">内置 {{ builtinAgents.length }}</el-tag>
                     <el-tag size="small" type="success">模板 {{ marketplaceTemplates.length }}</el-tag>
                     <el-tag size="small" type="primary">Skills {{ availableSkills.length }}</el-tag>
                   </div>
@@ -1902,6 +1904,27 @@ const chatModels = bind(app, 'chatModels');
                     >
                       发布当前 Agent
                     </el-button>
+                  </div>
+
+                  <div class="marketplace-grid" style="margin-bottom:16px">
+                    <div v-for="agent in builtinAgents" :key="agent.key" class="marketplace-card">
+                      <div class="marketplace-card-header">
+                        <strong>{{ agent.name }}</strong>
+                        <el-tag size="small" type="success">内置</el-tag>
+                      </div>
+                      <p class="marketplace-card-desc">{{ agent.description }}</p>
+                      <div class="marketplace-card-meta">
+                        <el-tag size="small" type="info">{{ agent.category }}</el-tag>
+                        <el-tag size="small" :type="agent.riskLevel === 'high' ? 'danger' : agent.riskLevel === 'medium' ? 'warning' : 'success'">
+                          {{ agent.riskLevel }}
+                        </el-tag>
+                        <el-tag v-for="tag in agent.tags.slice(0, 3)" :key="tag" size="small" type="primary">{{ tag }}</el-tag>
+                      </div>
+                      <el-button type="primary" plain size="small" :loading="marketplaceInstalling" @click="installBuiltinAgentFromSpec(agent)">
+                        复制为我的 Agent
+                      </el-button>
+                    </div>
+                    <el-empty v-if="builtinAgents.length === 0" description="暂无内置 Agent" :image-size="72" />
                   </div>
 
                   <div class="marketplace-grid">

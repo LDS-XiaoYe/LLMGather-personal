@@ -12,6 +12,7 @@ import {
   CreateAgentVersionDto,
   EvaluateAgentRunDto,
   GenerateAgentDto,
+  InstallBuiltinAgentDto,
   InstallAgentTemplateDto,
   RunAgentDto,
   RunAgentTestSuiteDto,
@@ -48,6 +49,20 @@ export class AgentsController {
   @Get('marketplace/templates')
   async marketplaceTemplates(@CurrentUser() user: AuthenticatedRequestUser) {
     return { data: await this.agentsService.listMarketplaceTemplates(user.id) };
+  }
+
+  @Get('builtin')
+  async builtinAgents() {
+    return { data: this.agentsService.listBuiltinAgents() };
+  }
+
+  @Post('builtin/:key/install')
+  async installBuiltinAgent(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('key') key: string,
+    @Body() payload: InstallBuiltinAgentDto = {},
+  ) {
+    return { data: await this.agentsService.installBuiltinAgent(user.id, key, payload) };
   }
 
   @Post('marketplace/templates')

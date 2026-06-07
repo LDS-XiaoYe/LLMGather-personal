@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ApiKeysModule } from '../api-keys/api-keys.module';
 import { AuthModule } from '../auth/auth.module';
 import { GatewayModule } from '../gateway/gateway.module';
@@ -11,7 +11,7 @@ import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
 
 @Module({
-  imports: [AuthModule, ApiKeysModule, GatewayModule, ToolsModule, KnowledgeModule, MemoryModule, SkillsModule],
+  imports: [AuthModule, ApiKeysModule, forwardRef(() => GatewayModule), ToolsModule, KnowledgeModule, MemoryModule, SkillsModule],
   controllers: [AgentsController, AgentAccessController],
   providers: [AgentsService],
   exports: [AgentsService],

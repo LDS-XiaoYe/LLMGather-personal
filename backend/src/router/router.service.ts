@@ -5,6 +5,7 @@ import { ProviderAdapter } from '../providers/provider.types';
 import { ChatRequestDto } from '../gateway/dto/chat-request.dto';
 import { ChatService } from '../gateway/chat.service';
 import { classifyIntentByLLM, getIntentLabel, ClassifierDebug } from './llm-classifier';
+import { matchBuiltinAgent } from '../agents/builtin-agents';
 
 export interface RouteDecision {
   intent: string;
@@ -14,6 +15,11 @@ export interface RouteDecision {
   fallbacks: string[];
   reason: string;
   debug?: ClassifierDebug;
+  targetType?: 'model' | 'builtin_agent' | 'user_agent';
+  agentKey?: string;
+  agentName?: string;
+  runId?: string;
+  traceAvailable?: boolean;
 }
 
 @Injectable()
@@ -120,6 +126,37 @@ export class RouterService implements OnModuleInit {
     const lastUserMsg = [...payload.messages].reverse().find((m) => m.role === 'user');
     const query = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
 
+    const builtinMatch = matchBuiltinAgent(query);
+    if (builtinMatch) {
+      const availableModels = this.providerRegistry.listModels();
+      const rules = await this.getRules();
+      const candidates = [
+        ...(rules[builtinMatch.spec.key] ?? []),
+        ...(rules[builtinMatch.spec.category] ?? []),
+        ...(rules.general ?? []),
+      ];
+      let selectedModel = candidates.find((model) => availableModels.some((item) => item.id === model));
+      if (!selectedModel) {
+        selectedModel = availableModels.find((model) => !model.id.includes('tts') && !model.id.includes('voice'))?.id || availableModels[0]?.id || '';
+      }
+      if (!selectedModel) throw new Error('No models available');
+      const provider = this.providerRegistry.resolveProvider(selectedModel);
+      const decision: RouteDecision = {
+        intent: builtinMatch.spec.key,
+        intentLabel: builtinMatch.spec.name,
+        confidence: builtinMatch.confidence,
+        selectedModel,
+        fallbacks: candidates.filter((model) => model !== selectedModel),
+        reason: builtinMatch.reason,
+        targetType: 'builtin_agent',
+        agentKey: builtinMatch.spec.key,
+        agentName: builtinMatch.spec.name,
+        traceAvailable: true,
+      };
+      this.recordMetric(selectedModel, builtinMatch.spec.key).catch(() => {});
+      return { provider, model: selectedModel, decision };
+    }
+
     // 1. Classify intent using LLM (model + intents from system settings / DB)
     const classifierModel = await this.getClassifierModel();
     const rules = await this.getRules();
@@ -163,6 +200,7 @@ export class RouterService implements OnModuleInit {
       fallbacks,
       reason: `LLM 分类: 意图「${getIntentLabel(intent)}」→ 路由到 ${selectedModel}`,
       debug,
+      targetType: 'model',
     };
 
     return { provider, model: selectedModel, decision };

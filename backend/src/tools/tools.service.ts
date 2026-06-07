@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
 import { Script, createContext } from 'vm';
 import { DatabaseService } from '../database/database.service';
 import { McpService } from '../mcp/mcp.service';
+import { CreateToolDto, UpdateToolDto } from './dto/tools.dto';
 
 export interface ToolDefinition {
   id: string;
@@ -13,7 +14,16 @@ export interface ToolDefinition {
   displayName: string;
   description: string;
   schema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
   implementationType: string;
+  source: 'builtin' | 'custom';
+  category: string;
+  runtime: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  code?: string;
+  timeoutMs: number;
+  retries: number;
   enabled: boolean;
   permissionLevel?: 'auto' | 'confirm' | 'disabled';
 }
@@ -35,8 +45,16 @@ type ToolRow = {
   name: string;
   displayName: string;
   description: string;
+  category?: string;
   schemaJson: string;
+  outputSchemaJson?: string;
+  permissionsJson?: string;
   implementationType: string;
+  runtime?: string;
+  riskLevel?: string;
+  code?: string;
+  timeoutMs?: number | string;
+  retries?: number | string;
   enabled: number | string;
   permissionLevel?: string;
 };
@@ -51,9 +69,11 @@ export class ToolsService {
   async listForUser(userId: string): Promise<ToolDefinition[]> {
     const rows = await this.databaseService.connection.prepare(
       `SELECT id, user_id as userId, name, display_name as displayName, description,
-              schema_json as schemaJson, implementation_type as implementationType, enabled
+              category, schema_json as schemaJson, output_schema_json as outputSchemaJson,
+              permissions_json as permissionsJson, implementation_type as implementationType,
+              runtime, risk_level as riskLevel, code, timeout_ms as timeoutMs, retries, enabled
        FROM tools
-       WHERE enabled = 1 AND (user_id IS NULL OR user_id = ?)
+       WHERE enabled = 1 AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
        ORDER BY user_id IS NULL DESC, display_name ASC`,
     ).all(userId) as unknown as ToolRow[];
     return rows.map((row) => this.mapTool(row));
@@ -62,9 +82,11 @@ export class ToolsService {
   async getById(userId: string, toolId: string): Promise<ToolDefinition> {
     const row = await this.databaseService.connection.prepare(
       `SELECT id, user_id as userId, name, display_name as displayName, description,
-              schema_json as schemaJson, implementation_type as implementationType, enabled
+              category, schema_json as schemaJson, output_schema_json as outputSchemaJson,
+              permissions_json as permissionsJson, implementation_type as implementationType,
+              runtime, risk_level as riskLevel, code, timeout_ms as timeoutMs, retries, enabled
        FROM tools
-       WHERE id = ? AND enabled = 1 AND (user_id IS NULL OR user_id = ?)
+       WHERE id = ? AND enabled = 1 AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
        LIMIT 1`,
     ).get(toolId, userId) as unknown as ToolRow | undefined;
     if (!row) throw new NotFoundException('工具不存在或不可用');
@@ -74,14 +96,92 @@ export class ToolsService {
   async getAgentTools(userId: string, agentId: string): Promise<ToolDefinition[]> {
     const rows = await this.databaseService.connection.prepare(
       `SELECT t.id, t.user_id as userId, t.name, t.display_name as displayName, t.description,
-              t.schema_json as schemaJson, t.implementation_type as implementationType, t.enabled,
+              t.category, t.schema_json as schemaJson, t.output_schema_json as outputSchemaJson,
+              t.permissions_json as permissionsJson, t.implementation_type as implementationType,
+              t.runtime, t.risk_level as riskLevel, t.code, t.timeout_ms as timeoutMs, t.retries, t.enabled,
               at.permission_level as permissionLevel
        FROM agent_tools at
        JOIN tools t ON t.id = at.tool_id
-       WHERE at.user_id = ? AND at.agent_id = ? AND t.enabled = 1
+       WHERE at.user_id = ? AND at.agent_id = ? AND t.enabled = 1 AND t.deleted_at IS NULL
        ORDER BY t.display_name ASC`,
     ).all(userId, agentId) as unknown as ToolRow[];
     return rows.map((row) => this.mapTool(row));
+  }
+
+  async create(userId: string, dto: CreateToolDto): Promise<ToolDefinition> {
+    const name = this.normalizeToolName(dto.name);
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `INSERT INTO tools
+        (id, user_id, name, display_name, description, category, schema_json, output_schema_json,
+         permissions_json, implementation_type, runtime, risk_level, code, timeout_ms, retries, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'custom_code', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      userId,
+      name,
+      dto.displayName.trim(),
+      dto.description?.trim() ?? '',
+      dto.category?.trim() || 'custom',
+      JSON.stringify(dto.inputSchema ?? { type: 'object', properties: {} }),
+      JSON.stringify(dto.outputSchema ?? { type: 'object', properties: {} }),
+      JSON.stringify(dto.permissions ?? {}),
+      dto.runtime ?? 'python',
+      dto.riskLevel ?? 'low',
+      dto.code,
+      Math.max(1000, Math.min(300000, (dto.timeout ?? 30) * 1000)),
+      dto.retries ?? 0,
+      dto.enabled === false ? 0 : 1,
+      now,
+      now,
+    );
+    return this.getById(userId, id);
+  }
+
+  async update(userId: string, toolId: string, dto: UpdateToolDto): Promise<ToolDefinition> {
+    const current = await this.getOwnedCustomTool(userId, toolId);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE tools
+       SET name = ?, display_name = ?, description = ?, category = ?, schema_json = ?, output_schema_json = ?,
+           permissions_json = ?, runtime = ?, risk_level = ?, code = ?, timeout_ms = ?, retries = ?,
+           enabled = ?, updated_at = ?
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(
+      dto.name ? this.normalizeToolName(dto.name) : current.name,
+      dto.displayName?.trim() || current.displayName,
+      dto.description?.trim() ?? current.description,
+      dto.category?.trim() || current.category,
+      JSON.stringify(dto.inputSchema ?? current.schema),
+      JSON.stringify(dto.outputSchema ?? current.outputSchema ?? { type: 'object', properties: {} }),
+      JSON.stringify(dto.permissions ?? current.permissions ?? {}),
+      dto.runtime ?? current.runtime,
+      dto.riskLevel ?? current.riskLevel,
+      dto.code ?? current.code ?? '',
+      dto.timeout ? Math.max(1000, Math.min(300000, dto.timeout * 1000)) : current.timeoutMs,
+      dto.retries ?? current.retries,
+      dto.enabled === false ? 0 : 1,
+      now,
+      toolId,
+      userId,
+    );
+    return this.getById(userId, toolId);
+  }
+
+  async remove(userId: string, toolId: string): Promise<void> {
+    await this.getOwnedCustomTool(userId, toolId);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE tools SET enabled = 0, deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+    ).run(now, now, toolId, userId);
+    await this.databaseService.connection.prepare(
+      'DELETE FROM agent_tools WHERE tool_id = ? AND user_id = ?',
+    ).run(toolId, userId);
+  }
+
+  async test(userId: string, toolId: string, args: Record<string, unknown>): Promise<ToolInvocationResult> {
+    return this.invoke(userId, toolId, args, {});
   }
 
   async setAgentTools(
@@ -118,7 +218,9 @@ export class ToolsService {
     let status: 'succeeded' | 'failed' = 'succeeded';
 
     try {
-      output = await this.runBuiltin(userId, tool.name, args);
+      output = tool.implementationType === 'custom_code'
+        ? await this.runCustomCode(tool, args, { userId, agentId: context?.agentId, runId: context?.runId })
+        : await this.runBuiltin(userId, tool.name, args);
     } catch (err) {
       status = 'failed';
       error = err instanceof Error ? err.message : String(err);
@@ -202,9 +304,11 @@ export class ToolsService {
   private async resolveTool(userId: string, toolIdOrName: string): Promise<ToolDefinition> {
     const row = await this.databaseService.connection.prepare(
       `SELECT id, user_id as userId, name, display_name as displayName, description,
-              schema_json as schemaJson, implementation_type as implementationType, enabled
+              category, schema_json as schemaJson, output_schema_json as outputSchemaJson,
+              permissions_json as permissionsJson, implementation_type as implementationType,
+              runtime, risk_level as riskLevel, code, timeout_ms as timeoutMs, retries, enabled
        FROM tools
-       WHERE enabled = 1 AND (id = ? OR name = ?) AND (user_id IS NULL OR user_id = ?)
+       WHERE enabled = 1 AND deleted_at IS NULL AND (id = ? OR name = ?) AND (user_id IS NULL OR user_id = ?)
        ORDER BY user_id IS NULL DESC
        LIMIT 1`,
     ).get(toolIdOrName, toolIdOrName, userId) as unknown as ToolRow | undefined;
@@ -280,6 +384,75 @@ export class ToolsService {
     }
 
     throw new BadRequestException(`暂不支持的内置工具: ${name}`);
+  }
+
+  private async getOwnedCustomTool(userId: string, toolId: string): Promise<ToolDefinition> {
+    const tool = await this.getById(userId, toolId);
+    if (!tool.userId || tool.userId !== userId || tool.implementationType !== 'custom_code') {
+      throw new ForbiddenException('只能编辑或删除自己的自定义工具');
+    }
+    return tool;
+  }
+
+  private normalizeToolName(name: string): string {
+    const normalized = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (!/^[a-z][a-z0-9_]{1,79}$/.test(normalized)) {
+      throw new BadRequestException('工具英文标识需以字母开头，只能包含小写字母、数字和下划线');
+    }
+    return normalized;
+  }
+
+  private async runCustomCode(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    context: { userId: string; agentId?: string; runId?: string },
+  ): Promise<string> {
+    const code = tool.code?.trim() ?? '';
+    if (!code) throw new BadRequestException('自定义工具代码为空');
+    const endpoint = process.env.CODE_RUNNER_URL || 'http://code-runner:8787/run';
+    const payload = {
+      language: tool.runtime || 'python',
+      code: this.wrapCustomToolCode(tool.runtime, code),
+      input: {
+        payload: args,
+        context: {
+          userId: context.userId,
+          agentId: context.agentId ?? '',
+          runId: context.runId ?? '',
+          toolName: tool.name,
+        },
+      },
+    };
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(Math.max(1000, Math.min(tool.timeoutMs || 30000, 300000))),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new BadRequestException(`自定义工具执行失败: ${text.slice(0, 800)}`);
+    }
+    return text;
+  }
+
+  private wrapCustomToolCode(runtime: string, code: string): string {
+    if (runtime === 'python') {
+      return [
+        code,
+        '',
+        'if "run" in globals():',
+        '    result = run(input.get("payload", input), input.get("context", {}))',
+      ].join('\n');
+    }
+    return [
+      code,
+      '',
+      'const __toolPayload = input && input.payload ? input.payload : input;',
+      'const __toolContext = input && input.context ? input.context : {};',
+      'const __toolResult = typeof run === "function" ? run(__toolPayload, __toolContext) : undefined;',
+      '__toolResult;',
+    ].join('\n');
   }
 
   private runJavascript(args: Record<string, unknown>): string {
@@ -472,6 +645,15 @@ export class ToolsService {
     try {
       schema = JSON.parse(row.schemaJson || '{}') as Record<string, unknown>;
     } catch {}
+    let outputSchema: Record<string, unknown> = {};
+    try {
+      outputSchema = JSON.parse(row.outputSchemaJson || '{}') as Record<string, unknown>;
+    } catch {}
+    let permissions: Record<string, unknown> = {};
+    try {
+      permissions = JSON.parse(row.permissionsJson || '{}') as Record<string, unknown>;
+    } catch {}
+    const riskLevel = ['low', 'medium', 'high'].includes(row.riskLevel || '') ? row.riskLevel as ToolDefinition['riskLevel'] : 'low';
     return {
       id: row.id,
       userId: row.userId || null,
@@ -479,7 +661,16 @@ export class ToolsService {
       displayName: row.displayName,
       description: row.description,
       schema,
+      outputSchema,
+      permissions,
       implementationType: row.implementationType,
+      source: row.userId ? 'custom' : 'builtin',
+      category: row.category || (row.userId ? 'custom' : 'builtin'),
+      runtime: row.runtime || (row.userId ? 'python' : 'builtin'),
+      riskLevel,
+      code: row.userId ? row.code || '' : undefined,
+      timeoutMs: Number(row.timeoutMs ?? 30000),
+      retries: Number(row.retries ?? 0),
       enabled: Number(row.enabled) === 1,
       permissionLevel: ['auto', 'confirm', 'disabled'].includes(row.permissionLevel || '') ? row.permissionLevel as ToolDefinition['permissionLevel'] : 'auto',
     };

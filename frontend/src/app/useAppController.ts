@@ -19,12 +19,14 @@ import {
   createAgentTestSuite as apiCreateAgentTestSuite,
   createAgentVersion as apiCreateAgentVersion,
   createMcpServer as apiCreateMcpServer,
+  createTool as apiCreateTool,
   createWorkflow as apiCreateWorkflow,
   deleteAdminUser,
   deleteAgent as apiDeleteAgent,
   deleteConversation,
   deleteMemory as apiDeleteMemory,
   deleteSkill as apiDeleteSkill,
+  deleteTool as apiDeleteTool,
   evaluateAgentRun as apiEvaluateAgentRun,
   exportAdminBillingCsv,
   fetchAdminBilling,
@@ -35,6 +37,7 @@ import {
   fetchAdminTodayStats,
   fetchAdminUsers,
   fetchAgents,
+  fetchBuiltinAgents,
   fetchAgentRuns,
   fetchAgentRun,
   fetchAgentEvaluations,
@@ -58,6 +61,7 @@ import {
   fetchMcpServers,
   generateAgent as apiGenerateAgent,
   installAgentMarketplaceTemplate as apiInstallAgentMarketplaceTemplate,
+  installBuiltinAgent as apiInstallBuiltinAgent,
   getStoredToken,
   fetchTools,
   fetchWorkflows,
@@ -80,11 +84,13 @@ import {
   setStoredToken,
   syncConversations,
   testSkill as apiTestSkill,
+  testTool as apiTestTool,
   streamCompletion,
   streamAgentRun,
   topUp,
   updateAgent as apiUpdateAgent,
   updateAgentPublication as apiUpdateAgentPublication,
+  updateTool as apiUpdateTool,
   updateMemory as apiUpdateMemory,
   restoreAgentVersion as apiRestoreAgentVersion,
   testMcpServer as apiTestMcpServer,
@@ -120,6 +126,7 @@ import {
   type AgentTestSuite,
   type AgentVersion,
   type AgentMarketplaceTemplate,
+  type BuiltinAgentSpec,
   type ApiKeyItem,
   type AuthUser,
   type BillingLedgerItem,
@@ -141,6 +148,7 @@ import {
   type SkillDefinition,
   type SkillTestResult,
   type ToolDefinition,
+  type ToolInput,
   type Workflow,
   type WorkflowRun,
   type WorkflowNode,
@@ -265,6 +273,7 @@ export function useAppController() {
   const agentTestCases = ref<AgentTestCase[]>([]);
   const agentTestRuns = ref<AgentTestRun[]>([]);
   const marketplaceTemplates = ref<AgentMarketplaceTemplate[]>([]);
+  const builtinAgents = ref<BuiltinAgentSpec[]>([]);
   const agentResourceLoading = ref(false);
   const knowledgeCreating = ref(false);
   const knowledgeDocSaving = ref(false);
@@ -346,7 +355,7 @@ export function useAppController() {
     icon: string;
     category: string;
     type: 'builtin' | 'custom';
-    runtime: 'python' | 'javascript' | 'http' | 'webhook' | 'db';
+    runtime: 'python' | 'javascript' | 'typescript' | 'http' | 'webhook' | 'db';
     status: 'enabled' | 'disabled';
     riskLevel: 'low' | 'medium' | 'high';
     version: string;
@@ -1293,27 +1302,32 @@ export function useAppController() {
       agentTestSuites.value = [];
       agentTestCases.value = [];
       marketplaceTemplates.value = [];
+      builtinAgents.value = [];
+      customTools.value = [];
       agentMemories.value = [];
       return;
     }
 
     agentResourceLoading.value = true;
     try {
-      const [tools, bases, skills, teamItems, mcpItems, templates, workflowItems] = await Promise.all([
+      const [tools, bases, skills, teamItems, mcpItems, templates, builtinItems, workflowItems] = await Promise.all([
         fetchTools(backendBaseUrl.value),
         fetchKnowledgeBases(backendBaseUrl.value),
         fetchSkills(backendBaseUrl.value),
         fetchAgentTeams(backendBaseUrl.value),
         fetchMcpServers(backendBaseUrl.value),
         fetchAgentMarketplaceTemplates(backendBaseUrl.value),
+        fetchBuiltinAgents(backendBaseUrl.value),
         fetchWorkflows(backendBaseUrl.value),
       ]);
-      availableTools.value = tools;
+      availableTools.value = tools.filter((tool) => tool.source !== 'custom');
+      customTools.value = tools.filter((tool) => tool.source === 'custom').map(toolDefinitionToCustomTool);
       knowledgeBases.value = bases;
       availableSkills.value = skills;
       agentTeams.value = teamItems;
       mcpServers.value = mcpItems;
       marketplaceTemplates.value = templates;
+      builtinAgents.value = builtinItems;
       workflows.value = workflowItems;
       if (!knowledgeDocForm.value.kbId && bases[0]) knowledgeDocForm.value.kbId = bases[0].id;
       if (!ragLabForm.value.kbId && bases[0]) ragLabForm.value.kbId = bases[0].id;
@@ -1869,6 +1883,28 @@ export function useAppController() {
     }
   }
 
+  async function installBuiltinAgentFromSpec(spec: BuiltinAgentSpec) {
+    const model = agentForm.value.model || selectedModel.value || chatModels.value[0]?.id || models.value[0]?.id || '';
+    if (!model || model === 'auto') {
+      status.value = '请先选择一个具体模型再复制内置 Agent';
+      return;
+    }
+    marketplaceInstalling.value = true;
+    try {
+      const installed = await apiInstallBuiltinAgent(spec.key, model, backendBaseUrl.value);
+      agents.value = [installed, ...agents.value.filter((item) => item.id !== installed.id)];
+      activeAgentId.value = installed.id;
+      fillAgentForm(installed);
+      agentWorkspaceMode.value = 'invoke';
+      agentPrompt.value = `请用 ${spec.name} 帮我完成一个测试任务。`;
+      status.value = `已复制内置 Agent：${spec.name}`;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '复制内置 Agent 失败';
+    } finally {
+      marketplaceInstalling.value = false;
+    }
+  }
+
   async function publishCurrentAgentToMarketplace() {
     const agent = agentForm.value.id ? activeAgent.value : await persistAgent();
     if (!agent || marketplacePublishing.value) return;
@@ -1893,15 +1929,20 @@ export function useAppController() {
   }
 
   function getToolLabelById(toolId: string): string {
-    const tool = availableTools.value.find((item) => item.id === toolId);
+    const tool = [...availableTools.value, ...customTools.value].find((item) => item.id === toolId);
     return tool?.displayName || tool?.name || toolId;
   }
 
-  async function confirmToolExecutionIfNeeded(): Promise<boolean> {
-    const confirmTools = agentForm.value.toolIds
-      .filter((toolId) => agentForm.value.toolPermissions[toolId] === 'confirm')
-      .map(getToolLabelById);
-    if (confirmTools.length === 0) return true;
+  function isHighRiskTool(toolId: string): boolean {
+    const tool = [...availableTools.value, ...customTools.value].find((item) => item.id === toolId);
+    return tool?.riskLevel === 'high' || /runner|python|javascript|code/i.test(tool?.name || '');
+  }
+
+  async function confirmToolExecutionIfNeeded(): Promise<string[] | null> {
+    const confirmToolIds = agentForm.value.toolIds
+      .filter((toolId) => agentForm.value.toolPermissions[toolId] === 'confirm' || isHighRiskTool(toolId));
+    const confirmTools = confirmToolIds.map(getToolLabelById);
+    if (confirmTools.length === 0) return [];
     try {
       await ElMessageBox.confirm(
         `本次运行可能调用以下工具：${confirmTools.join('、')}。工具可能访问外部页面、执行代码或消耗资源，确认允许后再继续。`,
@@ -1912,10 +1953,10 @@ export function useAppController() {
           type: 'warning',
         },
       );
-      return true;
+      return confirmToolIds;
     } catch {
       status.value = '已取消 Tool 执行';
-      return false;
+      return null;
     }
   }
 
@@ -1948,7 +1989,8 @@ export function useAppController() {
     if (!input || agentRunning.value) return;
     const agent = agentForm.value.id ? activeAgent.value : await persistAgent();
     if (!agent) return;
-    if (!(await confirmToolExecutionIfNeeded())) return;
+    const approvedToolIds = await confirmToolExecutionIfNeeded();
+    if (approvedToolIds === null) return;
 
     agentRunning.value = true;
     activeAgentRun.value = null;
@@ -1962,7 +2004,7 @@ export function useAppController() {
         .split(/\n|,/)
         .map((item) => item.trim())
         .filter(Boolean);
-      await streamAgentRun(agent.id, { input, imageUrls }, {
+      await streamAgentRun(agent.id, { input, imageUrls, maxSteps: 6, approvedToolIds }, {
         onEvent: (event) => {
           applyAgentRunStreamEvent(event);
         },
@@ -2129,10 +2171,12 @@ export function useAppController() {
 
   const agentTraceStageGroups = computed(() => {
     const stages = [
-      { id: 'context', label: 'Context', types: ['context', 'memory_read', 'rag', 'knowledge', 'input'] },
-      { id: 'capability', label: 'Skill / Tool / RAG', types: ['skill', 'tool', 'rag', 'knowledge_search'] },
+      { id: 'context', label: 'Context', types: ['context', 'memory_read', 'memory_retrieval', 'rag', 'rag_retrieval', 'knowledge', 'input'] },
+      { id: 'plan', label: 'Plan', types: ['plan', 'reflection'] },
+      { id: 'capability', label: 'Skill / Tool / RAG', types: ['skill', 'skill_context', 'tool', 'tool_call', 'tool_calling', 'rag', 'knowledge_search'] },
+      { id: 'delegate', label: 'Delegate', types: ['delegate_agent', 'delegate_observation'] },
       { id: 'llm', label: 'LLM', types: ['llm', 'llm_completion', 'completion'] },
-      { id: 'memory', label: 'Memory Write', types: ['memory_write', 'memory'] },
+      { id: 'memory', label: 'Memory', types: ['memory_write', 'memory_extract', 'memory_update', 'memory'] },
       { id: 'other', label: 'Other', types: [] },
     ];
     const nodes = agentTraceNodes.value;
@@ -2265,15 +2309,19 @@ export function useAppController() {
         // 发送到后端解析
         const response = await fetch(`${backendBaseUrl.value}/knowledge/parse-file`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(getStoredToken() ? { Authorization: `Bearer ${getStoredToken()}` } : {}) },
           body: JSON.stringify({ file: base64, filename: file.name }),
+          credentials: 'include',
         });
         
-        if (!response.ok) {
-          throw new Error('文件解析失败');
-        }
-        
         const result = await response.json();
+        if (!response.ok) {
+          const message = Array.isArray(result?.message)
+            ? result.message.join('；')
+            : result?.message || result?.error || '文件解析失败';
+          throw new Error(message);
+        }
+
         content = result.data?.content || '';
       } else {
         throw new Error(`不支持的文件格式: ${ext}`);
@@ -2803,6 +2851,39 @@ export function useAppController() {
   }
 
   // ===== Tool相关函数 =====
+  function toolDefinitionToCustomTool(tool: ToolDefinition): CustomTool {
+    return {
+      id: tool.id,
+      name: tool.name,
+      displayName: tool.displayName,
+      description: tool.description,
+      icon: '🔧',
+      category: tool.category || 'custom',
+      type: 'custom',
+      runtime: (tool.runtime || 'python') as CustomTool['runtime'],
+      status: tool.enabled ? 'enabled' : 'disabled',
+      riskLevel: (tool.riskLevel || 'low') as CustomTool['riskLevel'],
+      version: '1.0.0',
+      inputSchema: tool.schema || { type: 'object', properties: {}, required: [] },
+      outputSchema: tool.outputSchema || { type: 'object', properties: {} },
+      permissions: {
+        network: Boolean(tool.permissions?.network),
+        database: Boolean(tool.permissions?.database),
+        fileRead: Boolean(tool.permissions?.fileRead),
+        fileWrite: Boolean(tool.permissions?.fileWrite),
+        externalRequest: Boolean(tool.permissions?.externalRequest),
+      },
+      code: tool.code || '',
+      exampleInput: '',
+      exampleOutput: '',
+      timeout: Math.max(1, Math.round((tool.timeoutMs || 30000) / 1000)),
+      retries: tool.retries || 0,
+      createdAt: '',
+      updatedAt: '',
+      callCount: 0,
+    };
+  }
+
   function openToolCreateDialog() {
     toolForm.value = {
       name: '',
@@ -2860,30 +2941,25 @@ export function useAppController() {
     }
     toolCreating.value = true;
     try {
-      const tool: CustomTool = {
-        id: toolEditingId.value || `tool_${Date.now()}`,
+      const payload: ToolInput = {
         name: toolForm.value.name,
         displayName: toolForm.value.displayName,
         description: toolForm.value.description,
-        icon: toolForm.value.icon,
         category: toolForm.value.category,
-        type: 'custom',
         runtime: toolForm.value.runtime,
-        status: 'enabled',
         riskLevel: toolForm.value.riskLevel,
-        version: '1.0.0',
         inputSchema: toolForm.value.inputSchema,
         outputSchema: toolForm.value.outputSchema,
         code: toolForm.value.code,
-        exampleInput: toolForm.value.exampleInput,
-        exampleOutput: toolForm.value.exampleOutput,
         timeout: toolForm.value.timeout,
         retries: toolForm.value.retries,
         permissions: { ...toolForm.value.permissions },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        callCount: 0,
+        enabled: true,
       };
+      const saved = toolEditingId.value
+        ? await apiUpdateTool(toolEditingId.value, payload, backendBaseUrl.value)
+        : await apiCreateTool(payload, backendBaseUrl.value);
+      const tool = toolDefinitionToCustomTool(saved);
 
       if (toolEditingId.value) {
         const idx = customTools.value.findIndex(t => t.id === toolEditingId.value);
@@ -2900,9 +2976,15 @@ export function useAppController() {
     }
   }
 
-  function deleteTool(toolId: string) {
-    customTools.value = customTools.value.filter(t => t.id !== toolId);
-    status.value = '工具已删除';
+  async function deleteTool(toolId: string) {
+    try {
+      await apiDeleteTool(toolId, backendBaseUrl.value);
+      customTools.value = customTools.value.filter(t => t.id !== toolId);
+      agentForm.value.toolIds = agentForm.value.toolIds.filter((id) => id !== toolId);
+      status.value = '工具已删除';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '删除工具失败';
+    }
   }
 
   function previewTool(tool: CustomTool) {
@@ -2921,21 +3003,12 @@ export function useAppController() {
     if (!activeTool.value) return;
     toolTesting.value = true;
     try {
-      // 模拟工具测试
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toolTestResult.value = {
-        success: true,
-        output: { result: '测试结果示例' },
-        logs: ['工具执行开始...', '参数校验通过', '执行完成'],
-        duration: 156,
-        error: null,
-      };
+      const args = JSON.parse(toolTestInput.value || '{}');
+      toolTestResult.value = await apiTestTool(activeTool.value.id, args, backendBaseUrl.value);
+      status.value = `工具 "${activeTool.value.displayName}" 测试完成`;
     } catch (error) {
       toolTestResult.value = {
-        success: false,
-        output: null,
-        logs: [],
-        duration: 0,
+        status: 'failed',
         error: error instanceof Error ? error.message : '测试失败',
       };
     } finally {
@@ -2943,8 +3016,15 @@ export function useAppController() {
     }
   }
 
-  function toggleToolStatus(tool: CustomTool) {
-    tool.status = tool.status === 'enabled' ? 'disabled' : 'enabled';
+  async function toggleToolStatus(tool: CustomTool) {
+    const nextEnabled = tool.status !== 'enabled';
+    try {
+      const updated = await apiUpdateTool(tool.id, { enabled: nextEnabled }, backendBaseUrl.value);
+      Object.assign(tool, toolDefinitionToCustomTool(updated));
+      status.value = nextEnabled ? '工具已启用' : '工具已禁用';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '更新工具状态失败';
+    }
   }
 
   // DAG节点相关函数（getDagNodeInfo从composables导入）
@@ -3769,8 +3849,13 @@ export function useAppController() {
                 routeInfo = {
                   intent: d.intent || '',
                   intentLabel: d.intentLabel || '',
-                  model: d.selectedModel,
+                  model: d.agentName || d.selectedModel,
                   reason: d.reason,
+                  targetType: d.targetType,
+                  agentKey: d.agentKey,
+                  agentName: d.agentName,
+                  runId: d.runId,
+                  traceAvailable: d.traceAvailable,
                   debug: d.debug || undefined,
                 };
                 routerIntent.value = routeInfo.intentLabel;
@@ -3800,7 +3885,7 @@ export function useAppController() {
         if (!streamedContent) {
           upsertActiveSession([
             ...requestMessages,
-            { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routedModel },
+            { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routedModel, routerInfo: routeInfo },
           ], content);
         }
         status.value = keyRotationNotice || '路由回复完成';
@@ -3914,6 +3999,7 @@ export function useAppController() {
 
     chatAbortController = new AbortController();
     let streamedContent = '';
+    let lastRouterInfo: ChatMessage['routerInfo'] | undefined;
 
     const endpoint = routerEnabled.value
       ? `${backendBaseUrl.value}/router/chat/completions`
@@ -3977,6 +4063,22 @@ export function useAppController() {
                 routerReason.value = d.reason;
                 routerFallbacks.value = d.fallbacks || [];
                 routerDebug.value = d.debug || null;
+                lastRouterInfo = {
+                  intent: d.intent,
+                  intentLabel: d.intentLabel || d.intent,
+                  model: d.agentName || d.selectedModel,
+                  reason: d.reason,
+                  targetType: d.targetType,
+                  agentKey: d.agentKey,
+                  agentName: d.agentName,
+                  runId: d.runId,
+                  traceAvailable: d.traceAvailable,
+                  debug: d.debug || null,
+                };
+                upsertActiveSession([
+                  ...requestMessages,
+                  { id: assistantMsgId, role: 'assistant', content: streamedContent, model: d.selectedModel || fallbackModel, routerInfo: lastRouterInfo },
+                ], content);
               }
             } catch {}
             continue;
@@ -3990,7 +4092,7 @@ export function useAppController() {
               streamedContent += token;
               upsertActiveSession([
                 ...requestMessages,
-                { id: assistantMsgId, role: 'assistant', content: streamedContent, model: routerSelectedModel.value || fallbackModel },
+                { id: assistantMsgId, role: 'assistant', content: streamedContent, model: routerSelectedModel.value || fallbackModel, routerInfo: lastRouterInfo },
               ], content);
             }
           } catch {}
@@ -4000,7 +4102,7 @@ export function useAppController() {
       if (!streamedContent) {
         upsertActiveSession([
           ...requestMessages,
-          { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routerSelectedModel.value || fallbackModel },
+          { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routerSelectedModel.value || fallbackModel, routerInfo: lastRouterInfo },
         ], content);
       }
       status.value = '回复完成';
@@ -7327,6 +7429,7 @@ export function useAppController() {
     agentTestCases,
     agentTestRuns,
     marketplaceTemplates,
+    builtinAgents,
     agentResourceLoading,
     knowledgeCreating,
     knowledgeDocSaving,
@@ -7608,6 +7711,7 @@ export function useAppController() {
     saveAgentPublication,
     generateAgentFromRequirement,
     installMarketplaceTemplate,
+    installBuiltinAgentFromSpec,
     publishCurrentAgentToMarketplace,
     getToolLabelById,
     confirmToolExecutionIfNeeded,

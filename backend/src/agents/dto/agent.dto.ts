@@ -172,6 +172,18 @@ export class RunAgentDto {
   @ArrayMaxSize(8)
   @IsString({ each: true })
   imageUrls?: string[];
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(10)
+  maxSteps?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  approvedToolIds?: string[];
 }
 
 export class EvaluateAgentRunDto {
@@ -288,6 +300,13 @@ export class InstallAgentTemplateDto {
   @IsNotEmpty()
   @MaxLength(128)
   model!: string;
+}
+
+export class InstallBuiltinAgentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  model?: string;
 }
 
 export class CreateAgentMarketplaceTemplateDto {

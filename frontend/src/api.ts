@@ -520,6 +520,23 @@ export interface AgentDefinition {
   updatedAt: string;
   lastRunAt?: string;
   runCount: number;
+  builtinKey?: string;
+  source?: 'user' | 'builtin';
+}
+
+export interface BuiltinAgentSpec {
+  key: string;
+  name: string;
+  category: string;
+  description: string;
+  intents: string[];
+  tags: string[];
+  riskLevel: 'low' | 'medium' | 'high';
+  toolNames: string[];
+  skillNames: string[];
+  temperature: number;
+  maxTokens: number;
+  source: 'builtin';
 }
 
 export interface AgentMarketplaceTemplate {
@@ -547,6 +564,13 @@ export interface AgentInput {
   knowledgeBaseIds?: string[];
   skillIds?: string[];
   status?: 'active' | 'archived';
+}
+
+export interface AgentRunInput {
+  input: string;
+  imageUrls?: string[];
+  maxSteps?: number;
+  approvedToolIds?: string[];
 }
 
 export interface AgentRunStep {
@@ -648,6 +672,25 @@ export async function fetchAgents(baseUrl = defaultBaseUrl): Promise<AgentDefini
   return payload.data ?? [];
 }
 
+export async function fetchBuiltinAgents(baseUrl = defaultBaseUrl): Promise<BuiltinAgentSpec[]> {
+  const response = await fetch(`${baseUrl}/agents/builtin`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: BuiltinAgentSpec[] };
+  return payload.data ?? [];
+}
+
+export async function installBuiltinAgent(key: string, model?: string, baseUrl = defaultBaseUrl): Promise<AgentDefinition> {
+  const response = await fetch(`${baseUrl}/agents/builtin/${encodeURIComponent(key)}/install`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ model }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentDefinition };
+  return data.data;
+}
+
 export async function createAgent(payload: AgentInput, baseUrl = defaultBaseUrl): Promise<AgentDefinition> {
   const response = await fetch(`${baseUrl}/agents`, {
     method: 'POST',
@@ -704,7 +747,7 @@ export async function deleteAgent(id: string, baseUrl = defaultBaseUrl): Promise
 export async function runAgent(
   id: string,
   input: string,
-  optionsOrBaseUrl: { imageUrls?: string[] } | string = {},
+  optionsOrBaseUrl: { imageUrls?: string[]; maxSteps?: number; approvedToolIds?: string[] } | string = {},
   maybeBaseUrl = defaultBaseUrl,
 ): Promise<AgentRun> {
   const options = typeof optionsOrBaseUrl === 'string' ? {} : optionsOrBaseUrl;
@@ -712,7 +755,7 @@ export async function runAgent(
   const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ input, imageUrls: options.imageUrls }),
+    body: JSON.stringify({ input, imageUrls: options.imageUrls, maxSteps: options.maxSteps, approvedToolIds: options.approvedToolIds }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -722,7 +765,7 @@ export async function runAgent(
 
 export async function streamAgentRun(
   id: string,
-  payload: { input: string; imageUrls?: string[] },
+  payload: AgentRunInput,
   handlers: {
     onEvent?: (event: AgentRunStreamEvent) => void;
     onDone?: () => void;
@@ -869,8 +912,34 @@ export interface ToolDefinition {
   displayName: string;
   description: string;
   schema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
   implementationType: string;
+  source?: 'builtin' | 'custom';
+  category?: string;
+  runtime?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
+  code?: string;
+  timeoutMs?: number;
+  retries?: number;
   enabled: boolean;
+  permissionLevel?: 'auto' | 'confirm' | 'disabled';
+}
+
+export interface ToolInput {
+  name: string;
+  displayName: string;
+  description?: string;
+  category?: string;
+  runtime?: 'javascript' | 'typescript' | 'python';
+  riskLevel?: 'low' | 'medium' | 'high';
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  code: string;
+  permissions?: Record<string, unknown>;
+  timeout?: number;
+  retries?: number;
+  enabled?: boolean;
 }
 
 export interface ToolInvocationResult {
@@ -1078,6 +1147,51 @@ export async function fetchTools(baseUrl = defaultBaseUrl): Promise<ToolDefiniti
   if (!response.ok) throw new Error(await readError(response));
   const payload = (await response.json()) as { data?: ToolDefinition[] };
   return payload.data ?? [];
+}
+
+export async function createTool(payload: ToolInput, baseUrl = defaultBaseUrl): Promise<ToolDefinition> {
+  const response = await fetch(`${baseUrl}/tools`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: ToolDefinition };
+  return data.data;
+}
+
+export async function updateTool(id: string, payload: Partial<ToolInput>, baseUrl = defaultBaseUrl): Promise<ToolDefinition> {
+  const response = await fetch(`${baseUrl}/tools/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: ToolDefinition };
+  return data.data;
+}
+
+export async function deleteTool(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/tools/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function testTool(id: string, args: Record<string, unknown>, baseUrl = defaultBaseUrl): Promise<ToolInvocationResult> {
+  const response = await fetch(`${baseUrl}/tools/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ args }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: ToolInvocationResult };
+  return data.data;
 }
 
 export async function fetchSkills(baseUrl = defaultBaseUrl): Promise<SkillDefinition[]> {

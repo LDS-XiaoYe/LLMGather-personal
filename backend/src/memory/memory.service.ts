@@ -83,10 +83,14 @@ export class MemoryService {
   async search(userId: string, query: string, agentId?: string, limit = 5): Promise<MemoryItem[]> {
     const memories = await this.list(userId, agentId);
     const terms = this.terms(query);
+    const now = Date.now();
     return memories
       .map((memory) => ({
         ...memory,
-        score: this.score(memory.content, terms) + memory.importance,
+        score: this.score(memory.content, terms)
+          + memory.importance * 1.8
+          + this.typeBoost(memory.memoryType)
+          + this.recencyBoost(memory.updatedAt, now),
       }))
       .filter((memory) => (memory.score ?? 0) > memory.importance || memory.importance >= 4)
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
@@ -131,6 +135,48 @@ export class MemoryService {
     });
   }
 
+  async upsertExtracted(
+    userId: string,
+    agentId: string,
+    item: { content: string; memoryType?: string; importance?: number; namespace?: string; confidence?: number; reason?: string },
+  ): Promise<{ action: 'created' | 'updated'; memory: MemoryItem }> {
+    const content = item.content.trim();
+    const namespace = item.namespace?.trim() || 'agent_profile';
+    const memoryType = this.normalizeMemoryType(item.memoryType);
+    const importance = Math.max(1, Math.min(5, Number(item.importance ?? 3)));
+    const existing = (await this.list(userId, agentId))
+      .filter((memory) => memory.namespace === namespace && memory.memoryType === memoryType)
+      .map((memory) => ({ memory, similarity: this.similarity(memory.content, content) }))
+      .sort((a, b) => b.similarity - a.similarity)[0];
+
+    if (existing && existing.similarity >= 0.42) {
+      const updated = await this.update(userId, existing.memory.id, {
+        content,
+        namespace,
+        memoryType: memoryType as 'fact' | 'preference' | 'procedure' | 'episode',
+        importance: Math.max(existing.memory.importance, importance),
+      });
+      return { action: 'updated', memory: updated };
+    }
+
+    const memory = await this.create(userId, {
+      agentId,
+      namespace,
+      memoryType: memoryType as 'fact' | 'preference' | 'procedure' | 'episode',
+      content,
+      importance,
+    });
+    return { action: 'created', memory };
+  }
+
+  async forgetMatching(userId: string, agentId: string, query: string, limit = 5): Promise<MemoryItem[]> {
+    const matches = await this.search(userId, query, agentId, limit);
+    for (const memory of matches) {
+      await this.remove(userId, memory.id);
+    }
+    return matches;
+  }
+
   private async getOwned(userId: string, id: string): Promise<MemoryItem> {
     const row = await this.databaseService.connection.prepare(
       `SELECT id, user_id as userId, agent_id as agentId, namespace, memory_type as memoryType,
@@ -156,6 +202,35 @@ export class MemoryService {
       score += (lower.split(term.toLowerCase()).length - 1) * Math.min(10, term.length);
     }
     return score;
+  }
+
+  private typeBoost(memoryType: string): number {
+    if (memoryType === 'preference') return 3;
+    if (memoryType === 'procedure') return 2;
+    if (memoryType === 'fact') return 1.5;
+    return 0;
+  }
+
+  private recencyBoost(updatedAt: string, now: number): number {
+    const timestamp = new Date(String(updatedAt).replace(' ', 'T')).getTime();
+    if (!Number.isFinite(timestamp)) return 0;
+    const days = Math.max(0, (now - timestamp) / 86400000);
+    return Math.max(0, 2 - days / 30);
+  }
+
+  private normalizeMemoryType(value?: string): string {
+    return ['fact', 'preference', 'procedure', 'episode'].includes(value || '') ? String(value) : 'fact';
+  }
+
+  private similarity(a: string, b: string): number {
+    const aTerms = new Set(this.terms(a));
+    const bTerms = new Set(this.terms(b));
+    if (aTerms.size === 0 || bTerms.size === 0) return 0;
+    let overlap = 0;
+    for (const term of aTerms) {
+      if (bTerms.has(term)) overlap++;
+    }
+    return overlap / Math.max(aTerms.size, bTerms.size);
   }
 
   private mapMemory(row: MemoryRow): MemoryItem {

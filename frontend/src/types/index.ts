@@ -7,7 +7,18 @@ export interface ChatMessage {
   content: string;
   reasoning?: string;
   model?: string;
-  routerInfo?: { intent: string; intentLabel: string; model: string; reason: string; debug?: { classifierModel?: string; rawOutput?: string; matchedBy?: string; prompt?: string } };
+  routerInfo?: {
+    intent: string;
+    intentLabel: string;
+    model: string;
+    reason: string;
+    targetType?: 'model' | 'builtin_agent' | 'user_agent';
+    agentKey?: string;
+    agentName?: string;
+    runId?: string;
+    traceAvailable?: boolean;
+    debug?: { classifierModel?: string; rawOutput?: string; matchedBy?: string; prompt?: string };
+  };
 }
 
 export type ContentPart =

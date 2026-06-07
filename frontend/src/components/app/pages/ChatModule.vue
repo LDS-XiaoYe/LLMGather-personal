@@ -45,6 +45,8 @@ const clearChat = bind(app, 'clearChat');
 const getModelTags = bind(app, 'getModelTags');
 const chatModels = bind(app, 'chatModels');
 const copyToClipboard = bind(app, 'copyToClipboard');
+const openAgentRunTrace = bind(app, 'openAgentRunTrace');
+const switchPage = bind(app, 'switchPage');
 </script>
 
 <template>
@@ -106,8 +108,17 @@ const copyToClipboard = bind(app, 'copyToClipboard');
                     <div style="display:flex;align-items:center;gap:6px">
                       <el-tag size="small" type="danger">Auto</el-tag>
                       <span style="color:#3b82f6">→</span>
-                      <el-tag size="small" :type="msg.routerInfo.intent === 'coding' ? 'warning' : 'primary'">{{ msg.routerInfo.intentLabel }}</el-tag>
+                      <el-tag size="small" :type="msg.routerInfo.targetType === 'builtin_agent' ? 'success' : (msg.routerInfo.intent === 'coding' ? 'warning' : 'primary')">
+                        {{ msg.routerInfo.targetType === 'builtin_agent' ? 'Agent' : msg.routerInfo.intentLabel }}
+                      </el-tag>
                       <span style="color:#64748b;flex:1">{{ msg.routerInfo.model }}</span>
+                      <el-button
+                        v-if="msg.routerInfo.traceAvailable && msg.routerInfo.runId"
+                        size="small"
+                        text
+                        type="primary"
+                        @click="switchPage('agent'); openAgentRunTrace(msg.routerInfo.runId)"
+                      >Trace</el-button>
                     </div>
                     <!-- Debug panel per-message -->
                     <div v-if="msg.routerInfo.debug && msg.routerInfo.debug.classifierModel" style="margin-top:6px;padding:8px 10px;background:#fefce8;border:1px dashed #f59e0b;border-radius:4px;font-family:monospace;font-size:11px;line-height:1.6;color:#92400e">

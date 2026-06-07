@@ -1,5 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import * as mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
+import * as XLSX from 'xlsx';
 import { DatabaseService } from '../database/database.service';
 import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto } from './dto/knowledge.dto';
 
@@ -159,62 +162,87 @@ export class KnowledgeService {
         break;
         
       case 'pdf':
-        // 简单PDF文本提取（实际项目中应使用pdf-parse等库）
-        content = this.extractTextFromPdf(buffer);
+        content = await this.extractTextFromPdf(buffer);
         break;
         
-      case 'doc':
       case 'docx':
-        // 简单Word文本提取（实际项目中应使用mammoth等库）
-        content = this.extractTextFromWord(buffer);
+        content = await this.extractTextFromWord(buffer);
+        break;
+
+      case 'doc':
+        content = this.extractTextFromLegacyOffice(buffer, 'Word');
         break;
         
       case 'xls':
       case 'xlsx':
-        // 简单Excel文本提取（实际项目中应使用xlsx等库）
         content = this.extractTextFromExcel(buffer);
         break;
         
       default:
-        throw new Error(`不支持的文件格式: ${ext}`);
+        throw new BadRequestException(`不支持的文件格式: ${ext}`);
     }
-    
-    return { content };
+
+    const normalized = this.normalizeExtractedText(content);
+    if (!normalized) {
+      throw new BadRequestException(`未能从 ${filename} 解析出可写入知识库的文本内容`);
+    }
+
+    return { content: normalized };
   }
 
-  private extractTextFromPdf(buffer: Buffer): string {
-    // 简单实现：提取PDF中的文本内容
-    // 实际项目中应使用 pdf-parse 库
-    const text = buffer.toString('utf-8');
-    // 提取PDF中的文本流
-    const textMatches = text.match(/BT[\s\S]*?ET/g) || [];
-    const extractedText = textMatches
-      .map(match => {
-        const tjMatches = match.match(/\(([^)]*)\)\s*Tj/g) || [];
-        return tjMatches.map(tj => tj.replace(/\(|\)\s*Tj/g, '')).join(' ');
-      })
-      .join('\n');
-    
-    return extractedText || 'PDF内容提取需要安装pdf-parse库';
+  private async extractTextFromPdf(buffer: Buffer): Promise<string> {
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text || '';
+    } finally {
+      await parser.destroy();
+    }
   }
 
-  private extractTextFromWord(buffer: Buffer): string {
-    // 简单实现：提取Word中的文本内容
-    // 实际项目中应使用 mammoth 库
-    const text = buffer.toString('utf-8');
-    // 提取XML中的文本内容
-    const textMatches = text.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
-    const extractedText = textMatches
-      .map(match => match.replace(/<w:t[^>]*>|<\/w:t>/g, ''))
-      .join(' ');
-    
-    return extractedText || 'Word内容提取需要安装mammoth库';
+  private async extractTextFromWord(buffer: Buffer): Promise<string> {
+    const result = await mammoth.extractRawText({ buffer });
+    const warnings = result.messages?.map((msg) => msg.message).filter(Boolean) ?? [];
+    return [result.value, warnings.length ? `\n\n[Word解析提示]\n${warnings.join('\n')}` : ''].join('');
   }
 
   private extractTextFromExcel(buffer: Buffer): string {
-    // 简单实现：提取Excel中的文本内容
-    // 实际项目中应使用 xlsx 库
-    return 'Excel内容提取需要安装xlsx库';
+    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, dense: false });
+    const sections: string[] = [];
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
+      const csv = XLSX.utils.sheet_to_csv(sheet, { FS: '\t', RS: '\n', blankrows: false });
+      if (csv.trim()) {
+        sections.push(`## Sheet: ${sheetName}\n${csv.trim()}`);
+      }
+    }
+    return sections.join('\n\n');
+  }
+
+  private extractTextFromLegacyOffice(buffer: Buffer, label: string): string {
+    const decoded = buffer.toString('latin1');
+    const text = decoded
+      .replace(/\0/g, ' ')
+      .replace(/[^\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (!text || text.length < 20) {
+      throw new BadRequestException(`${label} .doc 老二进制格式解析失败，请另存为 .docx 后上传`);
+    }
+    return text;
+  }
+
+  private normalizeExtractedText(text: string): string {
+    return text
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/\t/g, ' | ').replace(/[ \u00a0]{2,}/g, ' ').trim())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .slice(0, 200000);
   }
 
   async search(

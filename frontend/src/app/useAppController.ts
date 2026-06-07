@@ -60,6 +60,7 @@ import {
   fetchAgentMarketplaceTemplates,
   fetchMcpServers,
   generateAgent as apiGenerateAgent,
+  generateAgentImprovementSuggestions as apiGenerateAgentImprovementSuggestions,
   installAgentMarketplaceTemplate as apiInstallAgentMarketplaceTemplate,
   installBuiltinAgent as apiInstallBuiltinAgent,
   getStoredToken,
@@ -117,6 +118,7 @@ import {
   type AdminUser,
   type AgentDefinition,
   type AgentEvaluation,
+  type AgentImprovementSuggestions,
   type AgentRun,
   type AgentRunStats,
   type AgentTeam,
@@ -249,6 +251,16 @@ export function useAppController() {
   const agentGenerating = ref(false);
   const agentPrompt = ref('');
   const agentImageUrlInput = ref('');
+  const agentInvokeMode = ref<'standard' | 'reflective' | 'fast'>('reflective');
+  const agentContextStrategy = ref<'balanced' | 'knowledge_first' | 'memory_first' | 'minimal'>('balanced');
+  const agentInvokeMaxSteps = ref(6);
+  const agentInvokePanelTab = ref<'diagnosis' | 'trace' | 'history' | 'api'>('diagnosis');
+  const agentImageInputOpen = ref(false);
+  const agentLastPrompt = ref('');
+  const agentRunHistoryFilter = ref<'all' | 'succeeded' | 'failed'>('all');
+  const agentRunHistorySort = ref<'created' | 'latency' | 'tokens'>('created');
+  const agentImprovementSuggestions = ref<AgentImprovementSuggestions | null>(null);
+  const agentImprovementLoading = ref(false);
   const agentRuns = ref<AgentRun[]>([]);
   const activeAgentRun = ref<AgentRun | null>(null);
   const activeAgentTraceStepId = ref<number | null>(null);
@@ -1259,6 +1271,7 @@ export function useAppController() {
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
+    agentInvokePanelTab.value = 'diagnosis';
     agentMemories.value = [];
   }
 
@@ -1993,10 +2006,12 @@ export function useAppController() {
     if (approvedToolIds === null) return;
 
     agentRunning.value = true;
+    agentLastPrompt.value = input;
     activeAgentRun.value = null;
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
+    agentInvokePanelTab.value = 'diagnosis';
     status.value = 'Agent 正在执行';
     agentRunAbortController = new AbortController();
     try {
@@ -2004,7 +2019,15 @@ export function useAppController() {
         .split(/\n|,/)
         .map((item) => item.trim())
         .filter(Boolean);
-      await streamAgentRun(agent.id, { input, imageUrls, maxSteps: 6, approvedToolIds }, {
+      await streamAgentRun(agent.id, {
+        input,
+        imageUrls,
+        maxSteps: agentInvokeMaxSteps.value,
+        mode: agentInvokeMode.value,
+        contextStrategy: agentContextStrategy.value,
+        retryPolicy: { maxRetries: 1, retryToolFailure: true, retryPlannerFailure: true },
+        approvedToolIds,
+      }, {
         onEvent: (event) => {
           applyAgentRunStreamEvent(event);
         },
@@ -2028,6 +2051,57 @@ export function useAppController() {
       agentRunning.value = false;
       agentRunAbortController = null;
     }
+  }
+
+  function stopCurrentAgentRun() {
+    if (!agentRunAbortController || !agentRunning.value) return;
+    agentRunAbortController.abort();
+  }
+
+  function clearAgentPrompt() {
+    agentPrompt.value = '';
+    agentImageUrlInput.value = '';
+  }
+
+  function fillAgentPromptExample() {
+    const capabilityHint = [
+      agentForm.value.knowledgeBaseIds.length ? '结合知识库' : '',
+      agentForm.value.toolIds.length ? '必要时调用工具验证' : '',
+      agentForm.value.memoryEnabled ? '参考长期记忆' : '',
+    ].filter(Boolean).join('，');
+    agentPrompt.value = `请${capabilityHint ? capabilityHint + '，' : ''}完成一次真实任务：先给结论，再说明关键依据和下一步建议。`;
+  }
+
+  function rerunLastAgentPrompt() {
+    const last = agentLastPrompt.value || activeAgentRun.value?.input || agentRuns.value[0]?.input || '';
+    if (!last) return;
+    agentPrompt.value = last;
+    void runCurrentAgent();
+  }
+
+  async function copyActiveAgentOutput() {
+    const output = activeAgentRun.value?.output || '';
+    if (!output) return;
+    try {
+      await navigator.clipboard.writeText(output);
+      status.value = '已复制 Agent 输出';
+    } catch {
+      status.value = '复制失败，请手动选择输出内容';
+    }
+  }
+
+  function createTestCaseFromActiveRun() {
+    if (!activeAgentRun.value) return;
+    testCaseForm.value = {
+      name: `运行样例 ${formatAgentDate(activeAgentRun.value.createdAt)}`.slice(0, 120),
+      input: activeAgentRun.value.input,
+      expectedOutput: activeAgentRun.value.output,
+      rubric: '输出应准确回应用户目标，保留关键依据，并说明必要的不确定性。',
+    };
+    showTestCaseCreateDialog.value = true;
+    agentWorkspaceMode.value = 'develop';
+    agentPageTab.value = 'integration';
+    status.value = '已用本次运行填充测试用例草稿';
   }
 
   function applyAgentRunStreamEvent(event: any) {
@@ -2060,9 +2134,11 @@ export function useAppController() {
     }
     if (event.type === 'run_completed') {
       activeAgentRun.value = event.run;
-      activeAgentTraceStepId.value = event.run.steps[event.run.steps.length - 1]?.id ?? null;
-      agentTraceReplayIndex.value = Math.max(0, event.run.steps.length - 1);
+      const failedStep = event.run.steps.find((step) => step.status === 'failed' || step.error);
+      activeAgentTraceStepId.value = failedStep?.id ?? event.run.steps[event.run.steps.length - 1]?.id ?? null;
+      agentTraceReplayIndex.value = failedStep ? Math.max(0, event.run.steps.findIndex((step) => step.id === failedStep.id)) : Math.max(0, event.run.steps.length - 1);
       agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
+      if (event.run.status === 'failed' || failedStep) agentInvokePanelTab.value = 'diagnosis';
       status.value = event.run.status === 'succeeded' ? 'Agent 执行完成' : 'Agent 执行失败';
       return;
     }
@@ -2128,6 +2204,23 @@ export function useAppController() {
       status.value = error instanceof Error ? error.message : '评测失败';
     } finally {
       agentEvaluationSaving.value = false;
+    }
+  }
+
+  async function generateCurrentAgentImprovementSuggestions() {
+    if (!agentForm.value.id || agentImprovementLoading.value) return;
+    agentImprovementLoading.value = true;
+    try {
+      agentImprovementSuggestions.value = await apiGenerateAgentImprovementSuggestions(agentForm.value.id, {
+        recentRunLimit: 8,
+        judgeModel: evaluationForm.value.judgeModel.trim() || agentForm.value.model || undefined,
+      }, backendBaseUrl.value);
+      agentInvokePanelTab.value = 'diagnosis';
+      status.value = '已生成 Agent 优化建议草案';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '生成优化建议失败';
+    } finally {
+      agentImprovementLoading.value = false;
     }
   }
 
@@ -2202,6 +2295,37 @@ export function useAppController() {
       from: nodes[index].id,
       to: node.id,
     }));
+  });
+
+  const agentFailedTraceSteps = computed(() => (activeAgentRun.value?.steps ?? []).filter((step) => step.status === 'failed' || step.error));
+
+  const agentSlowTraceSteps = computed(() => (activeAgentRun.value?.steps ?? [])
+    .filter((step) => step.latencyMs >= 5000)
+    .sort((a, b) => b.latencyMs - a.latencyMs)
+    .slice(0, 6));
+
+  const agentContextSourceSummary = computed(() => {
+    const counts: Record<string, number> = {};
+    for (const step of activeAgentRun.value?.steps ?? []) {
+      const metadata = (() => {
+        try { return JSON.parse(step.metadata || '{}') as Record<string, any>; } catch { return {}; }
+      })();
+      const sources = Array.isArray(metadata.contextSources) ? metadata.contextSources : [];
+      for (const source of sources) {
+        const type = String(source?.type || 'unknown');
+        counts[type] = (counts[type] || 0) + 1;
+      }
+    }
+    return counts;
+  });
+
+  const filteredAgentRuns = computed(() => {
+    const items = agentRuns.value.filter((run) => agentRunHistoryFilter.value === 'all' || run.status === agentRunHistoryFilter.value);
+    return [...items].sort((a, b) => {
+      if (agentRunHistorySort.value === 'latency') return (b.latencyMs || 0) - (a.latencyMs || 0);
+      if (agentRunHistorySort.value === 'tokens') return (b.totalTokens || 0) - (a.totalTokens || 0);
+      return new Date(String(b.createdAt).replace(' ', 'T')).getTime() - new Date(String(a.createdAt).replace(' ', 'T')).getTime();
+    });
   });
 
   function selectAgentTraceStep(stepId: number) {
@@ -7456,6 +7580,16 @@ export function useAppController() {
     agentGenerating,
     agentPrompt,
     agentImageUrlInput,
+    agentInvokeMode,
+    agentContextStrategy,
+    agentInvokeMaxSteps,
+    agentInvokePanelTab,
+    agentImageInputOpen,
+    agentLastPrompt,
+    agentRunHistoryFilter,
+    agentRunHistorySort,
+    agentImprovementSuggestions,
+    agentImprovementLoading,
     agentRuns,
     activeAgentRun,
     activeAgentTraceStepId,
@@ -7467,6 +7601,10 @@ export function useAppController() {
     agentTraceEdges,
     agentTraceStageGroups,
     agentTraceLatencyMax,
+    agentFailedTraceSteps,
+    agentSlowTraceSteps,
+    agentContextSourceSummary,
+    filteredAgentRuns,
     agentWorkspaceMode,
     agentPageTab,
     agentConsoleTab,
@@ -7776,6 +7914,12 @@ export function useAppController() {
     saveAgent,
     removeAgent,
     runCurrentAgent,
+    stopCurrentAgentRun,
+    clearAgentPrompt,
+    fillAgentPromptExample,
+    rerunLastAgentPrompt,
+    copyActiveAgentOutput,
+    createTestCaseFromActiveRun,
     selectAgentRun,
     openAgentRunTrace,
     selectAgentTraceStep,
@@ -7784,6 +7928,7 @@ export function useAppController() {
     agentRunTagType,
     agentEvalTagType,
     evaluateActiveAgentRun,
+    generateCurrentAgentImprovementSuggestions,
     formatAgentDate,
     formatStepMetadata,
     createKnowledgeBaseFromForm,

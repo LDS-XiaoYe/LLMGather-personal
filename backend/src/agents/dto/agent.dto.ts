@@ -180,6 +180,22 @@ export class RunAgentDto {
   maxSteps?: number;
 
   @IsOptional()
+  @IsIn(['standard', 'reflective', 'fast'])
+  mode?: 'standard' | 'reflective' | 'fast';
+
+  @IsOptional()
+  @IsIn(['balanced', 'knowledge_first', 'memory_first', 'minimal'])
+  contextStrategy?: 'balanced' | 'knowledge_first' | 'memory_first' | 'minimal';
+
+  @IsOptional()
+  @IsObject()
+  retryPolicy?: {
+    maxRetries?: number;
+    retryToolFailure?: boolean;
+    retryPlannerFailure?: boolean;
+  };
+
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(50)
   @IsString({ each: true })
@@ -238,6 +254,19 @@ export class CreateAgentVersionDto {
   @IsString()
   @MaxLength(120)
   label?: string;
+}
+
+export class GenerateAgentImprovementSuggestionsDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(20)
+  recentRunLimit?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  judgeModel?: string;
 }
 
 export class CreateAgentTestSuiteDto {

@@ -105,6 +105,18 @@ const copyToClipboard = bind(app, 'copyToClipboard');
           </el-card>
 
           <el-card shadow="never" class="api-section">
+            <template #header><strong>接口索引</strong></template>
+            <div class="api-index-grid">
+              <a href="#api-chat">模型与聊天</a>
+              <a href="#api-agent">Agent</a>
+              <a href="#api-capabilities">能力资源</a>
+              <a href="#api-orchestration">编排协作</a>
+              <a href="#api-account">账户与计费</a>
+              <a href="#api-admin">管理接口</a>
+            </div>
+          </el-card>
+
+          <el-card id="api-chat" shadow="never" class="api-section">
             <template #header>
               <div style="display:flex;align-items:center;gap:8px"><strong>OpenAI 兼容接口</strong><el-tag size="small" type="success">POST</el-tag></div>
             </template>
@@ -133,13 +145,17 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)</pre>
           </el-card>
 
-          <el-card shadow="never" class="api-section">
+          <el-card id="api-agent" shadow="never" class="api-section">
             <template #header>
               <div style="display:flex;align-items:center;gap:8px"><strong>Agent API</strong><el-tag size="small" type="primary">开发 / 调用</el-tag></div>
             </template>
             <div class="api-sub-title">开发管理接口使用登录 JWT；调用接口支持 API Key；公开调用不需要认证，但 Agent 必须开启公开发布和 API 接入。</div>
+            <div class="api-sub-title">Agent 运行参数支持 <code>mode</code>、<code>contextStrategy</code>、<code>maxSteps</code>、<code>retryPolicy</code>、<code>approvedToolIds</code>。</div>
             <div class="api-endpoint">GET /v1/agents</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/agents \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">GET /v1/agents/:id</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id \
   -H "Authorization: Bearer your-jwt-token"</pre>
             <div class="api-endpoint">POST /v1/agents</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/agents \
@@ -157,6 +173,29 @@ print(resp.choices[0].message.content)</pre>
     "knowledgeBaseIds": [],
     "skillIds": []
   }'</pre>
+            <div class="api-endpoint">PATCH /v1/agents/:id</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "name": "客服助手 Pro",
+    "systemPrompt": "你是专业客服助手。先确认问题，再给出可执行答案。",
+    "temperature": 0.3,
+    "maxTokens": 2048,
+    "status": "active"
+  }'</pre>
+            <div class="api-endpoint">DELETE /v1/agents/:id</div>
+            <pre class="api-code-block">curl -X DELETE {{ apiBaseUrl }}/agents/agent-id \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">POST /v1/agents/generate</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/generate \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "requirement": "创建一个能结合知识库回答售后问题的客服 Agent",
+    "model": "glm-5.1",
+    "persist": true
+  }'</pre>
             <div class="api-endpoint">PATCH /v1/agents/:id/publication</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/publication \
   -H "Content-Type: application/json" \
@@ -172,7 +211,29 @@ print(resp.choices[0].message.content)</pre>
   -H "Authorization: Bearer sk-your-api-key" \
   -d '{
     "input": "请根据知识库回答：如何申请退款？",
-    "messages": []
+    "messages": [],
+    "mode": "reflective",
+    "contextStrategy": "balanced",
+    "maxSteps": 6,
+    "retryPolicy": {"maxRetries": 1, "retryToolFailure": true},
+    "approvedToolIds": []
+  }'</pre>
+            <div class="api-endpoint">POST /v1/agents/:id/runs</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/runs \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "input": "运行一次非流式 Agent 任务",
+    "mode": "standard",
+    "maxSteps": 4
+  }'</pre>
+            <div class="api-endpoint">POST /v1/agents/:id/runs/stream</div>
+            <pre class="api-code-block">curl -N {{ apiBaseUrl }}/agents/agent-id/runs/stream \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "input": "流式运行，并返回 Trace SSE 事件",
+    "mode": "reflective"
   }'</pre>
             <div class="api-endpoint">POST /v1/public/agents/:slug/runs</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/public/agents/support-agent/runs \
@@ -180,6 +241,80 @@ print(resp.choices[0].message.content)</pre>
   -d '{
     "input": "公开调用这个 Agent"
   }'</pre>
+            <div class="api-endpoint">GET /v1/agents/:id/runs</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/runs \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">GET /v1/agents/runs/:runId</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/runs/run-id \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">POST /v1/agents/runs/:runId/evaluations</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/runs/run-id/evaluations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "expectedOutput": "应该说明退款入口、条件和处理时间",
+    "rubric": "准确、可执行、语气友好",
+    "mode": "hybrid"
+  }'</pre>
+            <div class="api-endpoint">GET /v1/agents/:id/evaluations · GET /v1/agents/:id/stats</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/evaluations \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/agents/agent-id/stats \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">POST /v1/agents/:id/improvement-suggestions</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/improvement-suggestions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "recentRunLimit": 8,
+    "judgeModel": "glm-5.1"
+  }'</pre>
+            <div class="api-endpoint">版本与测试集</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/agent-id/versions \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/agents/agent-id/versions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"label":"上线前版本"}'
+
+curl -X POST {{ apiBaseUrl }}/agents/agent-id/versions/version-id/restore \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/agents/agent-id/test-suites \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/agents/agent-id/test-suites \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"name":"客服回归测试","description":"退款、发票、物流"}'
+
+curl {{ apiBaseUrl }}/agents/test-suites/suite-id/cases \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"name":"退款问题","input":"如何退款？","expectedOutput":"退款条件和入口","rubric":"准确完整"}'
+
+curl {{ apiBaseUrl }}/agents/test-suites/suite-id/runs \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"evaluationMode":"hybrid","judgeModel":"glm-5.1"}'</pre>
+            <div class="api-endpoint">模板、内置 Agent 与市场</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agents/builtin \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl -X POST {{ apiBaseUrl }}/agents/builtin/research/install \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"model":"glm-5.1"}'
+
+curl {{ apiBaseUrl }}/agents/marketplace/templates \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/agents/marketplace/install \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"templateId":"template-id","model":"glm-5.1"}'</pre>
           </el-card>
 
           <el-card shadow="never" class="api-section">
@@ -196,6 +331,235 @@ print(resp.choices[0].message.content)</pre>
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "你好"}]
   }'</pre>
+          </el-card>
+
+          <el-card id="api-capabilities" shadow="never" class="api-section">
+            <template #header><strong>能力资源 API</strong></template>
+            <div class="api-sub-title">工具、知识库、记忆、Skill、MCP 都使用登录 JWT。Agent 运行时会根据绑定关系读取这些资源。</div>
+            <div class="api-endpoint">Tools</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/tools \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/tools \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "name": "json_formatter",
+    "displayName": "JSON 格式化",
+    "runtime": "javascript",
+    "riskLevel": "low",
+    "inputSchema": {"type":"object"},
+    "code": "function run(input){ return { result: JSON.stringify(input, null, 2) } }"
+  }'
+
+curl {{ apiBaseUrl }}/tools/tool-id/test \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"args":{"hello":"world"}}'
+
+curl {{ apiBaseUrl }}/tools/tool-id/invoke \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"args":{"hello":"world"}}'</pre>
+            <div class="api-endpoint">Knowledge</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/knowledge/bases \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/knowledge/bases \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"name":"产品手册","description":"客服知识"}'
+
+curl {{ apiBaseUrl }}/knowledge/bases/kb-id/documents \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"title":"退款政策","content":"退款条件、入口、处理时间..."}'
+
+curl {{ apiBaseUrl }}/knowledge/bases/kb-id/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"query":"如何退款","limit":5}'
+
+curl {{ apiBaseUrl }}/knowledge/parse-file \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"filename":"manual.pdf","fileBase64":"data:application/pdf;base64,..."}'</pre>
+            <div class="api-endpoint">Memory</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/memory \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/memory \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"agentId":"agent-id","memoryType":"preference","content":"用户偏好简洁回答","importance":4}'
+
+curl {{ apiBaseUrl }}/memory/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"agentId":"agent-id","query":"回答偏好","limit":5}'</pre>
+            <div class="api-endpoint">Skills</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/skills \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/skills \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"name":"客服校验","description":"检查回答是否完整","content":"检查答案是否包含入口、条件、时间。"}'
+
+curl {{ apiBaseUrl }}/skills/skill-id/test \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"input":"请检查这段客服回答"}'
+
+curl {{ apiBaseUrl }}/skills/skill-id/bind-agent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"agentId":"agent-id"}'</pre>
+            <div class="api-endpoint">MCP Servers</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/mcp/servers \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/mcp/servers \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"name":"Notion","serverType":"notion","config":{"token":"secret_xxx"},"enabled":true}'
+
+curl {{ apiBaseUrl }}/mcp/servers/server-id/test \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"query":"test"}'</pre>
+          </el-card>
+
+          <el-card id="api-orchestration" shadow="never" class="api-section">
+            <template #header><strong>编排与协作 API</strong></template>
+            <div class="api-endpoint">Agent Teams</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/agent-teams \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/agent-teams \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "name": "客服审核 Team",
+    "strategy": "review",
+    "members": [
+      {"agentId":"agent-a","role":"回答"},
+      {"agentId":"agent-b","role":"审核"}
+    ]
+  }'
+
+curl {{ apiBaseUrl }}/agent-teams/team-id/runs \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"input":"请处理这个客户问题"}'</pre>
+            <div class="api-endpoint">Workflows</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/workflows \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/workflows \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "name": "客服处理流程",
+    "nodes": [
+      {"id":"n1","type":"prompt","config":{"prompt":"整理用户问题"}},
+      {"id":"n2","type":"agent","config":{"agentId":"agent-id","input":"{{input}}"}}
+    ]
+  }'
+
+curl {{ apiBaseUrl }}/workflows/workflow-id/runs \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"input":"客户说想退款"}'</pre>
+            <div class="api-endpoint">协同推理</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/collab/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -d '{
+    "mode": "compare",
+    "models": ["glm-5.1", "deepseek-v4-pro"],
+    "messages": [{"role":"user","content":"比较两个方案"}]
+  }'</pre>
+          </el-card>
+
+          <el-card id="api-account" shadow="never" class="api-section">
+            <template #header><strong>账户、Key 与计费 API</strong></template>
+            <div class="api-endpoint">Auth</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/auth/send-verification-code \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com"}'
+
+curl {{ apiBaseUrl }}/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"demo","password":"Passw0rd!","email":"user@example.com","verificationCode":"123456"}'
+
+curl {{ apiBaseUrl }}/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"demo","password":"Passw0rd!"}'
+
+curl {{ apiBaseUrl }}/auth/me \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">API Keys</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/api-keys \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/api-keys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"name":"Production Key"}'
+
+curl -X DELETE {{ apiBaseUrl }}/api-keys/key-id \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">Billing</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/billing/rules \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/billing/ledger \
+  -H "Authorization: Bearer your-jwt-token"
+
+curl {{ apiBaseUrl }}/billing/usage/daily \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+            <div class="api-endpoint">Recharge</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/recharge/orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{"amount": 50}'
+
+curl {{ apiBaseUrl }}/recharge/orders/order-id/check \
+  -X POST \
+  -H "Authorization: Bearer your-jwt-token"</pre>
+          </el-card>
+
+          <el-card id="api-admin" shadow="never" class="api-section">
+            <template #header><strong>管理 API</strong></template>
+            <div class="api-sub-title">以下接口需要管理员 JWT。</div>
+            <div class="api-endpoint">系统统计与用户</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/admin/check \
+  -H "Authorization: Bearer admin-jwt-token"
+
+curl {{ apiBaseUrl }}/admin/stats \
+  -H "Authorization: Bearer admin-jwt-token"
+
+curl "{{ apiBaseUrl }}/admin/users?page=1&pageSize=20&search=demo" \
+  -H "Authorization: Bearer admin-jwt-token"
+
+curl {{ apiBaseUrl }}/admin/users/user-id \
+  -X PATCH \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer admin-jwt-token" \
+  -d '{"credits":100,"role":"user"}'</pre>
+            <div class="api-endpoint">模型、供应商、设置</div>
+            <pre class="api-code-block">curl {{ apiBaseUrl }}/admin/provider-configs \
+  -H "Authorization: Bearer admin-jwt-token"
+
+curl {{ apiBaseUrl }}/admin/provider-keys \
+  -H "Authorization: Bearer admin-jwt-token"
+
+curl {{ apiBaseUrl }}/admin/settings \
+  -H "Authorization: Bearer admin-jwt-token"
+
+curl {{ apiBaseUrl }}/admin/model-tiers \
+  -H "Authorization: Bearer admin-jwt-token"</pre>
           </el-card>
 
           <el-card shadow="never" class="api-section">

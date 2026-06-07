@@ -570,6 +570,13 @@ export interface AgentRunInput {
   input: string;
   imageUrls?: string[];
   maxSteps?: number;
+  mode?: 'standard' | 'reflective' | 'fast';
+  contextStrategy?: 'balanced' | 'knowledge_first' | 'memory_first' | 'minimal';
+  retryPolicy?: {
+    maxRetries?: number;
+    retryToolFailure?: boolean;
+    retryPlannerFailure?: boolean;
+  };
   approvedToolIds?: string[];
 }
 
@@ -628,6 +635,18 @@ export interface AgentRunStats {
   averageTokens: number;
   averageScore: number;
   evaluatedRuns: number;
+}
+
+export interface AgentImprovementSuggestions {
+  agentId: string;
+  generatedAt: string;
+  summary: string;
+  promptSuggestions: string[];
+  capabilitySuggestions: string[];
+  testSuggestions: string[];
+  riskNotes: string[];
+  usage?: Record<string, unknown>;
+  fallback?: boolean;
 }
 
 export type AgentRunStreamEvent =
@@ -747,7 +766,7 @@ export async function deleteAgent(id: string, baseUrl = defaultBaseUrl): Promise
 export async function runAgent(
   id: string,
   input: string,
-  optionsOrBaseUrl: { imageUrls?: string[]; maxSteps?: number; approvedToolIds?: string[] } | string = {},
+  optionsOrBaseUrl: Omit<AgentRunInput, 'input'> | string = {},
   maybeBaseUrl = defaultBaseUrl,
 ): Promise<AgentRun> {
   const options = typeof optionsOrBaseUrl === 'string' ? {} : optionsOrBaseUrl;
@@ -755,7 +774,7 @@ export async function runAgent(
   const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/runs`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ input, imageUrls: options.imageUrls, maxSteps: options.maxSteps, approvedToolIds: options.approvedToolIds }),
+    body: JSON.stringify({ input, ...options }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -900,6 +919,22 @@ export async function fetchAgentStats(id: string, baseUrl = defaultBaseUrl): Pro
   });
   if (!response.ok) throw new Error(await readError(response));
   const data = (await response.json()) as { data: AgentRunStats };
+  return data.data;
+}
+
+export async function generateAgentImprovementSuggestions(
+  id: string,
+  payload: { recentRunLimit?: number; judgeModel?: string } = {},
+  baseUrl = defaultBaseUrl,
+): Promise<AgentImprovementSuggestions> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/improvement-suggestions`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentImprovementSuggestions };
   return data.data;
 }
 

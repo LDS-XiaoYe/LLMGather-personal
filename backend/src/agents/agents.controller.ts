@@ -11,6 +11,7 @@ import {
   CreateAgentTestSuiteDto,
   CreateAgentVersionDto,
   EvaluateAgentRunDto,
+  GenerateAgentImprovementSuggestionsDto,
   GenerateAgentDto,
   InstallBuiltinAgentDto,
   InstallAgentTemplateDto,
@@ -189,6 +190,15 @@ export class AgentsController {
     @Param('id') id: string,
   ) {
     return { data: await this.agentsService.getStats(user.id, id) };
+  }
+
+  @Post(':id/improvement-suggestions')
+  async improvementSuggestions(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: GenerateAgentImprovementSuggestionsDto = {},
+  ) {
+    return { data: await this.agentsService.generateImprovementSuggestions(user.id, id, payload) };
   }
 
   @Get(':id/versions')

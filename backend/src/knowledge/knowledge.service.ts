@@ -1,8 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import * as mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
-import * as XLSX from 'xlsx';
 import { DatabaseService } from '../database/database.service';
 import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto } from './dto/knowledge.dto';
 
@@ -175,7 +172,7 @@ export class KnowledgeService {
         
       case 'xls':
       case 'xlsx':
-        content = this.extractTextFromExcel(buffer);
+        content = await this.extractTextFromExcel(buffer);
         break;
         
       default:
@@ -191,6 +188,7 @@ export class KnowledgeService {
   }
 
   private async extractTextFromPdf(buffer: Buffer): Promise<string> {
+    const { PDFParse } = await this.loadOptionalModule<{ PDFParse: new (options: { data: Buffer }) => { getText: () => Promise<{ text?: string }>; destroy: () => Promise<void> } }>('pdf-parse', 'PDF');
     const parser = new PDFParse({ data: buffer });
     try {
       const result = await parser.getText();
@@ -201,12 +199,17 @@ export class KnowledgeService {
   }
 
   private async extractTextFromWord(buffer: Buffer): Promise<string> {
+    const mammoth = await this.loadOptionalModule<{ extractRawText: (input: { buffer: Buffer }) => Promise<{ value: string; messages?: Array<{ message?: string }> }> }>('mammoth', 'Word');
     const result = await mammoth.extractRawText({ buffer });
     const warnings = result.messages?.map((msg) => msg.message).filter(Boolean) ?? [];
     return [result.value, warnings.length ? `\n\n[Word解析提示]\n${warnings.join('\n')}` : ''].join('');
   }
 
-  private extractTextFromExcel(buffer: Buffer): string {
+  private async extractTextFromExcel(buffer: Buffer): Promise<string> {
+    const XLSX = await this.loadOptionalModule<{
+      read: (data: Buffer, options: Record<string, unknown>) => { SheetNames: string[]; Sheets: Record<string, unknown> };
+      utils: { sheet_to_csv: (sheet: unknown, options: Record<string, unknown>) => string };
+    }>('xlsx', 'Excel');
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, dense: false });
     const sections: string[] = [];
     for (const sheetName of workbook.SheetNames) {
@@ -218,6 +221,17 @@ export class KnowledgeService {
       }
     }
     return sections.join('\n\n');
+  }
+
+  private async loadOptionalModule<T>(moduleName: string, label: string): Promise<T> {
+    try {
+      return await import(moduleName) as T;
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'MODULE_NOT_FOUND') {
+        throw new BadRequestException(`${label} 文件解析依赖缺失：请在后端镜像中安装 ${moduleName}`);
+      }
+      throw error;
+    }
   }
 
   private extractTextFromLegacyOffice(buffer: Buffer, label: string): string {

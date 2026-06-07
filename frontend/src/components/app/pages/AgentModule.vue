@@ -31,6 +31,16 @@ const agentRunning = bind(app, 'agentRunning');
 const agentGenerating = bind(app, 'agentGenerating');
 const agentPrompt = bind(app, 'agentPrompt');
 const agentImageUrlInput = bind(app, 'agentImageUrlInput');
+const agentInvokeMode = bind(app, 'agentInvokeMode');
+const agentContextStrategy = bind(app, 'agentContextStrategy');
+const agentInvokeMaxSteps = bind(app, 'agentInvokeMaxSteps');
+const agentInvokePanelTab = bind(app, 'agentInvokePanelTab');
+const agentImageInputOpen = bind(app, 'agentImageInputOpen');
+const agentLastPrompt = bind(app, 'agentLastPrompt');
+const agentRunHistoryFilter = bind(app, 'agentRunHistoryFilter');
+const agentRunHistorySort = bind(app, 'agentRunHistorySort');
+const agentImprovementSuggestions = bind(app, 'agentImprovementSuggestions');
+const agentImprovementLoading = bind(app, 'agentImprovementLoading');
 const agentRuns = bind(app, 'agentRuns');
 const activeAgentRun = bind(app, 'activeAgentRun');
 const activeAgentTraceStep = bind(app, 'activeAgentTraceStep');
@@ -41,6 +51,10 @@ const agentTraceNodes = bind(app, 'agentTraceNodes');
 const agentTraceEdges = bind(app, 'agentTraceEdges');
 const agentTraceStageGroups = bind(app, 'agentTraceStageGroups');
 const agentTraceLatencyMax = bind(app, 'agentTraceLatencyMax');
+const agentFailedTraceSteps = bind(app, 'agentFailedTraceSteps');
+const agentSlowTraceSteps = bind(app, 'agentSlowTraceSteps');
+const agentContextSourceSummary = bind(app, 'agentContextSourceSummary');
+const filteredAgentRuns = bind(app, 'filteredAgentRuns');
 const agentWorkspaceMode = bind(app, 'agentWorkspaceMode');
 const agentPageTab = bind(app, 'agentPageTab');
 const dagNodeCategories = bind(app, 'dagNodeCategories');
@@ -179,6 +193,12 @@ const installBuiltinAgentFromSpec = bind(app, 'installBuiltinAgentFromSpec');
 const publishCurrentAgentToMarketplace = bind(app, 'publishCurrentAgentToMarketplace');
 const saveAgent = bind(app, 'saveAgent');
 const runCurrentAgent = bind(app, 'runCurrentAgent');
+const stopCurrentAgentRun = bind(app, 'stopCurrentAgentRun');
+const clearAgentPrompt = bind(app, 'clearAgentPrompt');
+const fillAgentPromptExample = bind(app, 'fillAgentPromptExample');
+const rerunLastAgentPrompt = bind(app, 'rerunLastAgentPrompt');
+const copyActiveAgentOutput = bind(app, 'copyActiveAgentOutput');
+const createTestCaseFromActiveRun = bind(app, 'createTestCaseFromActiveRun');
 const selectAgentRun = bind(app, 'selectAgentRun');
 const openAgentRunTrace = bind(app, 'openAgentRunTrace');
 const selectAgentTraceStep = bind(app, 'selectAgentTraceStep');
@@ -187,6 +207,7 @@ const toggleAgentTraceReplay = bind(app, 'toggleAgentTraceReplay');
 const agentRunTagType = bind(app, 'agentRunTagType');
 const agentEvalTagType = bind(app, 'agentEvalTagType');
 const evaluateActiveAgentRun = bind(app, 'evaluateActiveAgentRun');
+const generateCurrentAgentImprovementSuggestions = bind(app, 'generateCurrentAgentImprovementSuggestions');
 const formatAgentDate = bind(app, 'formatAgentDate');
 const formatStepMetadata = bind(app, 'formatStepMetadata');
 const createAgentMemory = bind(app, 'createAgentMemory');
@@ -289,15 +310,6 @@ const chatModels = bind(app, 'chatModels');
               </div>
               <div class="agent-workspace-actions">
                 <el-button size="small" type="primary" plain :disabled="!agentForm.id" @click="exportAgentAsJson()">导出 JSON Bundle</el-button>
-                <el-dropdown @command="(cmd: string) => cmd === 'md' ? exportAgentAsMarkdown() : exportAgentAsJson()">
-                  <el-button size="small" :disabled="!agentForm.id">更多导出</el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="json">导出 JSON Bundle</el-dropdown-item>
-                      <el-dropdown-item command="md">导出说明文档</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
               </div>
             </div>
 
@@ -2084,210 +2096,347 @@ const chatModels = bind(app, 'chatModels');
                   </div>
                 </template>
 
-                <div class="agent-integration-grid">
-                  <div class="agent-adv-section">
-                    <div class="agent-section-title">即时调用</div>
-                    <div class="agent-overview-section">
-                      <div class="agent-section-title">运行测试</div>
-                      <div class="agent-run-box">
-                        <el-input
-                          v-model="agentPrompt"
-                          type="textarea"
-                          :rows="4"
-                          resize="vertical"
-                          placeholder="给这个 Agent 一个明确任务，例如：根据我们的产品手册，生成一份客服答复。"
-                          :disabled="agentRunning"
-                          @keydown.enter.exact.prevent="runCurrentAgent()"
-                          @compositionstart="isComposing = true"
-                          @compositionend="isComposing = false"
-                        />
-                        <el-input
-                          v-model="agentImageUrlInput"
-                          type="textarea"
-                          :rows="2"
-                          resize="vertical"
-                          placeholder="可选：图片 URL，一行一个；使用视觉模型时会作为多模态输入"
-                        />
-                        <div class="agent-run-actions">
-                          <el-text type="info" size="small">
-                            {{ agentForm.id ? `Agent ID: ${agentForm.id}` : '首次运行前会先保存 Agent' }}
-                          </el-text>
-                          <el-button
-                            type="primary"
-                            :icon="Promotion"
-                            :loading="agentRunning"
-                            :disabled="!agentPrompt.trim() || !agentForm.model"
-                            @click="runCurrentAgent()"
-                          >
-                            运行 Agent
-                          </el-button>
+                <div class="agent-invoke-console">
+                  <aside class="agent-invoke-sidebar">
+                    <div class="agent-invoke-card agent-profile-card">
+                      <div class="agent-profile-top">
+                        <el-avatar :size="40" :style="{ backgroundColor: '#2563eb' }">
+                          {{ agentForm.name ? agentForm.name.charAt(0).toUpperCase() : 'A' }}
+                        </el-avatar>
+                        <div>
+                          <strong>{{ agentForm.name || '未命名 Agent' }}</strong>
+                          <span>{{ agentForm.model || '未选择模型' }}</span>
                         </div>
                       </div>
+                      <p>{{ agentForm.description || '暂无描述' }}</p>
+                      <div class="agent-capability-strip">
+                        <el-tag size="small" type="info">{{ agentForm.toolIds.length }} Tools</el-tag>
+                        <el-tag size="small" type="info">{{ agentForm.knowledgeBaseIds.length }} KB</el-tag>
+                        <el-tag size="small" type="info">{{ agentForm.skillIds.length }} Skills</el-tag>
+                        <el-tag size="small" :type="agentForm.memoryEnabled ? 'success' : 'info'">Memory</el-tag>
+                      </div>
+                    </div>
 
-                      <div v-if="activeAgentRun" class="agent-result">
-                        <div class="agent-run-meta">
-                          <el-tag :type="agentRunTagType(activeAgentRun.status)">{{ activeAgentRun.status }}</el-tag>
-                          <el-tag type="info">{{ activeAgentRun.model }}</el-tag>
-                          <el-tag type="info">{{ activeAgentRun.totalTokens }} tokens</el-tag>
-                          <el-tag type="info">{{ activeAgentRun.latencyMs }} ms</el-tag>
-                          <span>{{ formatAgentDate(activeAgentRun.createdAt) }}</span>
+                    <div class="agent-invoke-card">
+                      <div class="agent-section-title">运行参数</div>
+                      <label class="agent-setting-field">
+                        <span>运行模式</span>
+                        <el-segmented
+                          v-model="agentInvokeMode"
+                          :options="[
+                            { label: '标准', value: 'standard' },
+                            { label: '反思', value: 'reflective' },
+                            { label: '快速', value: 'fast' },
+                          ]"
+                        />
+                      </label>
+                      <label class="agent-setting-field">
+                        <span>上下文策略</span>
+                        <el-select v-model="agentContextStrategy" size="small">
+                          <el-option label="均衡" value="balanced" />
+                          <el-option label="知识优先" value="knowledge_first" />
+                          <el-option label="记忆优先" value="memory_first" />
+                          <el-option label="最小上下文" value="minimal" />
+                        </el-select>
+                      </label>
+                      <label class="agent-setting-field">
+                        <span>最大步骤：{{ agentInvokeMaxSteps }}</span>
+                        <el-slider v-model="agentInvokeMaxSteps" :min="1" :max="10" :step="1" :show-tooltip="false" />
+                      </label>
+                    </div>
+                  </aside>
+
+                  <main class="agent-invoke-main">
+                    <section class="agent-compose-panel">
+                      <div class="agent-compose-toolbar">
+                        <div>
+                          <div class="agent-section-title">即时调用</div>
+                          <span>{{ agentForm.id ? `Agent ID: ${agentForm.id}` : '首次运行前会先保存 Agent' }}</span>
+                        </div>
+                        <div class="agent-compose-actions">
+                          <el-button size="small" text @click="fillAgentPromptExample()">示例</el-button>
+                          <el-button size="small" text :disabled="!agentPrompt && !agentImageUrlInput" @click="clearAgentPrompt()">清空</el-button>
+                          <el-button size="small" text :disabled="!agentLastPrompt && !activeAgentRun" @click="rerunLastAgentPrompt()">重跑</el-button>
+                          <el-button v-if="agentRunning" size="small" type="danger" plain @click="stopCurrentAgentRun()">停止</el-button>
+                        </div>
+                      </div>
+                      <el-input
+                        v-model="agentPrompt"
+                        class="agent-prompt-input"
+                        type="textarea"
+                        :rows="6"
+                        resize="vertical"
+                        placeholder="给这个 Agent 一个明确任务，例如：根据我们的产品手册，生成一份客服答复。"
+                        :disabled="agentRunning"
+                        @keydown.enter.exact.prevent="runCurrentAgent()"
+                        @compositionstart="isComposing = true"
+                        @compositionend="isComposing = false"
+                      />
+                      <div class="agent-multimodal-toggle">
+                        <el-button size="small" text @click="agentImageInputOpen = !agentImageInputOpen">
+                          {{ agentImageInputOpen ? '收起多模态输入' : '添加图片 URL' }}
+                        </el-button>
+                        <span v-if="agentImageUrlInput.trim()">已填写图片输入</span>
+                      </div>
+                      <el-input
+                        v-if="agentImageInputOpen"
+                        v-model="agentImageUrlInput"
+                        type="textarea"
+                        :rows="2"
+                        resize="vertical"
+                        placeholder="可选：图片 URL，一行一个；使用视觉模型时会作为多模态输入"
+                      />
+                      <div class="agent-run-actions">
+                        <div class="agent-run-config-summary">
+                          <el-tag size="small" type="info">{{ agentInvokeMode }}</el-tag>
+                          <el-tag size="small" type="info">{{ agentContextStrategy }}</el-tag>
+                          <el-tag size="small" type="info">{{ agentInvokeMaxSteps }} steps</el-tag>
+                        </div>
+                        <el-button
+                          type="primary"
+                          :icon="Promotion"
+                          :loading="agentRunning"
+                          :disabled="!agentPrompt.trim() || !agentForm.model"
+                          @click="runCurrentAgent()"
+                        >
+                          运行 Agent
+                        </el-button>
+                      </div>
+                    </section>
+
+                    <section class="agent-output-panel">
+                      <div class="agent-output-head">
+                        <div>
+                          <div class="agent-section-title">输出</div>
+                          <div v-if="activeAgentRun" class="agent-run-meta">
+                            <el-tag :type="agentRunTagType(activeAgentRun.status)">{{ activeAgentRun.status }}</el-tag>
+                            <el-tag type="info">{{ activeAgentRun.model }}</el-tag>
+                            <el-tag type="info">{{ activeAgentRun.totalTokens }} tokens</el-tag>
+                            <el-tag type="info">{{ activeAgentRun.latencyMs }} ms</el-tag>
+                            <span>{{ formatAgentDate(activeAgentRun.createdAt) }}</span>
+                          </div>
+                        </div>
+                        <div class="agent-output-actions">
+                          <el-button size="small" text :disabled="!activeAgentRun?.output" @click="copyActiveAgentOutput()">复制输出</el-button>
+                          <el-button size="small" text :disabled="!activeAgentRun" @click="showEvaluationDialog = true">评测</el-button>
+                          <el-button size="small" text :disabled="!activeAgentRun?.output" @click="createTestCaseFromActiveRun()">创建用例</el-button>
+                        </div>
+                      </div>
+                      <el-alert
+                        v-if="activeAgentRun?.error"
+                        type="error"
+                        :closable="false"
+                        show-icon
+                        :title="activeAgentRun.error"
+                      />
+                      <div v-if="activeAgentRun?.output" class="agent-output-render markdown-content" v-html="renderMarkdown(activeAgentRun.output)"></div>
+                      <div v-else class="agent-output-empty">
+                        <el-empty description="运行 Agent 后，这里会显示流式输出。" :image-size="96" />
+                      </div>
+                    </section>
+                  </main>
+
+                  <aside class="agent-invoke-inspector">
+                    <el-tabs v-model="agentInvokePanelTab" stretch>
+                      <el-tab-pane label="诊断" name="diagnosis">
+                        <div class="agent-diagnosis-grid">
+                          <div class="agent-diagnosis-item">
+                            <strong>{{ activeAgentRun?.steps.length || 0 }}</strong>
+                            <span>steps</span>
+                          </div>
+                          <div class="agent-diagnosis-item">
+                            <strong>{{ activeAgentRun?.totalTokens || 0 }}</strong>
+                            <span>tokens</span>
+                          </div>
+                          <div class="agent-diagnosis-item">
+                            <strong>{{ activeAgentRun?.latencyMs || 0 }}</strong>
+                            <span>ms</span>
+                          </div>
+                        </div>
+                        <div class="agent-diagnosis-actions">
+                          <el-button
+                            size="small"
+                            type="primary"
+                            plain
+                            :loading="agentImprovementLoading"
+                            :disabled="!agentForm.id"
+                            @click="generateCurrentAgentImprovementSuggestions()"
+                          >
+                            生成优化建议
+                          </el-button>
                         </div>
                         <el-alert
-                          v-if="activeAgentRun.error"
+                          v-if="activeAgentRun?.error"
                           type="error"
                           :closable="false"
                           show-icon
                           :title="activeAgentRun.error"
-                          style="margin-bottom:12px"
                         />
-                        <div class="agent-observe-panel agent-observe-console">
-                          <div class="agent-observe-topbar">
-                            <div>
-                              <div class="agent-section-title">Trace Observability</div>
-                              <span>{{ activeAgentRun.steps.length }} steps · {{ formatAgentDate(activeAgentRun.createdAt) }}</span>
-                            </div>
-                            <div class="agent-observe-kpis">
-                              <div><strong>{{ activeAgentRun.latencyMs || 0 }}</strong><span>ms</span></div>
-                              <div><strong>{{ activeAgentRun.totalTokens || 0 }}</strong><span>tokens</span></div>
-                              <div><strong>{{ activeAgentRun.model }}</strong><span>model</span></div>
-                            </div>
-                          </div>
-
-                          <div class="agent-trace-controlbar">
-                            <el-button size="small" type="primary" plain :disabled="!activeAgentRun.steps.length" @click="toggleAgentTraceReplay()">
-                              {{ agentTraceReplayPlaying ? '暂停' : '播放' }}
-                            </el-button>
-                            <el-slider
-                              class="agent-trace-slider"
-                              :model-value="agentTraceReplayIndex"
-                              :min="0"
-                              :max="agentTraceReplayMax"
-                              :step="1"
-                              :show-tooltip="false"
-                              @update:model-value="setAgentTraceReplayIndex"
-                            />
-                            <span>{{ agentTraceReplayIndex + 1 }} / {{ activeAgentRun.steps.length || 1 }}</span>
-                          </div>
-
-                          <div class="agent-observe-grid">
-                            <aside class="agent-observe-history">
-                              <div class="agent-section-title">运行历史</div>
-                              <el-scrollbar class="agent-history-list">
-                                <button
-                                  v-for="run in agentRuns"
-                                  :key="run.id"
-                                  type="button"
-                                  class="agent-history-item"
-                                  :class="[run.status, { active: activeAgentRun?.id === run.id }]"
-                                  @click="selectAgentRun(run)"
-                                >
-                                  <span>{{ run.input || '空输入' }}</span>
-                                  <small>{{ run.totalTokens }} tokens · {{ formatAgentDate(run.createdAt) }}</small>
-                                </button>
-                                <el-empty v-if="agentRuns.length === 0" description="暂无运行历史" :image-size="72" />
-                              </el-scrollbar>
-                            </aside>
-
-                            <main class="agent-observe-graph">
-                              <section class="agent-observe-output">
-                                <div class="agent-section-title">输出预览</div>
-                                <div v-if="activeAgentRun.output" class="markdown-content" v-html="renderMarkdown(activeAgentRun.output)"></div>
-                                <div v-else class="agent-placeholder">流式输出会显示在这里</div>
-                              </section>
-
-                              <section class="agent-trace-map">
-                                <div class="agent-section-title">Trace DAG</div>
-                                <div v-if="agentTraceStageGroups.length" class="agent-stage-grid">
-                                  <div v-for="stage in agentTraceStageGroups" :key="stage.id" class="agent-stage-column">
-                                    <div class="agent-stage-title">{{ stage.label }}</div>
-                                    <button
-                                      v-for="node in stage.nodes"
-                                      :key="node.id"
-                                      type="button"
-                                      class="trace-node"
-                                      :class="[node.status, { active: node.active }]"
-                                      @click="selectAgentTraceStep(Number(node.id))"
-                                    >
-                                      <span>{{ node.label }}</span>
-                                      <small>{{ node.type }} · {{ node.latencyMs }} ms</small>
-                                    </button>
-                                  </div>
-                                </div>
-                                <el-empty v-else description="暂无 Trace 节点" :image-size="72" />
-                              </section>
-
-                              <section class="agent-waterfall">
-                                <div class="agent-section-title">耗时瀑布</div>
-                                <div v-for="node in agentTraceNodes" :key="`bar-${node.id}`" class="waterfall-row">
-                                  <span>{{ node.label }}</span>
-                                  <div class="waterfall-track">
-                                    <div class="waterfall-bar" :class="node.status" :style="{ width: `${Math.min(100, Math.max(6, (node.latencyMs / agentTraceLatencyMax) * 100))}%` }"></div>
-                                  </div>
-                                  <small>{{ node.latencyMs }} ms</small>
-                                </div>
-                              </section>
-                            </main>
-
-                            <aside class="agent-step-inspector">
-                              <div class="agent-section-title">Step Inspector</div>
-                              <template v-if="activeAgentTraceStep">
-                                <div class="agent-step-head">
-                                  <strong>{{ activeAgentTraceStep.name }}</strong>
-                                  <div>
-                                    <el-tag size="small" :type="agentRunTagType(activeAgentTraceStep.status)">{{ activeAgentTraceStep.status }}</el-tag>
-                                    <el-tag size="small" type="info">{{ activeAgentTraceStep.stepType }}</el-tag>
-                                  </div>
-                                </div>
-                                <el-alert v-if="activeAgentTraceStep.error" type="error" :closable="false" show-icon :title="activeAgentTraceStep.error" />
-                                <div class="agent-step-meta-line">
-                                  <span>{{ formatAgentDate(activeAgentTraceStep.startedAt) }}</span>
-                                  <span>{{ activeAgentTraceStep.latencyMs }} ms</span>
-                                </div>
-                                <div class="agent-inspector-section">
-                                  <strong>Input</strong>
-                                  <pre class="agent-step-meta">{{ activeAgentTraceStep.input || '无' }}</pre>
-                                </div>
-                                <div class="agent-inspector-section">
-                                  <strong>Output</strong>
-                                  <pre class="agent-step-meta">{{ activeAgentTraceStep.output || '无' }}</pre>
-                                </div>
-                                <div v-if="formatStepMetadata(activeAgentTraceStep.metadata)" class="agent-inspector-section">
-                                  <strong>Metadata</strong>
-                                  <pre class="agent-step-meta">{{ formatStepMetadata(activeAgentTraceStep.metadata) }}</pre>
-                                </div>
-                                <el-button size="small" text @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
-                              </template>
-                              <el-empty v-else description="暂无 Step" :image-size="72" />
-                            </aside>
+                        <div v-if="activeAgentRun" class="agent-diagnosis-section">
+                          <strong>运行摘要</strong>
+                          <div class="agent-diagnosis-tags">
+                            <el-tag size="small" :type="agentFailedTraceSteps.length ? 'danger' : 'success'">失败 {{ agentFailedTraceSteps.length }}</el-tag>
+                            <el-tag size="small" :type="agentSlowTraceSteps.length ? 'warning' : 'success'">慢步骤 {{ agentSlowTraceSteps.length }}</el-tag>
+                            <el-tag size="small" type="info">知识 {{ agentContextSourceSummary.knowledge || 0 }}</el-tag>
+                            <el-tag size="small" type="info">记忆 {{ agentContextSourceSummary.memory || 0 }}</el-tag>
+                            <el-tag size="small" type="info">Skill {{ agentContextSourceSummary.skill || 0 }}</el-tag>
                           </div>
                         </div>
-                      </div>
-                      <el-empty v-else description="保存并运行 Agent 后，这里会显示输出和执行链路。" :image-size="96" />
+                        <div v-if="agentFailedTraceSteps.length" class="agent-diagnosis-section">
+                          <strong>失败步骤</strong>
+                          <button
+                            v-for="step in agentFailedTraceSteps"
+                            :key="`failed-${step.id}`"
+                            type="button"
+                            class="agent-diagnosis-step"
+                            @click="selectAgentTraceStep(step.id)"
+                          >
+                            <span>{{ step.name }}</span>
+                            <small>{{ step.stepType }} · {{ step.error || 'failed' }}</small>
+                          </button>
+                        </div>
+                        <div v-if="agentSlowTraceSteps.length" class="agent-diagnosis-section">
+                          <strong>耗时异常</strong>
+                          <button
+                            v-for="step in agentSlowTraceSteps"
+                            :key="`slow-${step.id}`"
+                            type="button"
+                            class="agent-diagnosis-step"
+                            @click="selectAgentTraceStep(step.id)"
+                          >
+                            <span>{{ step.name }}</span>
+                            <small>{{ step.stepType }} · {{ step.latencyMs }} ms</small>
+                          </button>
+                        </div>
+                        <div v-if="agentImprovementSuggestions" class="agent-diagnosis-section">
+                          <strong>优化建议</strong>
+                          <p>{{ agentImprovementSuggestions.summary }}</p>
+                          <div class="agent-suggestion-group">
+                            <span>提示词</span>
+                            <ul><li v-for="item in agentImprovementSuggestions.promptSuggestions" :key="item">{{ item }}</li></ul>
+                          </div>
+                          <div class="agent-suggestion-group">
+                            <span>能力</span>
+                            <ul><li v-for="item in agentImprovementSuggestions.capabilitySuggestions" :key="item">{{ item }}</li></ul>
+                          </div>
+                          <div class="agent-suggestion-group">
+                            <span>测试</span>
+                            <ul><li v-for="item in agentImprovementSuggestions.testSuggestions" :key="item">{{ item }}</li></ul>
+                          </div>
+                        </div>
+                        <template v-if="activeAgentTraceStep">
+                          <div class="agent-step-head">
+                            <strong>{{ activeAgentTraceStep.name }}</strong>
+                            <div>
+                              <el-tag size="small" :type="agentRunTagType(activeAgentTraceStep.status)">{{ activeAgentTraceStep.status }}</el-tag>
+                              <el-tag size="small" type="info">{{ activeAgentTraceStep.stepType }}</el-tag>
+                            </div>
+                          </div>
+                          <div class="agent-step-meta-line">
+                            <span>{{ formatAgentDate(activeAgentTraceStep.startedAt) }}</span>
+                            <span>{{ activeAgentTraceStep.latencyMs }} ms</span>
+                          </div>
+                          <el-alert v-if="activeAgentTraceStep.error" type="error" :closable="false" show-icon :title="activeAgentTraceStep.error" />
+                        </template>
+                        <el-empty v-else description="暂无诊断信息" :image-size="72" />
+                      </el-tab-pane>
+
+                      <el-tab-pane label="Trace" name="trace">
+                        <div class="agent-trace-controlbar compact">
+                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun?.steps.length" @click="toggleAgentTraceReplay()">
+                            {{ agentTraceReplayPlaying ? '暂停' : '播放' }}
+                          </el-button>
+                          <el-slider
+                            class="agent-trace-slider"
+                            :model-value="agentTraceReplayIndex"
+                            :min="0"
+                            :max="agentTraceReplayMax"
+                            :step="1"
+                            :show-tooltip="false"
+                            @update:model-value="setAgentTraceReplayIndex"
+                          />
+                          <span>{{ agentTraceReplayIndex + 1 }} / {{ activeAgentRun?.steps.length || 1 }}</span>
+                        </div>
+                        <div v-if="agentTraceStageGroups.length" class="agent-stage-grid invoke">
+                          <div v-for="stage in agentTraceStageGroups" :key="stage.id" class="agent-stage-column">
+                            <div class="agent-stage-title">{{ stage.label }}</div>
+                            <button
+                              v-for="node in stage.nodes"
+                              :key="node.id"
+                              type="button"
+                              class="trace-node"
+                              :class="[node.status, { active: node.active }]"
+                              @click="selectAgentTraceStep(Number(node.id))"
+                            >
+                              <span>{{ node.label }}</span>
+                              <small>{{ node.type }} · {{ node.latencyMs }} ms</small>
+                            </button>
+                          </div>
+                        </div>
+                        <el-empty v-else description="暂无 Trace 节点" :image-size="72" />
+                      </el-tab-pane>
+
+                      <el-tab-pane label="历史" name="history">
+                        <div class="agent-history-toolbar">
+                          <el-segmented
+                            v-model="agentRunHistoryFilter"
+                            :options="[
+                              { label: '全部', value: 'all' },
+                              { label: '成功', value: 'succeeded' },
+                              { label: '失败', value: 'failed' },
+                            ]"
+                          />
+                          <el-select v-model="agentRunHistorySort" size="small">
+                            <el-option label="按时间" value="created" />
+                            <el-option label="按耗时" value="latency" />
+                            <el-option label="按 Token" value="tokens" />
+                          </el-select>
+                        </div>
+                        <el-scrollbar class="agent-history-list compact">
+                          <button
+                            v-for="run in filteredAgentRuns"
+                            :key="run.id"
+                            type="button"
+                            class="agent-history-item"
+                            :class="[run.status, { active: activeAgentRun?.id === run.id }]"
+                            @click="selectAgentRun(run)"
+                          >
+                            <span>{{ run.input || '空输入' }}</span>
+                            <small>{{ run.totalTokens }} tokens · {{ formatAgentDate(run.createdAt) }}</small>
+                          </button>
+                          <el-empty v-if="filteredAgentRuns.length === 0" description="暂无运行历史" :image-size="72" />
+                        </el-scrollbar>
+                      </el-tab-pane>
+
+                      <el-tab-pane label="API" name="api">
+                        <div class="agent-resource-item">
+                          <div class="agent-resource-title">集中 API 文档</div>
+                          <p>Agent 调用、公开调用、版本、测试集、优化建议、工具、知识库、记忆、Workflow 和 Team 的接口示例都集中在 API 用法页维护。</p>
+                        </div>
+                        <el-button size="small" type="primary" plain @click="switchPage('api')">查看完整 API 用法</el-button>
+                      </el-tab-pane>
+                    </el-tabs>
+
+                    <div class="agent-step-inspector compact">
+                      <div class="agent-section-title">Step Inspector</div>
+                      <template v-if="activeAgentTraceStep">
+                        <div class="agent-inspector-section">
+                          <strong>Input</strong>
+                          <pre class="agent-step-meta">{{ activeAgentTraceStep.input || '无' }}</pre>
+                        </div>
+                        <div class="agent-inspector-section">
+                          <strong>Output</strong>
+                          <pre class="agent-step-meta">{{ activeAgentTraceStep.output || '无' }}</pre>
+                        </div>
+                        <div v-if="formatStepMetadata(activeAgentTraceStep.metadata)" class="agent-inspector-section">
+                          <strong>Metadata</strong>
+                          <pre class="agent-step-meta">{{ formatStepMetadata(activeAgentTraceStep.metadata) }}</pre>
+                        </div>
+                        <el-button size="small" text @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
+                      </template>
+                      <el-empty v-else description="暂无 Step" :image-size="72" />
                     </div>
-                  </div>
-
-
-
-
-                  <div class="agent-adv-section">
-                    <div class="agent-section-title">接口示例</div>
-                    <div class="agent-resource-item">
-                      <div class="agent-resource-title">API Key 调用</div>
-                      <div class="api-endpoint">POST /v1/agents/:id/invoke</div>
-                      <pre class="api-code-block">curl {{ agentApiEndpoint }} \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
-  -d '{"input":"请根据知识库回答客户问题","messages":[]}'</pre>
-                    </div>
-                    <div class="agent-resource-item">
-                      <div class="agent-resource-title">公开调用</div>
-                      <div class="api-endpoint">POST /v1/public/agents/:slug/runs</div>
-                      <pre class="api-code-block">curl {{ agentPublicEndpoint }} \
-  -H "Content-Type: application/json" \
-  -d '{"input":"公开调用这个 Agent"}'</pre>
-                    </div>
-                    <el-button size="small" type="primary" plain @click="switchPage('api')">查看完整 API 用法</el-button>
-                  </div>
+                  </aside>
                 </div>
               </el-card>
             </div>

@@ -4,7 +4,9 @@
 
 :root {
   color-scheme: light;
-  font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: Inter, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 *,
@@ -19,6 +21,8 @@ html, body, #app {
   height: 100%;
   background: radial-gradient(circle at 0% 0%, #f8fbff 0, #f6f9ff 35%, #f3f5fa 100%);
   color: #1f2937;
+  font-family: Inter, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  line-height: 1.55;
 }
 
 /* Scrollbar */
@@ -3117,6 +3121,27 @@ html, body, #app {
   gap: 16px;
 }
 
+.api-index-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.api-index-grid a {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-blank);
+  color: var(--el-color-primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.api-index-grid a:hover {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
 .api-info-item {
   display: flex;
   flex-direction: column;
@@ -5113,6 +5138,315 @@ html.dark .agent-history-item.active {
   border-color: var(--el-color-primary);
   border-left-color: var(--el-color-primary);
   box-shadow: 0 0 0 2px var(--el-color-primary-light-8);
+}
+
+.agent-invoke-console {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(420px, 1fr) minmax(300px, 380px);
+  gap: 14px;
+  align-items: start;
+  min-height: 100%;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.agent-invoke-sidebar,
+.agent-invoke-main,
+.agent-invoke-inspector {
+  min-width: 0;
+}
+
+.agent-invoke-sidebar,
+.agent-invoke-main {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-invoke-card,
+.agent-compose-panel,
+.agent-output-panel,
+.agent-invoke-inspector {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+}
+
+.agent-invoke-card,
+.agent-compose-panel,
+.agent-output-panel {
+  padding: 14px;
+}
+
+.agent-invoke-inspector {
+  padding: 10px 12px 12px;
+  position: sticky;
+  top: 0;
+}
+
+.agent-profile-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-profile-top strong,
+.agent-profile-top span {
+  display: block;
+}
+
+.agent-profile-top strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.agent-profile-top span,
+.agent-profile-card p,
+.agent-compose-toolbar span,
+.agent-multimodal-toggle span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.agent-profile-card p {
+  margin: 10px 0;
+}
+
+.agent-capability-strip,
+.agent-run-config-summary,
+.agent-compose-actions,
+.agent-output-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-setting-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.agent-setting-field > span {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-compose-toolbar,
+.agent-output-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.agent-prompt-input textarea {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.agent-multimodal-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.agent-output-panel {
+  min-height: 420px;
+}
+
+.agent-output-render {
+  min-height: 280px;
+  max-height: 58vh;
+  overflow: auto;
+  padding-right: 4px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.agent-output-empty {
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+}
+
+.agent-diagnosis-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.agent-diagnosis-actions,
+.agent-history-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.agent-diagnosis-item {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--el-fill-color-light);
+}
+
+.agent-diagnosis-item strong,
+.agent-diagnosis-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-diagnosis-item strong {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.agent-diagnosis-item span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.agent-diagnosis-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.agent-diagnosis-section > strong,
+.agent-suggestion-group > span {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--el-text-color-regular);
+}
+
+.agent-diagnosis-section p {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-diagnosis-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-diagnosis-step {
+  width: 100%;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-diagnosis-step span,
+.agent-diagnosis-step small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-diagnosis-step small {
+  margin-top: 3px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.agent-suggestion-group {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-suggestion-group ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-suggestion-group li + li {
+  margin-top: 3px;
+}
+
+.agent-trace-controlbar.compact {
+  padding: 0 0 12px;
+  border-bottom: 0;
+  grid-template-columns: auto minmax(100px, 1fr) auto;
+}
+
+.agent-stage-grid.invoke {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.agent-history-list.compact {
+  height: 360px;
+}
+
+.agent-step-inspector.compact {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  background: transparent;
+}
+
+.agent-step-meta,
+.api-code-block {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-step-meta {
+  max-height: 180px;
+  overflow: auto;
+}
+
+@media (max-width: 1280px) {
+  .agent-invoke-console {
+    grid-template-columns: minmax(210px, 260px) minmax(360px, 1fr);
+  }
+
+  .agent-invoke-inspector {
+    grid-column: 1 / -1;
+    position: static;
+  }
+}
+
+@media (max-width: 820px) {
+  .agent-invoke-console,
+  .agent-compose-toolbar,
+  .agent-output-head {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .agent-invoke-inspector {
+    padding: 10px;
+  }
+
+  .agent-output-render {
+    max-height: none;
+  }
 }
 
 .agent-history-item.succeeded {

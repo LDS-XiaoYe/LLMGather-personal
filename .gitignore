@@ -5,3 +5,4 @@ node_modules
 .env.docker
 .claude
 .docker-npm-install.lock
+.idea

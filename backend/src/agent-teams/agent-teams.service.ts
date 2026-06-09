@@ -201,11 +201,11 @@ export class AgentTeamsService {
       .addNode('finalize', async (state: StateType) => {
         let output = state.output;
         if (team.strategy === 'parallel') {
-          output = state.memberOutputs.map((item, index) => `## ${index + 1}. ${item.role}\n${item.output || item.error}`).join('\n\n');
+          output = state.memberOutputs.map((item: AgentTeamRun['memberOutputs'][number], index: number) => `## ${index + 1}. ${item.role}\n${item.output || item.error}`).join('\n\n');
         } else if (team.strategy === 'consensus') {
           output = this.buildConsensusOutput(state.memberOutputs);
         } else if (team.strategy === 'debate' && state.memberOutputs.length > 1) {
-          output = state.memberOutputs.map((item, index) => `## ${index + 1}. ${item.role}\n${item.output}`).join('\n\n');
+          output = state.memberOutputs.map((item: AgentTeamRun['memberOutputs'][number], index: number) => `## ${index + 1}. ${item.role}\n${item.output}`).join('\n\n');
         }
         return { ...state, output };
       })

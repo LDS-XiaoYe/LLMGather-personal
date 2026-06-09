@@ -776,7 +776,7 @@ export class AgentsService {
             metadata: JSON.stringify({
               round,
               graphNode: 'plan',
-              availableTools: state.tools.map((tool) => tool.name),
+              availableTools: state.tools.map((tool: ToolDefinition) => tool.name),
               plannerConfidence: this.plannerActionConfidence(action),
             }),
           });

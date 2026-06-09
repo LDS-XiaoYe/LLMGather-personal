@@ -25,9 +25,13 @@ export class AddKnowledgeDocumentDto {
 }
 
 export class ParseFileDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  file!: string;
+  file?: string;
+
+  @IsOptional()
+  @IsString()
+  fileBase64?: string;
 
   @IsString()
   @IsNotEmpty()

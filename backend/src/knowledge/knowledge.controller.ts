@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -50,7 +50,9 @@ export class KnowledgeController {
     @CurrentUser() user: AuthenticatedRequestUser,
     @Body() payload: ParseFileDto,
   ) {
-    return { data: await this.knowledgeService.parseFile(payload.file, payload.filename) };
+    const file = payload.file ?? payload.fileBase64;
+    if (!file) throw new BadRequestException('file 或 fileBase64 为必填字段');
+    return { data: await this.knowledgeService.parseFile(file, payload.filename) };
   }
 
   @Post('bases/:id/search')

@@ -227,7 +227,13 @@ export class KnowledgeService {
     try {
       return await import(moduleName) as T;
     } catch (error) {
-      if ((error as { code?: string })?.code === 'MODULE_NOT_FOUND') {
+      const err = error as { code?: string; message?: string };
+      if (
+        err.code === 'MODULE_NOT_FOUND' ||
+        err.code === 'ERR_MODULE_NOT_FOUND' ||
+        err.message?.includes(`Cannot find package '${moduleName}'`) ||
+        err.message?.includes(`Cannot find module '${moduleName}'`)
+      ) {
         throw new BadRequestException(`${label} 文件解析依赖缺失：请在后端镜像中安装 ${moduleName}`);
       }
       throw error;

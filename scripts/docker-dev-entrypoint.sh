@@ -25,6 +25,10 @@ if [ "$needs_install" -eq 0 ]; then
     node_modules/@nestjs/core/helpers/execution-context-host.js \
     node_modules/@nestjs/core/helpers/get-class-scope.js \
     node_modules/@nestjs/cli/bin/nest.js \
+    node_modules/@langchain/langgraph/package.json \
+    node_modules/mammoth/package.json \
+    node_modules/pdf-parse/package.json \
+    node_modules/xlsx/package.json \
     node_modules/vite/bin/vite.js \
     node_modules/vue-tsc/bin/vue-tsc.js
   do

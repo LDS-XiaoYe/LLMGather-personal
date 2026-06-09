@@ -341,6 +341,13 @@ html, body, #app {
 
 .agent-current-avatar {
   flex-shrink: 0;
+  
+}
+
+.agent-avatar {
+  color: #fff !important;
+  font-size: 14px !important;
+  flex-shrink: 0;
 }
 
 .agent-current-detail {
@@ -5142,18 +5149,41 @@ html.dark .agent-history-item.active {
 
 .agent-invoke-console {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(420px, 1fr) minmax(300px, 380px);
-  gap: 14px;
+  grid-template-columns: minmax(520px, 1.2fr) minmax(430px, 0.8fr);
+  grid-template-areas:
+    "status status"
+    "main inspector";
+  gap: 12px;
   align-items: start;
   min-height: 100%;
   font-size: 14px;
   line-height: 1.55;
+}
+.agent-invoke-statusbar {
+  grid-area: status;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) auto minmax(430px, 1.2fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-blank);
+
 }
 
 .agent-invoke-sidebar,
 .agent-invoke-main,
 .agent-invoke-inspector {
   min-width: 0;
+}
+
+.agent-invoke-main {
+  grid-area: main;
+}
+
+.agent-invoke-inspector {
+  grid-area: inspector;
 }
 
 .agent-invoke-sidebar,
@@ -5178,9 +5208,11 @@ html.dark .agent-history-item.active {
 }
 
 .agent-invoke-inspector {
-  padding: 10px 12px 12px;
+  padding: 12px;
   position: sticky;
   top: 0;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
 }
 
 .agent-profile-top {
@@ -5197,6 +5229,21 @@ html.dark .agent-history-item.active {
 .agent-profile-top strong {
   font-size: 15px;
   font-weight: 650;
+}
+
+.agent-profile-top.compact {
+  min-width: 0;
+}
+
+.agent-profile-top.compact > div {
+  min-width: 0;
+}
+
+.agent-profile-top.compact strong,
+.agent-profile-top.compact span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-profile-top span,
@@ -5219,6 +5266,101 @@ html.dark .agent-history-item.active {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.agent-capability-strip.compact {
+  justify-content: center;
+}
+
+.agent-run-settings-compact {
+  display: flex;
+  grid-template-columns: minmax(210px, auto) minmax(140px, 180px) ;
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+  margin-left: auto;
+
+}
+.agent-run-settings-compact .el-select {
+  width: 140px;
+  flex-shrink: 0;
+  justify-self: end;
+  min-width: max-content;
+}
+.agent-run-settings-compact label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+
+}
+
+.agent-run-settings-compact label > span {
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  font-weight: 650;
+
+}
+
+.agent-run-settings-compact .el-segmented {
+  min-height: 28px;
+
+}
+
+.agent-steps-setting {
+  padding-top: 2px;
+  
+}
+
+.agent-run-state-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-left: 4px solid var(--el-border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-light);
+}
+
+.agent-run-state-banner.running {
+  border-left-color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
+
+.agent-run-state-banner.succeeded {
+  border-left-color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+}
+
+.agent-run-state-banner.failed {
+  border-left-color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+}
+
+.agent-run-state-banner span,
+.agent-run-state-banner strong {
+  display: block;
+}
+
+.agent-run-state-banner span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.agent-run-state-banner strong {
+  margin-top: 2px;
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.agent-run-state-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .agent-setting-field {
@@ -5256,12 +5398,12 @@ html.dark .agent-history-item.active {
 }
 
 .agent-output-panel {
-  min-height: 420px;
+  min-height: 460px;
 }
 
 .agent-output-render {
-  min-height: 280px;
-  max-height: 58vh;
+  min-height: 330px;
+  max-height: 62vh;
   overflow: auto;
   padding-right: 4px;
   font-size: 15px;
@@ -5390,6 +5532,202 @@ html.dark .agent-history-item.active {
   grid-template-columns: auto minmax(100px, 1fr) auto;
 }
 
+.agent-trace-controlbar.debugger {
+  grid-template-columns: repeat(5, auto) minmax(100px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 12px;
+  overflow-x: auto;
+}
+
+.harness-run-metrics,
+.skill-market-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.agent-trace-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.agent-trace-metrics > div,
+.harness-run-metrics > div,
+.skill-market-overview > div,
+.harness-dataset-card {
+  min-width: 0;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--el-fill-color-light);
+}
+
+.agent-trace-metrics span,
+.harness-run-metrics span,
+.skill-market-overview span,
+.harness-dataset-card span {
+  display: block;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.agent-trace-metrics strong,
+.harness-run-metrics strong,
+.skill-market-overview strong,
+.harness-dataset-card strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 16px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-trace-flow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.execution-trace-node {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--el-border-color-lighter);
+  border-left: 4px solid var(--el-border-color);
+  border-radius: 8px;
+  padding: 10px 12px 10px 14px;
+  background: var(--el-fill-color-blank);
+  color: var(--el-text-color-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.execution-trace-node.active {
+  border-color: var(--el-color-primary);
+  border-left-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-8);
+}
+
+.execution-trace-node.succeeded { border-left-color: var(--el-color-success); }
+.execution-trace-node.failed { border-left-color: var(--el-color-danger); }
+.execution-trace-node.running { border-left-color: var(--el-color-warning); }
+.execution-trace-node.pending {
+  border-left-color: var(--el-border-color);
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  cursor: default;
+}
+
+.execution-trace-node::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 16px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--el-fill-color-blank);
+  border-radius: 50%;
+  background: var(--el-border-color);
+}
+
+.execution-trace-node.succeeded::before { background: var(--el-color-success); }
+.execution-trace-node.failed::before { background: var(--el-color-danger); }
+.execution-trace-node.running::before { background: var(--el-color-warning); }
+.execution-trace-node.pending::before { background: var(--el-border-color); }
+
+.execution-trace-node span,
+.execution-trace-node strong,
+.execution-trace-node small,
+.execution-trace-node p {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.execution-trace-node span,
+.execution-trace-node small {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.execution-trace-node strong {
+  margin: 4px 0;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.execution-trace-node p {
+  display: -webkit-box;
+  margin: 6px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.agent-debug-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.agent-snapshot-panel,
+.comparative-replay-panel {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--el-fill-color-blank);
+  min-width: 0;
+}
+
+.snapshot-block {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.snapshot-block strong,
+.replay-diff-grid span {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.snapshot-block pre,
+.replay-diff-grid pre {
+  max-height: 130px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--el-fill-color-light);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.comparative-replay-panel {
+  margin-top: 12px;
+}
+
+.replay-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .agent-stage-grid.invoke {
   display: grid;
   grid-template-columns: 1fr;
@@ -5421,23 +5759,132 @@ html.dark .agent-history-item.active {
   overflow: auto;
 }
 
+.harness-dataset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.harness-scenario-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.harness-case-schema {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.harness-case-schema > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+
+.harness-case-schema strong {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+
+.harness-case-schema span {
+  min-width: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.skill-market-overview {
+  margin: 0 0 14px;
+}
+
+.skill-market-card.enhanced {
+  background: var(--el-fill-color-blank);
+  border-color: var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.skill-market-card.enhanced:hover {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .08);
+  transform: translateY(-1px);
+}
+
+.skill-market-card.enhanced .skill-market-card-header > div,
+.skill-market-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.skill-quality-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--el-fill-color);
+  overflow: hidden;
+}
+
+.skill-quality-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--el-color-success);
+}
+
 @media (max-width: 1280px) {
   .agent-invoke-console {
-    grid-template-columns: minmax(210px, 260px) minmax(360px, 1fr);
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "status"
+      "main"
+      "inspector";
+  }
+
+  .agent-invoke-statusbar {
+    grid-template-columns: minmax(0, 1fr);
+
+  }
+
+  .agent-run-settings-compact {
+    grid-template-columns: minmax(210px, auto) minmax(160px, 1fr) minmax(180px, 1fr);
+  }
+
+  .agent-trace-controlbar.debugger,
+  .agent-debug-grid,
+  .replay-diff-grid,
+  .harness-run-metrics,
+  .skill-market-overview,
+  .harness-dataset-grid {
+    grid-template-columns: 1fr;
   }
 
   .agent-invoke-inspector {
-    grid-column: 1 / -1;
     position: static;
+    max-height: none;
   }
 }
 
 @media (max-width: 820px) {
   .agent-invoke-console,
+  .agent-run-settings-compact,
   .agent-compose-toolbar,
   .agent-output-head {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .agent-trace-metrics {
+    grid-template-columns: 1fr;
   }
 
   .agent-invoke-inspector {
@@ -5446,6 +5893,10 @@ html.dark .agent-history-item.active {
 
   .agent-output-render {
     max-height: none;
+  }
+
+  .harness-case-schema > div {
+    grid-template-columns: 1fr;
   }
 }
 

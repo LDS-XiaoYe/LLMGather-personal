@@ -254,7 +254,7 @@ export function useAppController() {
   const agentInvokeMode = ref<'standard' | 'reflective' | 'fast'>('reflective');
   const agentContextStrategy = ref<'balanced' | 'knowledge_first' | 'memory_first' | 'minimal'>('balanced');
   const agentInvokeMaxSteps = ref(6);
-  const agentInvokePanelTab = ref<'diagnosis' | 'trace' | 'history' | 'api'>('diagnosis');
+  const agentInvokePanelTab = ref<'diagnosis' | 'trace' | 'history' | 'api'>('trace');
   const agentImageInputOpen = ref(false);
   const agentLastPrompt = ref('');
   const agentRunHistoryFilter = ref<'all' | 'succeeded' | 'failed'>('all');
@@ -1271,7 +1271,7 @@ export function useAppController() {
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
-    agentInvokePanelTab.value = 'diagnosis';
+    agentInvokePanelTab.value = 'trace';
     agentMemories.value = [];
   }
 
@@ -2011,7 +2011,7 @@ export function useAppController() {
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
-    agentInvokePanelTab.value = 'diagnosis';
+    agentInvokePanelTab.value = 'trace';
     status.value = 'Agent 正在执行';
     agentRunAbortController = new AbortController();
     try {
@@ -2138,7 +2138,7 @@ export function useAppController() {
       activeAgentTraceStepId.value = failedStep?.id ?? event.run.steps[event.run.steps.length - 1]?.id ?? null;
       agentTraceReplayIndex.value = failedStep ? Math.max(0, event.run.steps.findIndex((step) => step.id === failedStep.id)) : Math.max(0, event.run.steps.length - 1);
       agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
-      if (event.run.status === 'failed' || failedStep) agentInvokePanelTab.value = 'diagnosis';
+      agentInvokePanelTab.value = 'trace';
       status.value = event.run.status === 'succeeded' ? 'Agent 执行完成' : 'Agent 执行失败';
       return;
     }
@@ -2304,6 +2304,178 @@ export function useAppController() {
     .sort((a, b) => b.latencyMs - a.latencyMs)
     .slice(0, 6));
 
+  const traceStageDefinitions = [
+    { id: 'input', label: 'User Input', types: ['input', 'context_pack'], accent: 'info' },
+    { id: 'llm', label: 'LLM', types: ['llm_completion', 'plan', 'reflection'], accent: 'primary' },
+    { id: 'tool', label: 'Tool', types: ['tool_call', 'observation', 'delegate_agent', 'delegate_observation'], accent: 'warning' },
+    { id: 'memory', label: 'Memory', types: ['memory_retrieval', 'memory_extract', 'memory_update', 'skill_context', 'rag_retrieval'], accent: 'success' },
+    { id: 'final', label: 'Final Output', types: ['final', 'llm_completion'], accent: 'danger' },
+  ];
+
+  function stepMatchesTypes(step: AgentRun['steps'][number], types: string[]) {
+    const type = step.stepType.toLowerCase();
+    const name = step.name.toLowerCase();
+    return types.some((item) => type.includes(item) || name.includes(item));
+  }
+
+  const agentExecutionTraceFlow = computed(() => {
+    const run = activeAgentRun.value;
+    const steps = run?.steps ?? [];
+    return traceStageDefinitions.map((stage) => {
+      const matched = stage.id === 'final'
+        ? [...steps].reverse().find((step) => step.stepType === 'llm_completion') ?? null
+        : steps.find((step) => stepMatchesTypes(step, stage.types)) ?? null;
+      return {
+        ...stage,
+        step: matched,
+        status: matched?.status ?? (stage.id === 'input' && run ? 'succeeded' : 'pending'),
+        title: matched?.name || (stage.id === 'input' ? 'User Input' : stage.label),
+        detail: stage.id === 'input'
+          ? (run?.input || agentPrompt.value || '等待输入')
+          : matched?.output || matched?.error || matched?.input || '等待上游节点完成',
+        latencyMs: matched?.latencyMs ?? 0,
+      };
+    });
+  });
+
+  const agentTraceSnapshot = computed(() => {
+    const run = activeAgentRun.value;
+    const step = activeAgentTraceStep.value;
+    const metadata = (() => {
+      try { return JSON.parse(step?.metadata || '{}') as Record<string, any>; } catch { return {}; }
+    })();
+    const toolStep = step?.stepType.includes('tool') ? step : (run?.steps ?? []).find((item) => item.stepType.includes('tool'));
+    const memorySteps = (run?.steps ?? []).filter((item) => item.stepType.includes('memory'));
+    return {
+      prompt: agentForm.value.systemPrompt || '',
+      messages: run ? [{ role: 'user', content: run.input }, { role: 'assistant', content: run.output }] : [],
+      model: run?.model || agentForm.value.model || '',
+      parameters: {
+        temperature: agentForm.value.temperature,
+        maxTokens: agentForm.value.maxTokens,
+        maxSteps: agentInvokeMaxSteps.value,
+        mode: agentInvokeMode.value,
+        contextStrategy: agentContextStrategy.value,
+      },
+      toolInput: toolStep?.input || '',
+      toolOutput: toolStep?.output || toolStep?.error || '',
+      memoryState: memorySteps.map((item) => ({ name: item.name, status: item.status, output: item.output || item.error })),
+      metadata,
+    };
+  });
+
+  const agentTraceDebuggerState = computed(() => ({
+    paused: !agentTraceReplayPlaying.value,
+    canStepInto: Boolean(activeAgentTraceStep.value),
+    canStepOver: agentTraceReplayIndex.value < agentTraceReplayMax.value,
+    canRestartFromNode: Boolean(activeAgentTraceStep.value),
+    currentNode: activeAgentTraceStep.value?.name || 'None',
+  }));
+
+  const agentComparativeReplay = computed(() => {
+    const current = activeAgentRun.value ?? agentRuns.value[0] ?? null;
+    const baseline = agentRuns.value.find((run) => run.id !== current?.id) ?? null;
+    const currentSkills = availableSkills.value.filter((skill) => agentForm.value.skillIds.includes(skill.id)).map((skill) => skill.name);
+    return {
+      current,
+      baseline,
+      promptDiff: {
+        before: baseline?.input || '',
+        after: current?.input || '',
+      },
+      modelDiff: {
+        before: baseline?.model || '',
+        after: current?.model || agentForm.value.model || '',
+      },
+      skillDiff: {
+        before: [],
+        after: currentSkills,
+      },
+      workflowDiff: {
+        before: baseline ? `${baseline.steps.length} steps` : '',
+        after: current ? `${current.steps.length} steps` : '',
+      },
+    };
+  });
+
+  const agentHarnessMetrics = computed(() => {
+    const runs = agentRuns.value;
+    const total = runs.length;
+    const succeeded = runs.filter((run) => run.status === 'succeeded').length;
+    const latency = total ? Math.round(runs.reduce((sum, run) => sum + Number(run.latencyMs || 0), 0) / total) : 0;
+    const tokens = total ? Math.round(runs.reduce((sum, run) => sum + Number(run.totalTokens || 0), 0) / total) : 0;
+    const cost = billingLedger.value
+      .filter((item) => item.requestType === 'agent')
+      .slice(0, 50)
+      .reduce((sum, item) => sum + Number(item.cost || 0), 0);
+    return {
+      cost: Number(cost.toFixed(4)),
+      latency,
+      successRate: total ? Number(((succeeded / total) * 100).toFixed(1)) : 0,
+      averageTokens: tokens,
+    };
+  });
+
+  const agentHarnessDatasetTypes = computed(() => [
+    { id: 'manual', label: 'Manual Dataset', count: agentTestCases.value.length },
+    { id: 'production', label: 'Production Dataset', count: agentRuns.value.length },
+    { id: 'synthetic', label: 'Synthetic Dataset', count: agentImprovementSuggestions.value?.testSuggestions?.length ?? 0 },
+  ]);
+
+  const agentHarnessScenarios = computed(() => {
+    const scenarios = ['RAG', 'Tool Use', 'Coding', 'Browser Use', 'Multi-Agent', 'Customer Support'];
+    return scenarios.map((scenario) => {
+      const q = scenario.toLowerCase().replace(/\s+/g, '');
+      const count = agentTestCases.value.filter((testCase) => {
+        const blob = `${testCase.name} ${testCase.input} ${testCase.expectedOutput} ${testCase.rubric}`.toLowerCase();
+        if (scenario === 'RAG') return /rag|knowledge|知识|检索/.test(blob);
+        if (scenario === 'Tool Use') return /tool|工具|function/.test(blob);
+        if (scenario === 'Coding') return /code|coding|代码|javascript|python/.test(blob);
+        if (scenario === 'Browser Use') return /browser|网页|浏览器|fetch/.test(blob);
+        if (scenario === 'Multi-Agent') return /multi|team|多.?agent|团队/.test(blob);
+        if (scenario === 'Customer Support') return /support|客服|客户|退款|订单/.test(blob);
+        return blob.includes(q);
+      }).length;
+      return { id: q, label: scenario, count };
+    });
+  });
+
+  const activeHarnessRunMetrics = computed(() => {
+    const run = activeTestRun.value;
+    const summary = run?.summary ?? {};
+    const caseResults = run?.caseResults ?? [];
+    const avgCost = caseResults.reduce((sum, item) => sum + Number(item.cost || 0), 0);
+    const avgLatency = caseResults.length
+      ? Math.round(caseResults.reduce((sum, item) => sum + Number(item.latencyMs || item.latency || 0), 0) / caseResults.length)
+      : 0;
+    return {
+      successRate: Number(summary.successRate ?? summary.passRate ?? 0),
+      accuracy: Number(summary.averageScore ?? summary.accuracy ?? 0),
+      cost: Number(avgCost.toFixed(4)),
+      latency: avgLatency,
+    };
+  });
+
+  function getHarnessExpectedTool(testCase: AgentTestCase) {
+    const match = String(testCase.rubric || '').match(/expected_tool[:：]\s*([^\n]+)/i);
+    return match?.[1]?.trim() || '未设置';
+  }
+
+  const skillMarketStats = computed(() => ({
+    total: availableSkills.value.length,
+    builtin: availableSkills.value.filter((skill) => skill.source === 'builtin').length,
+    custom: availableSkills.value.filter((skill) => skill.source === 'custom').length,
+    bound: availableSkills.value.filter((skill) => agentForm.value.skillIds.includes(skill.id)).length,
+  }));
+
+  const skillMarketRows = computed(() => availableSkills.value
+    .map((skill) => ({
+      ...skill,
+      bound: agentForm.value.skillIds.includes(skill.id),
+      qualityScore: Math.min(100, 40 + (skill.description ? 15 : 0) + (skill.exampleInput ? 15 : 0) + (skill.exampleOutput ? 15 : 0) + (skill.inputSchema ? 10 : 0) + (skill.outputSchema ? 10 : 0)),
+    }))
+    .sort((a, b) => Number(b.bound) - Number(a.bound) || b.qualityScore - a.qualityScore));
+
   const agentContextSourceSummary = computed(() => {
     const counts: Record<string, number> = {};
     for (const step of activeAgentRun.value?.steps ?? []) {
@@ -2344,6 +2516,37 @@ export function useAppController() {
   function toggleAgentTraceReplay() {
     if (!activeAgentRun.value?.steps.length) return;
     agentTraceReplayPlaying.value = !agentTraceReplayPlaying.value;
+  }
+
+  function pauseAgentTraceReplay() {
+    agentTraceReplayPlaying.value = false;
+  }
+
+  function resumeAgentTraceReplay() {
+    if (!activeAgentRun.value?.steps.length) return;
+    agentTraceReplayPlaying.value = true;
+  }
+
+  function stepIntoAgentTrace() {
+    pauseAgentTraceReplay();
+    if (!activeAgentTraceStep.value) return;
+    activeAgentTraceStepId.value = activeAgentTraceStep.value.id;
+    status.value = `Step Into: ${activeAgentTraceStep.value.name}`;
+  }
+
+  function stepOverAgentTrace() {
+    pauseAgentTraceReplay();
+    setAgentTraceReplayIndex(Math.min(agentTraceReplayIndex.value + 1, agentTraceReplayMax.value));
+    status.value = `Step Over: ${activeAgentTraceStep.value?.name || 'Trace end'}`;
+  }
+
+  function restartAgentFromTraceNode() {
+    const step = activeAgentTraceStep.value;
+    if (!step) return;
+    pauseAgentTraceReplay();
+    agentPrompt.value = step.input || activeAgentRun.value?.input || agentPrompt.value;
+    agentInvokePanelTab.value = 'trace';
+    status.value = `已从节点准备重跑：${step.name}`;
   }
 
   let agentTraceReplayTimer: ReturnType<typeof setInterval> | null = null;
@@ -7603,6 +7806,17 @@ export function useAppController() {
     agentTraceLatencyMax,
     agentFailedTraceSteps,
     agentSlowTraceSteps,
+    agentExecutionTraceFlow,
+    agentTraceSnapshot,
+    agentTraceDebuggerState,
+    agentComparativeReplay,
+    agentHarnessMetrics,
+    agentHarnessDatasetTypes,
+    agentHarnessScenarios,
+    activeHarnessRunMetrics,
+    getHarnessExpectedTool,
+    skillMarketStats,
+    skillMarketRows,
     agentContextSourceSummary,
     filteredAgentRuns,
     agentWorkspaceMode,
@@ -7925,6 +8139,11 @@ export function useAppController() {
     selectAgentTraceStep,
     setAgentTraceReplayIndex,
     toggleAgentTraceReplay,
+    pauseAgentTraceReplay,
+    resumeAgentTraceReplay,
+    stepIntoAgentTrace,
+    stepOverAgentTrace,
+    restartAgentFromTraceNode,
     agentRunTagType,
     agentEvalTagType,
     evaluateActiveAgentRun,

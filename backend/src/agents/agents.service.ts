@@ -6,7 +6,7 @@ import { DatabaseService } from '../database/database.service';
 import { ChatService } from '../gateway/chat.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
 import { MemoryService } from '../memory/memory.service';
-import { ChatCompletionRequest, ChatCompletionUsage } from '../providers/provider.types';
+import { ChatCompletionRequest, ChatCompletionUsage, ChatMessage, ChatToolDefinition } from '../providers/provider.types';
 import { SkillsService } from '../skills/skills.service';
 import { ToolDefinition, ToolsService } from '../tools/tools.service';
 import { BUILTIN_AGENT_SPECS, BuiltinAgentKey, BuiltinAgentSpec, getBuiltinAgentSpec } from './builtin-agents';
@@ -168,6 +168,17 @@ type AgentReflectionDecision = {
   decision: 'continue' | 'final' | 'retry';
   reason: string;
   hint?: string;
+};
+
+type HarnessToolCall = NonNullable<ChatMessage['tool_calls']>[number];
+
+type HarnessToolResult = {
+  call: HarnessToolCall;
+  tool: ToolDefinition | null;
+  args: Record<string, unknown>;
+  output: string;
+  error: string;
+  status: 'succeeded' | 'failed';
 };
 
 type AgentRow = {
@@ -798,7 +809,7 @@ export class AgentsService {
         return { ...state, action, round };
       })
       .addNode('tool', async (state: StateType) => this.runGraphToolNode(userId, agent, dto, runId, state, insertAndEmit))
-      .addNode('delegate', async (state: StateType) => this.runGraphDelegateNode(userId, agent, dto, runId, options, state, insertAndEmit))
+      .addNode('delegate', async (state: StateType) => this.runGraphDelegateNode(userId, agent, dto, runId, options, state, insertAndEmit, completeAndEmit))
       .addNode('observe', async (state: StateType) => state)
       .addNode('reflect', async (state: StateType) => {
         emit({ type: 'reflection_started', runId, round: state.round });
@@ -842,12 +853,17 @@ export class AgentsService {
           insertAndEmit,
           completeAndEmit,
           usageTotal,
+          state.tools,
+          state.maxSteps,
         );
         return { ...state, finalOutput };
       })
       .addEdge(START, 'context')
       .addEdge('context', 'guardTools')
-      .addEdge('guardTools', 'plan')
+      .addConditionalEdges('guardTools', (state: StateType) => state.tools.length > 0 ? 'final' : 'plan', {
+        final: 'final',
+        plan: 'plan',
+      })
       .addConditionalEdges('plan', (state: StateType) => this.routePlannedAction(state), {
         tool: 'tool',
         delegate: 'delegate',
@@ -999,10 +1015,11 @@ export class AgentsService {
     options: AgentExecutionOptions,
     state: AgentGraphState,
     insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+    completeAndEmit: (stepId: number, status: 'succeeded' | 'failed', output: string, error?: string, metadata?: Record<string, unknown>) => Promise<AgentRunStep>,
   ): Promise<Partial<AgentGraphState>> {
     const action = state.action?.action === 'delegate' ? state.action : null;
     if (!action) return { action: null };
-    const delegated = await this.delegateBuiltinAgent(userId, agent, dto, action, runId, options, insertAndEmit);
+    const delegated = await this.delegateBuiltinAgent(userId, agent, dto, action, runId, options, insertAndEmit, completeAndEmit);
     return { observations: [...state.observations, delegated.observation], action: null };
   }
 
@@ -1278,9 +1295,10 @@ export class AgentsService {
     parentRunId: string,
     options: AgentExecutionOptions,
     insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+    completeAndEmit: (stepId: number, status: 'succeeded' | 'failed', output: string, error?: string, metadata?: Record<string, unknown>) => Promise<AgentRunStep>,
   ): Promise<{ observation: string; run?: AgentRun }> {
     if (action.agentId) {
-      return this.delegateUserAgent(userId, parentAgent, dto, action, parentRunId, options, insertAndEmit);
+      return this.delegateUserAgent(userId, parentAgent, dto, action, parentRunId, options, insertAndEmit, completeAndEmit);
     }
     const spec = getBuiltinAgentSpec(action.agentKey || '');
     if (!spec || (options.delegationDepth ?? 0) >= 1) {
@@ -1301,16 +1319,16 @@ export class AgentsService {
     }
 
     const child = await this.buildBuiltinRuntimeAgent(userId, spec, parentAgent.model, parentAgent.knowledgeBaseIds);
-    await insertAndEmit({
+    const delegateStep = await insertAndEmit({
       stepType: 'delegate_agent',
       name: `委派给 ${spec.name}`,
-      status: 'succeeded',
+      status: 'running',
       input: action.input || dto.input,
       output: JSON.stringify({ agentKey: spec.key, agentName: spec.name, reason: action.reason || '' }, null, 2),
       startedAt: this.databaseService.now(),
-      endedAt: this.databaseService.now(),
+      endedAt: null,
       latencyMs: 0,
-      metadata: JSON.stringify({ parentRunId, agentKey: spec.key }),
+      metadata: JSON.stringify({ parentRunId, agentKey: spec.key, graphNode: 'delegate' }),
     });
     const run = await this.executeAgentRun(userId, child, {
       ...dto,
@@ -1322,6 +1340,19 @@ export class AgentsService {
       inheritedKnowledgeBaseIds: parentAgent.knowledgeBaseIds,
     });
     const observation = `${spec.name} (${run.status}) runId=${run.id}\n${run.output || run.error}`;
+    await completeAndEmit(
+      delegateStep.id,
+      run.status === 'failed' ? 'failed' : 'succeeded',
+      observation.slice(0, 8000),
+      run.error,
+      {
+        parentRunId,
+        childRunId: run.id,
+        agentKey: spec.key,
+        graphNode: 'delegate',
+        childStatus: run.status,
+      },
+    );
     await insertAndEmit({
       stepType: 'delegate_observation',
       name: `${spec.name} 返回`,
@@ -1345,6 +1376,7 @@ export class AgentsService {
     parentRunId: string,
     options: AgentExecutionOptions,
     insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+    completeAndEmit: (stepId: number, status: 'succeeded' | 'failed', output: string, error?: string, metadata?: Record<string, unknown>) => Promise<AgentRunStep>,
   ): Promise<{ observation: string; run?: AgentRun }> {
     if ((options.delegationDepth ?? 0) >= 1) {
       const error = '已达到委派深度上限';
@@ -1416,14 +1448,14 @@ export class AgentsService {
       return { observation: error };
     }
 
-    await insertAndEmit({
+    const delegateStep = await insertAndEmit({
       stepType: 'delegate_agent',
       name: `委派给 ${child.name}`,
-      status: 'succeeded',
+      status: 'running',
       input: action.input || dto.input,
       output: JSON.stringify({ agentId: child.id, agentName: child.name, reason: action.reason || '' }, null, 2),
       startedAt: this.databaseService.now(),
-      endedAt: this.databaseService.now(),
+      endedAt: null,
       latencyMs: 0,
       metadata: JSON.stringify({ parentRunId, agentId: child.id, graphNode: 'delegate' }),
     });
@@ -1437,6 +1469,19 @@ export class AgentsService {
       inheritedKnowledgeBaseIds: parentAgent.knowledgeBaseIds,
     });
     const observation = `${child.name} (${run.status}) runId=${run.id}\n${run.output || run.error}`;
+    await completeAndEmit(
+      delegateStep.id,
+      run.status === 'failed' ? 'failed' : 'succeeded',
+      observation.slice(0, 8000),
+      run.error,
+      {
+        parentRunId,
+        childRunId: run.id,
+        agentId: child.id,
+        graphNode: 'delegate',
+        childStatus: run.status,
+      },
+    );
     await insertAndEmit({
       stepType: 'delegate_observation',
       name: `${child.name} 返回`,
@@ -1464,19 +1509,56 @@ export class AgentsService {
     insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
     completeAndEmit: (stepId: number, status: 'succeeded' | 'failed', output: string, error?: string, metadata?: Record<string, unknown>) => Promise<AgentRunStep>,
     usageTotal: ChatCompletionUsage,
+    tools: ToolDefinition[] = [],
+    maxSteps = 6,
   ): Promise<string> {
     const llmStep = await insertAndEmit({
       stepType: 'llm_completion',
-      name: '最终回答',
+      name: tools.length > 0 ? 'Harness 最终回答' : '最终回答',
       status: 'running',
       input: dto.input,
       output: '',
       startedAt: this.databaseService.now(),
       endedAt: null,
       latencyMs: 0,
-      metadata: JSON.stringify({ model: agent.model, observations: observations.length }),
+      metadata: JSON.stringify({ model: agent.model, observations: observations.length, toolUseHarness: tools.length > 0 }),
     });
     const request = this.buildFinalChatRequest(agent, dto, contextBlocks, observations, plannerHint);
+    if (tools.length > 0) {
+      try {
+        const output = await this.runToolUseHarness(userId, agent, dto, runId, request, tools, maxSteps, insertAndEmit, usageTotal);
+        emit({ type: 'llm_delta', runId, delta: output, output });
+        const updatedUser = await this.billingService.getBalance(userId);
+        await completeAndEmit(llmStep.id, 'succeeded', output, '', {
+          creditBalance: updatedUser.credits,
+          toolUseHarness: true,
+          toolCount: tools.length,
+        });
+        return output;
+      } catch (error) {
+        await completeAndEmit(llmStep.id, 'failed', '', this.errorMessage(error), {
+          toolUseHarness: true,
+          fallback: true,
+          toolCount: tools.length,
+        });
+        const fallbackHint = [plannerHint, `Function calling harness 不可用，已降级普通回答：${this.errorMessage(error)}`].filter(Boolean).join('\n');
+        return this.generateFinalAgentOutput(
+          userId,
+          agent,
+          dto,
+          contextBlocks,
+          observations,
+          fallbackHint,
+          runId,
+          emit,
+          insertAndEmit,
+          completeAndEmit,
+          usageTotal,
+          [],
+          maxSteps,
+        );
+      }
+    }
     const output = await this.collectCompletionStream(request, (delta, full) => {
       emit({ type: 'llm_delta', runId, delta, output: full });
     });
@@ -1518,6 +1600,211 @@ export class AgentsService {
       temperature: agent.temperature,
       max_tokens: agent.maxTokens,
     };
+  }
+
+  private async runToolUseHarness(
+    userId: string,
+    agent: AgentDefinition,
+    dto: RunAgentDto,
+    runId: string,
+    baseRequest: ChatCompletionRequest,
+    tools: ToolDefinition[],
+    maxSteps: number,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+    usageTotal: ChatCompletionUsage,
+  ): Promise<string> {
+    const toolDefinitions = tools.map((tool) => this.toolDefinitionToChatTool(tool));
+    const toolMap = new Map<string, ToolDefinition>();
+    for (const tool of tools) {
+      toolMap.set(tool.name, tool);
+      toolMap.set(tool.id, tool);
+    }
+
+    const messages: ChatMessage[] = [...baseRequest.messages];
+    const rounds = Math.max(1, Math.min(10, maxSteps || 6));
+
+    for (let round = 1; round <= rounds; round += 1) {
+      const request: ChatCompletionRequest = {
+        ...baseRequest,
+        messages,
+        tools: toolDefinitions,
+        tool_choice: 'auto',
+        stream: false,
+      };
+      const completion = await this.chatService.createCompletion(request);
+      const usage = this.usageForCompletion(request, completion.usage);
+      await this.billingService.chargeForCompletion(userId, request, usage, 'agent');
+      this.addUsage(usageTotal, usage);
+
+      const message = completion.choices?.[0]?.message;
+      const toolCalls = message?.tool_calls ?? [];
+      const content = message?.content ?? '';
+      if (toolCalls.length === 0) {
+        return content || '模型未返回工具调用或文本内容。';
+      }
+
+      messages.push({
+        role: 'assistant',
+        content,
+        tool_calls: toolCalls,
+      });
+
+      for (const call of toolCalls) {
+        const result = await this.executeHarnessToolCall(userId, agent, runId, call, toolMap, round, insertAndEmit);
+        messages.push({
+          role: 'tool',
+          name: result.tool?.name || call.function.name,
+          tool_call_id: call.id,
+          content: result.output || result.error || '',
+        });
+      }
+    }
+
+    const finalRequest: ChatCompletionRequest = {
+      ...baseRequest,
+      messages: [
+        ...messages,
+        {
+          role: 'system',
+          content: '已达到工具调用最大轮数。请基于已有工具结果输出最终答复；如果仍缺信息，请说明限制。',
+        },
+      ],
+      tools: undefined,
+      tool_choice: 'none',
+      stream: false,
+    };
+    const completion = await this.chatService.createCompletion(finalRequest);
+    const usage = this.usageForCompletion(finalRequest, completion.usage);
+    await this.billingService.chargeForCompletion(userId, finalRequest, usage, 'agent');
+    this.addUsage(usageTotal, usage);
+    return completion.choices?.[0]?.message?.content || '已达到最大工具调用轮数，但模型未返回最终文本。';
+  }
+
+  private toolDefinitionToChatTool(tool: ToolDefinition): ChatToolDefinition {
+    return {
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description || tool.displayName || tool.name,
+        parameters: this.normalizeToolParameters(tool.schema),
+      },
+    };
+  }
+
+  private normalizeToolParameters(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema) || Object.keys(schema).length === 0) {
+      return { type: 'object', properties: {} };
+    }
+    return schema;
+  }
+
+  private async executeHarnessToolCall(
+    userId: string,
+    agent: AgentDefinition,
+    runId: string,
+    call: HarnessToolCall,
+    toolMap: Map<string, ToolDefinition>,
+    round: number,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+  ): Promise<HarnessToolResult> {
+    const functionName = call.function?.name || '';
+    const tool = toolMap.get(functionName) ?? null;
+    const parsedArgs = this.parseToolCallArguments(call.function?.arguments ?? '{}');
+    const startedAt = this.databaseService.now();
+    const started = Date.now();
+
+    if (!tool) {
+      const error = `工具不可用或未授权: ${functionName || 'unknown'}`;
+      await this.recordHarnessToolCall(call, null, {}, 'failed', '', error, round, startedAt, 0, insertAndEmit);
+      return { call, tool: null, args: {}, output: '', error, status: 'failed' };
+    }
+
+    if (parsedArgs.error) {
+      await this.recordHarnessToolCall(call, tool, {}, 'failed', '', parsedArgs.error, round, startedAt, 0, insertAndEmit);
+      return { call, tool, args: {}, output: '', error: parsedArgs.error, status: 'failed' };
+    }
+
+    const args = parsedArgs.args;
+    const result = await this.toolsService.invoke(userId, tool.id, args, { agentId: agent.id, runId });
+    await this.recordHarnessToolCall(
+      call,
+      tool,
+      args,
+      result.status,
+      result.output,
+      result.error,
+      round,
+      startedAt,
+      Date.now() - started,
+      insertAndEmit,
+    );
+    return { call, tool, args, output: result.output, error: result.error, status: result.status };
+  }
+
+  private parseToolCallArguments(raw: string): { args: Record<string, unknown>; error?: string } {
+    if (!raw.trim()) return { args: {} };
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { args: {}, error: '工具参数必须是 JSON object' };
+      }
+      return { args: parsed as Record<string, unknown> };
+    } catch (error) {
+      return { args: {}, error: `工具参数 JSON 解析失败: ${this.errorMessage(error)}` };
+    }
+  }
+
+  private async recordHarnessToolCall(
+    call: HarnessToolCall,
+    tool: ToolDefinition | null,
+    args: Record<string, unknown>,
+    status: 'succeeded' | 'failed',
+    output: string,
+    error: string,
+    round: number,
+    startedAt: string,
+    latencyMs: number,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+  ): Promise<void> {
+    const toolName = tool?.name || call.function?.name || 'unknown';
+    await insertAndEmit({
+      stepType: 'tool_call',
+      name: `工具调用：${tool?.displayName || toolName}`,
+      status,
+      input: JSON.stringify(args, null, 2),
+      output,
+      error,
+      startedAt,
+      endedAt: this.databaseService.now(),
+      latencyMs,
+      metadata: JSON.stringify({
+        toolId: tool?.id || '',
+        toolName,
+        functionCallId: call.id,
+        round,
+        graphNode: 'harness_tool',
+        toolUseHarness: true,
+        fallbackReason: status === 'failed' ? error : '',
+      }),
+    });
+    const observation = `${toolName} ${status}: ${output || error}`;
+    await insertAndEmit({
+      stepType: 'observation',
+      name: '工具观察',
+      status,
+      input: toolName,
+      output: observation,
+      error,
+      startedAt: this.databaseService.now(),
+      endedAt: this.databaseService.now(),
+      latencyMs: 0,
+      metadata: JSON.stringify({
+        round,
+        graphNode: 'harness_observe',
+        functionCallId: call.id,
+        toolUseHarness: true,
+      }),
+    });
   }
 
   private async applySmartMemory(

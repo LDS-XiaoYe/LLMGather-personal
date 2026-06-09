@@ -53,6 +53,17 @@ const agentTraceStageGroups = bind(app, 'agentTraceStageGroups');
 const agentTraceLatencyMax = bind(app, 'agentTraceLatencyMax');
 const agentFailedTraceSteps = bind(app, 'agentFailedTraceSteps');
 const agentSlowTraceSteps = bind(app, 'agentSlowTraceSteps');
+const agentExecutionTraceFlow = bind(app, 'agentExecutionTraceFlow');
+const agentTraceSnapshot = bind(app, 'agentTraceSnapshot');
+const agentTraceDebuggerState = bind(app, 'agentTraceDebuggerState');
+const agentComparativeReplay = bind(app, 'agentComparativeReplay');
+const agentHarnessMetrics = bind(app, 'agentHarnessMetrics');
+const agentHarnessDatasetTypes = bind(app, 'agentHarnessDatasetTypes');
+const agentHarnessScenarios = bind(app, 'agentHarnessScenarios');
+const activeHarnessRunMetrics = bind(app, 'activeHarnessRunMetrics');
+const getHarnessExpectedTool = bind(app, 'getHarnessExpectedTool');
+const skillMarketStats = bind(app, 'skillMarketStats');
+const skillMarketRows = bind(app, 'skillMarketRows');
 const agentContextSourceSummary = bind(app, 'agentContextSourceSummary');
 const filteredAgentRuns = bind(app, 'filteredAgentRuns');
 const agentWorkspaceMode = bind(app, 'agentWorkspaceMode');
@@ -204,6 +215,11 @@ const openAgentRunTrace = bind(app, 'openAgentRunTrace');
 const selectAgentTraceStep = bind(app, 'selectAgentTraceStep');
 const setAgentTraceReplayIndex = bind(app, 'setAgentTraceReplayIndex');
 const toggleAgentTraceReplay = bind(app, 'toggleAgentTraceReplay');
+const pauseAgentTraceReplay = bind(app, 'pauseAgentTraceReplay');
+const resumeAgentTraceReplay = bind(app, 'resumeAgentTraceReplay');
+const stepIntoAgentTrace = bind(app, 'stepIntoAgentTrace');
+const stepOverAgentTrace = bind(app, 'stepOverAgentTrace');
+const restartAgentFromTraceNode = bind(app, 'restartAgentFromTraceNode');
 const agentRunTagType = bind(app, 'agentRunTagType');
 const agentEvalTagType = bind(app, 'agentEvalTagType');
 const evaluateActiveAgentRun = bind(app, 'evaluateActiveAgentRun');
@@ -1412,6 +1428,17 @@ const chatModels = bind(app, 'chatModels');
                   <el-select v-model="activeTestSuiteId" placeholder="选择测试集" filterable style="width:100%">
                     <el-option v-for="suite in agentTestSuites" :key="suite.id" :label="`${suite.name} (${suite.caseCount})`" :value="suite.id" />
                   </el-select>
+                  <div class="harness-dataset-grid">
+                    <div v-for="dataset in agentHarnessDatasetTypes" :key="dataset.id" class="harness-dataset-card">
+                      <span>{{ dataset.label }}</span>
+                      <strong>{{ dataset.count }}</strong>
+                    </div>
+                  </div>
+                  <div class="harness-scenario-strip">
+                    <el-tag v-for="scenario in agentHarnessScenarios" :key="scenario.id" size="small" :type="scenario.count ? 'success' : 'info'">
+                      {{ scenario.label }} · {{ scenario.count }}
+                    </el-tag>
+                  </div>
                   <div class="agent-test-eval-controls">
                     <el-segmented
                       v-model="evaluationForm.mode"
@@ -1446,6 +1473,12 @@ const chatModels = bind(app, 'chatModels');
                   </div>
                   <div v-if="activeTestRun" class="agent-resource-item">
                     <div class="agent-resource-title">回归结果</div>
+                    <div class="harness-run-metrics">
+                      <div><span>Success Rate</span><strong>{{ activeHarnessRunMetrics.successRate }}%</strong></div>
+                      <div><span>Accuracy</span><strong>{{ activeHarnessRunMetrics.accuracy }}</strong></div>
+                      <div><span>Cost</span><strong>¥{{ activeHarnessRunMetrics.cost.toFixed(4) }}</strong></div>
+                      <div><span>Latency</span><strong>{{ activeHarnessRunMetrics.latency }} ms</strong></div>
+                    </div>
                     <div class="agent-run-meta">
                       <el-tag size="small" :type="agentRunTagType(activeTestRun.status)">{{ activeTestRun.status }}</el-tag>
                       <el-tag size="small" type="info">平均 {{ activeTestRun.summary?.averageScore ?? 0 }}</el-tag>
@@ -1467,8 +1500,16 @@ const chatModels = bind(app, 'chatModels');
                     </div>
                   </div>
                   <div v-for="testCase in agentTestCases" :key="testCase.id" class="agent-resource-item">
-                    <div class="agent-resource-title">{{ testCase.name }}</div>
-                    <div class="agent-resource-content">{{ testCase.input }}</div>
+                    <div class="agent-resource-title">
+                      <span>{{ testCase.name }}</span>
+                      <el-tag size="small" type="info">Harness Case</el-tag>
+                    </div>
+                    <div class="harness-case-schema">
+                      <div><strong>input</strong><span>{{ testCase.input }}</span></div>
+                      <div><strong>expected_output</strong><span>{{ testCase.expectedOutput || '未设置' }}</span></div>
+                      <div><strong>expected_tool</strong><span>{{ getHarnessExpectedTool(testCase) }}</span></div>
+                      <div><strong>expected_behavior</strong><span>{{ testCase.rubric || '未设置' }}</span></div>
+                    </div>
                   </div>
                 </div>
 
@@ -1528,7 +1569,7 @@ const chatModels = bind(app, 'chatModels');
                     <el-input v-model="testSuiteForm.name" placeholder="例如：客服回复回归集" maxlength="120" />
                   </el-form-item>
                   <el-form-item label="描述">
-                    <el-input v-model="testSuiteForm.description" type="textarea" :rows="3" resize="vertical" placeholder="测试集覆盖范围" />
+                    <el-input v-model="testSuiteForm.description" type="textarea" :rows="3" resize="vertical" placeholder="Dataset: Manual / Production / Synthetic；覆盖 RAG、Tool Use、Coding、Browser Use、Multi-Agent、Customer Support 等场景" />
                   </el-form-item>
                 </el-form>
                 <template #footer>
@@ -1554,8 +1595,8 @@ const chatModels = bind(app, 'chatModels');
                   <el-form-item label="期望输出">
                     <el-input v-model="testCaseForm.expectedOutput" type="textarea" :rows="3" resize="vertical" placeholder="期望包含的回答或结果" />
                   </el-form-item>
-                  <el-form-item label="评分 Rubric">
-                    <el-input v-model="testCaseForm.rubric" type="textarea" :rows="3" resize="vertical" placeholder="可选：说明通过标准" />
+                  <el-form-item label="评分 Rubric / expected_tool / expected_behavior">
+                    <el-input v-model="testCaseForm.rubric" type="textarea" :rows="4" resize="vertical" placeholder="Scenario: Tool Use&#10;expected_tool: calculator&#10;expected_behavior: 必须调用工具并解释结果" />
                   </el-form-item>
                 </el-form>
                 <template #footer>
@@ -1996,33 +2037,52 @@ const chatModels = bind(app, 'chatModels');
                   <div class="marketplace-header">
                     <div class="marketplace-title">
                       <strong>Skill 能力包市场</strong>
-                      <span>浏览和使用预设的能力包，快速增强 Agent 能力。</span>
+                      <span>按完整度、绑定状态和风险快速挑选能力包，支持预览、测试、导出和绑定。</span>
                     </div>
                     <el-button size="small" @click="agentPageTab = 'capabilities'">
                       管理 Skills
                     </el-button>
                   </div>
 
+                  <div class="skill-market-overview">
+                    <div><span>Total</span><strong>{{ skillMarketStats.total }}</strong></div>
+                    <div><span>Builtin</span><strong>{{ skillMarketStats.builtin }}</strong></div>
+                    <div><span>Custom</span><strong>{{ skillMarketStats.custom }}</strong></div>
+                    <div><span>Bound</span><strong>{{ skillMarketStats.bound }}</strong></div>
+                  </div>
+
                   <div class="skill-market-grid">
-                    <div v-for="skill in availableSkills" :key="skill.id" class="skill-market-card" @click="previewSkill(skill)">
+                    <div v-for="skill in skillMarketRows" :key="skill.id" class="skill-market-card enhanced" @click="previewSkill(skill)">
                       <div class="skill-market-card-header">
                         <strong>{{ skill.name }}</strong>
-                        <el-tag size="small" :type="skill.source === 'builtin' ? 'success' : 'primary'">
-                          {{ skill.source === 'builtin' ? '平台内置' : '自定义' }}
-                        </el-tag>
+                        <div>
+                          <el-tag v-if="skill.bound" size="small" type="success">已绑定</el-tag>
+                          <el-tag size="small" :type="skill.source === 'builtin' ? 'success' : 'primary'">
+                            {{ skill.source === 'builtin' ? '平台内置' : '自定义' }}
+                          </el-tag>
+                        </div>
                       </div>
                       <p class="skill-market-card-desc">{{ skill.description || skill.content?.slice(0, 100) || '暂无描述' }}</p>
                       <div class="skill-market-card-meta">
                         <el-tag size="small" :type="skillRiskTagType(skill.riskLevel)">{{ skill.riskLevel }}</el-tag>
                         <span class="skill-meta-text">{{ skill.category }} · v{{ skill.version }}</span>
                       </div>
+                      <div class="skill-quality-bar">
+                        <span :style="{ width: `${skill.qualityScore}%` }"></span>
+                      </div>
+                      <div class="skill-market-capabilities">
+                        <el-tag size="small" :type="skill.exampleInput ? 'success' : 'info'">Example</el-tag>
+                        <el-tag size="small" :type="skill.inputSchema ? 'success' : 'info'">Input Schema</el-tag>
+                        <el-tag size="small" :type="skill.outputSchema ? 'success' : 'info'">Output Schema</el-tag>
+                      </div>
                       <div class="skill-market-card-actions">
                         <el-button size="small" text type="primary" @click.stop="previewSkill(skill)">预览</el-button>
+                        <el-button size="small" text @click.stop="previewSkill(skill); skillTestInput = skill.exampleInput || '请用真实任务测试这个 Skill。'">测试</el-button>
                         <el-button size="small" text @click.stop="exportSkillAsMarkdown(skill)">导出</el-button>
                         <el-button size="small" text type="success" @click.stop="bindSkillToCurrentAgent(skill)">绑定</el-button>
                       </div>
                     </div>
-                    <el-empty v-if="availableSkills.length === 0" description="暂无 Skills" :image-size="72" />
+                    <el-empty v-if="skillMarketRows.length === 0" description="暂无 Skills" :image-size="72" />
                   </div>
                 </div>
               </div>
@@ -2097,32 +2157,28 @@ const chatModels = bind(app, 'chatModels');
                 </template>
 
                 <div class="agent-invoke-console">
-                  <aside class="agent-invoke-sidebar">
-                    <div class="agent-invoke-card agent-profile-card">
-                      <div class="agent-profile-top">
-                        <el-avatar :size="40" :style="{ backgroundColor: '#2563eb' }">
-                          {{ agentForm.name ? agentForm.name.charAt(0).toUpperCase() : 'A' }}
-                        </el-avatar>
-                        <div>
-                          <strong>{{ agentForm.name || '未命名 Agent' }}</strong>
-                          <span>{{ agentForm.model || '未选择模型' }}</span>
-                        </div>
-                      </div>
-                      <p>{{ agentForm.description || '暂无描述' }}</p>
-                      <div class="agent-capability-strip">
-                        <el-tag size="small" type="info">{{ agentForm.toolIds.length }} Tools</el-tag>
-                        <el-tag size="small" type="info">{{ agentForm.knowledgeBaseIds.length }} KB</el-tag>
-                        <el-tag size="small" type="info">{{ agentForm.skillIds.length }} Skills</el-tag>
-                        <el-tag size="small" :type="agentForm.memoryEnabled ? 'success' : 'info'">Memory</el-tag>
+                  <section class="agent-invoke-statusbar">
+                    <div class="agent-profile-top compact">
+                      <el-avatar :size="32" class="agent-avatar" :style="{ backgroundColor: '#2563eb', lineHeight: '32px'}">
+                  {{ agentForm.name ? agentForm.name.charAt(0).toUpperCase() : 'A' }}
+                      </el-avatar>
+                      <div>
+                        <strong>{{ agentForm.name || '未命名 Agent' }}</strong>
+                        <span>{{ agentForm.model || '未选择模型' }}</span>
                       </div>
                     </div>
-
-                    <div class="agent-invoke-card">
-                      <div class="agent-section-title">运行参数</div>
-                      <label class="agent-setting-field">
-                        <span>运行模式</span>
+                    <div class="agent-capability-strip compact">
+                      <el-tag size="small" type="info">{{ agentForm.toolIds.length }} Tools</el-tag>
+                      <el-tag size="small" type="info">{{ agentForm.knowledgeBaseIds.length }} KB</el-tag>
+                      <el-tag size="small" type="info">{{ agentForm.skillIds.length }} Skills</el-tag>
+                      <el-tag size="small" :type="agentForm.memoryEnabled ? 'success' : 'info'">Memory</el-tag>
+                    </div>
+                    <div class="agent-run-settings-compact">
+                      <label>
+                        <span>模式</span>
                         <el-segmented
                           v-model="agentInvokeMode"
+                          size="small"
                           :options="[
                             { label: '标准', value: 'standard' },
                             { label: '反思', value: 'reflective' },
@@ -2130,8 +2186,8 @@ const chatModels = bind(app, 'chatModels');
                           ]"
                         />
                       </label>
-                      <label class="agent-setting-field">
-                        <span>上下文策略</span>
+                      <label>
+                        <span>上下文</span>
                         <el-select v-model="agentContextStrategy" size="small">
                           <el-option label="均衡" value="balanced" />
                           <el-option label="知识优先" value="knowledge_first" />
@@ -2139,12 +2195,8 @@ const chatModels = bind(app, 'chatModels');
                           <el-option label="最小上下文" value="minimal" />
                         </el-select>
                       </label>
-                      <label class="agent-setting-field">
-                        <span>最大步骤：{{ agentInvokeMaxSteps }}</span>
-                        <el-slider v-model="agentInvokeMaxSteps" :min="1" :max="10" :step="1" :show-tooltip="false" />
-                      </label>
                     </div>
-                  </aside>
+                  </section>
 
                   <main class="agent-invoke-main">
                     <section class="agent-compose-panel">
@@ -2154,9 +2206,9 @@ const chatModels = bind(app, 'chatModels');
                           <span>{{ agentForm.id ? `Agent ID: ${agentForm.id}` : '首次运行前会先保存 Agent' }}</span>
                         </div>
                         <div class="agent-compose-actions">
-                          <el-button size="small" text @click="fillAgentPromptExample()">示例</el-button>
-                          <el-button size="small" text :disabled="!agentPrompt && !agentImageUrlInput" @click="clearAgentPrompt()">清空</el-button>
-                          <el-button size="small" text :disabled="!agentLastPrompt && !activeAgentRun" @click="rerunLastAgentPrompt()">重跑</el-button>
+                          <el-button size="small" plain @click="fillAgentPromptExample()">示例</el-button>
+                          <el-button size="small" plain :disabled="!agentPrompt && !agentImageUrlInput" @click="clearAgentPrompt()">清空</el-button>
+                          <el-button size="small" plain :disabled="!agentLastPrompt && !activeAgentRun" @click="rerunLastAgentPrompt()">重跑</el-button>
                           <el-button v-if="agentRunning" size="small" type="danger" plain @click="stopCurrentAgentRun()">停止</el-button>
                         </div>
                       </div>
@@ -2173,7 +2225,7 @@ const chatModels = bind(app, 'chatModels');
                         @compositionend="isComposing = false"
                       />
                       <div class="agent-multimodal-toggle">
-                        <el-button size="small" text @click="agentImageInputOpen = !agentImageInputOpen">
+                        <el-button size="small" plain @click="agentImageInputOpen = !agentImageInputOpen">
                           {{ agentImageInputOpen ? '收起多模态输入' : '添加图片 URL' }}
                         </el-button>
                         <span v-if="agentImageUrlInput.trim()">已填写图片输入</span>
@@ -2217,9 +2269,9 @@ const chatModels = bind(app, 'chatModels');
                           </div>
                         </div>
                         <div class="agent-output-actions">
-                          <el-button size="small" text :disabled="!activeAgentRun?.output" @click="copyActiveAgentOutput()">复制输出</el-button>
-                          <el-button size="small" text :disabled="!activeAgentRun" @click="showEvaluationDialog = true">评测</el-button>
-                          <el-button size="small" text :disabled="!activeAgentRun?.output" @click="createTestCaseFromActiveRun()">创建用例</el-button>
+                          <el-button size="small" plain :disabled="!activeAgentRun?.output" @click="copyActiveAgentOutput()">复制输出</el-button>
+                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun" @click="showEvaluationDialog = true">评测</el-button>
+                          <el-button size="small" plain :disabled="!activeAgentRun?.output" @click="createTestCaseFromActiveRun()">创建用例</el-button>
                         </div>
                       </div>
                       <el-alert
@@ -2237,6 +2289,21 @@ const chatModels = bind(app, 'chatModels');
                   </main>
 
                   <aside class="agent-invoke-inspector">
+                    <div
+                      class="agent-run-state-banner"
+                      :class="activeAgentRun?.status || (agentRunning ? 'running' : 'idle')"
+                    >
+                      <div>
+                        <span>Run Status</span>
+                        <strong>{{ activeAgentRun?.status || (agentRunning ? 'running' : 'idle') }}</strong>
+                      </div>
+                      <div class="agent-run-state-meta">
+                        <el-tag size="small" :type="agentRunTagType(activeAgentRun?.status || (agentRunning ? 'running' : ''))">
+                          {{ activeAgentRun?.steps.length || 0 }} steps
+                        </el-tag>
+                        <el-tag size="small" type="info">{{ activeAgentRun?.latencyMs || 0 }} ms</el-tag>
+                      </div>
+                    </div>
                     <el-tabs v-model="agentInvokePanelTab" stretch>
                       <el-tab-pane label="诊断" name="diagnosis">
                         <div class="agent-diagnosis-grid">
@@ -2342,10 +2409,47 @@ const chatModels = bind(app, 'chatModels');
                       </el-tab-pane>
 
                       <el-tab-pane label="Trace" name="trace">
-                        <div class="agent-trace-controlbar compact">
-                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun?.steps.length" @click="toggleAgentTraceReplay()">
-                            {{ agentTraceReplayPlaying ? '暂停' : '播放' }}
-                          </el-button>
+                        <div class="agent-trace-metrics">
+                          <div>
+                            <span>Cost</span>
+                            <strong>¥{{ agentHarnessMetrics.cost.toFixed(4) }}</strong>
+                          </div>
+                          <div>
+                            <span>Latency</span>
+                            <strong>{{ agentHarnessMetrics.latency }} ms</strong>
+                          </div>
+                          <div>
+                            <span>Success Rate</span>
+                            <strong>{{ agentHarnessMetrics.successRate }}%</strong>
+                          </div>
+                          <div>
+                            <span>Avg Tokens</span>
+                            <strong>{{ agentHarnessMetrics.averageTokens }}</strong>
+                          </div>
+                        </div>
+
+                        <div class="execution-trace-flow">
+                          <button
+                            v-for="stage in agentExecutionTraceFlow"
+                            :key="stage.id"
+                            type="button"
+                            class="execution-trace-node"
+                            :class="[stage.status, { active: activeAgentTraceStep?.id === stage.step?.id }]"
+                            @click="stage.step && selectAgentTraceStep(stage.step.id)"
+                          >
+                            <span>{{ stage.label }}</span>
+                            <strong>{{ stage.title }}</strong>
+                            <small>{{ stage.latencyMs }} ms · {{ stage.status }}</small>
+                            <p>{{ stage.detail }}</p>
+                          </button>
+                        </div>
+
+                        <div class="agent-trace-controlbar compact debugger">
+                          <el-button size="small" :disabled="!activeAgentRun?.steps.length" @click="pauseAgentTraceReplay()">Pause</el-button>
+                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun?.steps.length" @click="resumeAgentTraceReplay()">Resume</el-button>
+                          <el-button size="small" :disabled="!agentTraceDebuggerState.canStepInto" @click="stepIntoAgentTrace()">Step Into</el-button>
+                          <el-button size="small" :disabled="!agentTraceDebuggerState.canStepOver" @click="stepOverAgentTrace()">Step Over</el-button>
+                          <el-button size="small" type="warning" plain :disabled="!agentTraceDebuggerState.canRestartFromNode" @click="restartAgentFromTraceNode()">Restart From Node</el-button>
                           <el-slider
                             class="agent-trace-slider"
                             :model-value="agentTraceReplayIndex"
@@ -2357,23 +2461,72 @@ const chatModels = bind(app, 'chatModels');
                           />
                           <span>{{ agentTraceReplayIndex + 1 }} / {{ activeAgentRun?.steps.length || 1 }}</span>
                         </div>
-                        <div v-if="agentTraceStageGroups.length" class="agent-stage-grid invoke">
-                          <div v-for="stage in agentTraceStageGroups" :key="stage.id" class="agent-stage-column">
-                            <div class="agent-stage-title">{{ stage.label }}</div>
-                            <button
-                              v-for="node in stage.nodes"
-                              :key="node.id"
-                              type="button"
-                              class="trace-node"
-                              :class="[node.status, { active: node.active }]"
-                              @click="selectAgentTraceStep(Number(node.id))"
-                            >
-                              <span>{{ node.label }}</span>
-                              <small>{{ node.type }} · {{ node.latencyMs }} ms</small>
-                            </button>
+
+                        <div class="agent-debug-grid">
+                          <div v-if="agentTraceStageGroups.length" class="agent-stage-grid invoke">
+                            <div v-for="stage in agentTraceStageGroups" :key="stage.id" class="agent-stage-column">
+                              <div class="agent-stage-title">{{ stage.label }}</div>
+                              <button
+                                v-for="node in stage.nodes"
+                                :key="node.id"
+                                type="button"
+                                class="trace-node"
+                                :class="[node.status, { active: node.active }]"
+                                @click="selectAgentTraceStep(Number(node.id))"
+                              >
+                                <span>{{ node.label }}</span>
+                                <small>{{ node.type }} · {{ node.latencyMs }} ms</small>
+                              </button>
+                            </div>
+                          </div>
+                          <div class="agent-snapshot-panel">
+                            <div class="agent-section-title">Snapshot</div>
+                            <el-descriptions :column="1" border size="small">
+                              <el-descriptions-item label="Model">{{ agentTraceSnapshot.model || '-' }}</el-descriptions-item>
+                              <el-descriptions-item label="Parameters">{{ JSON.stringify(agentTraceSnapshot.parameters) }}</el-descriptions-item>
+                            </el-descriptions>
+                            <div class="snapshot-block">
+                              <strong>Prompt</strong>
+                              <pre>{{ agentTraceSnapshot.prompt || '无' }}</pre>
+                            </div>
+                            <div class="snapshot-block">
+                              <strong>Messages</strong>
+                              <pre>{{ JSON.stringify(agentTraceSnapshot.messages, null, 2) }}</pre>
+                            </div>
+                            <div class="snapshot-block">
+                              <strong>Tool Input / Output</strong>
+                              <pre>{{ JSON.stringify({ input: agentTraceSnapshot.toolInput, output: agentTraceSnapshot.toolOutput }, null, 2) }}</pre>
+                            </div>
+                            <div class="snapshot-block">
+                              <strong>Memory State</strong>
+                              <pre>{{ JSON.stringify(agentTraceSnapshot.memoryState, null, 2) }}</pre>
+                            </div>
                           </div>
                         </div>
-                        <el-empty v-else description="暂无 Trace 节点" :image-size="72" />
+
+                        <div class="comparative-replay-panel">
+                          <div class="agent-section-title">Comparative Replay</div>
+                          <div class="replay-diff-grid">
+                            <div>
+                              <span>Prompt Diff</span>
+                              <pre>{{ JSON.stringify(agentComparativeReplay.promptDiff, null, 2) }}</pre>
+                            </div>
+                            <div>
+                              <span>Model Diff</span>
+                              <pre>{{ JSON.stringify(agentComparativeReplay.modelDiff, null, 2) }}</pre>
+                            </div>
+                            <div>
+                              <span>Skill Diff</span>
+                              <pre>{{ JSON.stringify(agentComparativeReplay.skillDiff, null, 2) }}</pre>
+                            </div>
+                            <div>
+                              <span>Workflow Diff</span>
+                              <pre>{{ JSON.stringify(agentComparativeReplay.workflowDiff, null, 2) }}</pre>
+                            </div>
+                          </div>
+                        </div>
+
+                        <el-empty v-if="!agentTraceStageGroups.length" description="暂无 Trace 节点" :image-size="72" />
                       </el-tab-pane>
 
                       <el-tab-pane label="历史" name="history">
@@ -2432,7 +2585,7 @@ const chatModels = bind(app, 'chatModels');
                           <strong>Metadata</strong>
                           <pre class="agent-step-meta">{{ formatStepMetadata(activeAgentTraceStep.metadata) }}</pre>
                         </div>
-                        <el-button size="small" text @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
+                        <el-button size="small" plain @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
                       </template>
                       <el-empty v-else description="暂无 Step" :image-size="72" />
                     </div>

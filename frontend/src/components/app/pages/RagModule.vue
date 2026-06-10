@@ -152,7 +152,7 @@ function formatSize(size: number) {
                   </el-button>
                 </el-upload>
                 <el-button type="primary" :loading="knowledgeDocSaving" :disabled="!knowledgeDocForm.kbId || !knowledgeDocForm.title.trim() || !knowledgeDocForm.content.trim()" @click="addDocumentToKnowledgeBase()">
-                  写入向量化
+                  写入
                 </el-button>
               </div>
               <el-input v-model="knowledgeDocForm.content" type="textarea" :rows="5" resize="vertical" placeholder="粘贴文档内容，或上传文件自动解析..." />
@@ -162,7 +162,7 @@ function formatSize(size: number) {
 
             <div class="rag-upload-row">
               <el-input v-model="knowledgeContentSearch" clearable placeholder="搜索知识库文档" style="max-width: 320px" @keyup.enter="loadKnowledgeDocuments(knowledgeDocForm.kbId)" />
-              <el-button :loading="knowledgeDocumentLoading" :disabled="!knowledgeDocForm.kbId" @click="loadKnowledgeDocuments(knowledgeDocForm.kbId)">搜索 / 刷新</el-button>
+              <el-button :loading="knowledgeDocumentLoading" :disabled="!knowledgeDocForm.kbId" @click="loadKnowledgeDocuments(knowledgeDocForm.kbId)">搜索</el-button>
             </div>
 
             <el-table :data="knowledgeDocuments" v-loading="knowledgeDocumentLoading" style="width:100%" empty-text="暂无知识库文档">
@@ -178,11 +178,11 @@ function formatSize(size: number) {
                 </template>
               </el-table-column>
               <el-table-column label="解析状态" width="110">
-                <template #default="{ row }"><el-tag size="small" :type="row.parseStatus === 'succeeded' ? 'success' : 'warning'">{{ row.parseStatus || 'succeeded' }}</el-tag></template>
+                <template #default="{ row }"><el-tag size="small" :type="row.parseStatus === 'succeeded' ? 'success' : 'warning'">{{ row.parseStatus === 'succeeded' ? '成功' : row.parseStatus}}</el-tag></template>
               </el-table-column>
               <el-table-column label="Chunks" prop="chunkCount" width="90" />
               <el-table-column label="向量化" width="110">
-                <template #default="{ row }"><el-tag size="small" :type="row.vectorStatus === 'succeeded' ? 'success' : 'info'">{{ row.vectorStatus || 'succeeded' }}</el-tag></template>
+                <template #default="{ row }"><el-tag size="small" :type="row.vectorStatus === 'succeeded' ? 'success' : 'info'">{{ row.vectorStatus === 'succeeded' ? '成功' : row.vectorStatus}}</el-tag></template>
               </el-table-column>
               <el-table-column label="失败原因" min-width="120">
                 <template #default="{ row }">{{ row.failureReason || '-' }}</template>
@@ -224,7 +224,7 @@ function formatSize(size: number) {
               <div v-for="kb in knowledgeBases" :key="kb.id" class="agent-resource-item" :class="{ active: knowledgeDocForm.kbId === kb.id }" @click="knowledgeDocForm.kbId = kb.id">
                 <div class="agent-resource-title">
                   <span>{{ kb.name }}</span>
-                  <el-tag size="small" type="success">ready</el-tag>
+                  <el-tag size="small" type="success">就绪</el-tag>
                 </div>
                 <div class="agent-resource-meta">{{ kb.documentCount }} docs · {{ kb.chunkCount }} chunks</div>
                 <div class="agent-resource-content">{{ kb.description || '暂无描述' }}</div>

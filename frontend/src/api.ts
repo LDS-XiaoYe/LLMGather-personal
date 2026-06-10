@@ -1006,6 +1006,32 @@ export interface KnowledgeDocumentResult {
   chunkCount: number;
 }
 
+export interface KnowledgeDocument {
+  id: string;
+  kbId: string;
+  title: string;
+  fileType: string;
+  parseStatus: string;
+  vectorStatus: string;
+  failureReason: string;
+  content: string;
+  preview?: string;
+  createdAt: string;
+  updatedAt: string;
+  chunkCount: number;
+}
+
+export interface KnowledgeChunk {
+  id: string;
+  kbId: string;
+  documentId: string;
+  chunkIndex: number;
+  content: string;
+  tokenEstimate: number;
+  vectorStatus: string;
+  createdAt: string;
+}
+
 export interface KnowledgeSearchResult {
   id: string;
   kbId: string;
@@ -1013,6 +1039,23 @@ export interface KnowledgeSearchResult {
   title: string;
   content: string;
   score: number;
+}
+
+export interface UserLibraryFile {
+  id: string;
+  userId: string;
+  filename: string;
+  fileType: string;
+  mimeType: string;
+  source: 'user_upload' | 'agent_generated' | 'conversation_attachment' | 'intermediate' | string;
+  kbStatus: 'not_added' | 'added' | string;
+  fileSize: number;
+  preview?: string;
+  fileBase64?: string;
+  parsedContent?: string;
+  knowledgeDocumentId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MemoryItem {
@@ -1617,6 +1660,132 @@ export async function addKnowledgeDocument(
   if (!response.ok) throw new Error(await readError(response));
   const data = (await response.json()) as { data: KnowledgeDocumentResult };
   return data.data;
+}
+
+export async function fetchKnowledgeDocuments(
+  kbId: string,
+  query = '',
+  baseUrl = defaultBaseUrl,
+): Promise<KnowledgeDocument[]> {
+  const params = query ? `?query=${encodeURIComponent(query)}` : '';
+  const response = await fetch(`${baseUrl}/knowledge/bases/${encodeURIComponent(kbId)}/documents${params}`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: KnowledgeDocument[] };
+  return payload.data ?? [];
+}
+
+export async function fetchKnowledgeDocumentDetail(
+  docId: string,
+  baseUrl = defaultBaseUrl,
+): Promise<KnowledgeDocument & { chunks: KnowledgeChunk[] }> {
+  const response = await fetch(`${baseUrl}/knowledge/documents/${encodeURIComponent(docId)}/detail`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: KnowledgeDocument & { chunks: KnowledgeChunk[] } };
+  return payload.data;
+}
+
+export async function deleteKnowledgeDocument(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/knowledge/documents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function reparseKnowledgeDocument(id: string, baseUrl = defaultBaseUrl): Promise<KnowledgeDocumentResult> {
+  const response = await fetch(`${baseUrl}/knowledge/documents/${encodeURIComponent(id)}/reparse`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: KnowledgeDocumentResult };
+  return payload.data;
+}
+
+export async function parseKnowledgeFile(
+  payload: { file: string; filename: string },
+  baseUrl = defaultBaseUrl,
+): Promise<{ content: string }> {
+  const response = await fetch(`${baseUrl}/knowledge/parse-file`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: { content: string } };
+  return data.data;
+}
+
+export async function fetchUserLibraryFiles(
+  filters: { query?: string; fileType?: string; source?: string; kbStatus?: string } = {},
+  baseUrl = defaultBaseUrl,
+): Promise<UserLibraryFile[]> {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`${baseUrl}/knowledge/library/files${query}`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: UserLibraryFile[] };
+  return payload.data ?? [];
+}
+
+export async function createUserLibraryFile(
+  payload: { filename: string; fileBase64: string; mimeType?: string; source?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<UserLibraryFile> {
+  const response = await fetch(`${baseUrl}/knowledge/library/files`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: UserLibraryFile };
+  return data.data;
+}
+
+export async function fetchUserLibraryFile(id: string, baseUrl = defaultBaseUrl): Promise<UserLibraryFile> {
+  const response = await fetch(`${baseUrl}/knowledge/library/files/${encodeURIComponent(id)}`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: UserLibraryFile };
+  return payload.data;
+}
+
+export async function renameUserLibraryFile(id: string, filename: string, baseUrl = defaultBaseUrl): Promise<UserLibraryFile> {
+  const response = await fetch(`${baseUrl}/knowledge/library/files/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: buildHeaders(),
+    body: JSON.stringify({ filename }),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: UserLibraryFile };
+  return payload.data;
+}
+
+export async function deleteUserLibraryFile(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/knowledge/library/files/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function addUserLibraryFileToKnowledge(fileId: string, kbId: string, baseUrl = defaultBaseUrl): Promise<KnowledgeDocumentResult> {
+  const response = await fetch(`${baseUrl}/knowledge/library/files/${encodeURIComponent(fileId)}/add-to-knowledge/${encodeURIComponent(kbId)}`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: KnowledgeDocumentResult };
+  return payload.data;
 }
 
 export async function searchKnowledgeBase(

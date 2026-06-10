@@ -456,6 +456,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         kb_id VARCHAR(36) NOT NULL,
         user_id VARCHAR(36) NOT NULL,
         title VARCHAR(191) NOT NULL,
+        file_type VARCHAR(32) NOT NULL DEFAULT 'text',
+        parse_status VARCHAR(24) NOT NULL DEFAULT 'succeeded',
+        vector_status VARCHAR(24) NOT NULL DEFAULT 'succeeded',
+        failure_reason TEXT,
+        source_file_id VARCHAR(36) DEFAULT NULL,
         content LONGTEXT NOT NULL,
         created_at ${ts},
         updated_at ${ts},
@@ -478,6 +483,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         INDEX idx_kb_chunks_kb (kb_id),
         INDEX idx_kb_chunks_doc (document_id),
         FULLTEXT INDEX ft_kb_chunks_content (content)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS user_library_files (
+        id ${pk},
+        user_id VARCHAR(36) NOT NULL,
+        filename VARCHAR(191) NOT NULL,
+        file_type VARCHAR(32) NOT NULL DEFAULT 'unknown',
+        mime_type VARCHAR(191) NOT NULL DEFAULT '',
+        source VARCHAR(32) NOT NULL DEFAULT 'user_upload',
+        kb_status VARCHAR(24) NOT NULL DEFAULT 'not_added',
+        file_size INT NOT NULL DEFAULT 0,
+        file_base64 LONGTEXT NOT NULL,
+        parsed_content LONGTEXT,
+        knowledge_document_id VARCHAR(36) DEFAULT NULL,
+        created_at ${ts},
+        updated_at ${ts},
+        deleted_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_user_library_user (user_id),
+        INDEX idx_user_library_status (kb_status),
+        INDEX idx_user_library_type (file_type)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -647,7 +673,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
-    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
+    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'user_library_files', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
         await this.adapter.exec(
@@ -832,6 +858,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
     } catch {
       // column already exists
+    }
+
+    const knowledgeDocumentColumns = [
+      `ALTER TABLE knowledge_documents ADD COLUMN file_type VARCHAR(32) NOT NULL DEFAULT 'text'`,
+      `ALTER TABLE knowledge_documents ADD COLUMN parse_status VARCHAR(24) NOT NULL DEFAULT 'succeeded'`,
+      `ALTER TABLE knowledge_documents ADD COLUMN vector_status VARCHAR(24) NOT NULL DEFAULT 'succeeded'`,
+      `ALTER TABLE knowledge_documents ADD COLUMN failure_reason TEXT`,
+      `ALTER TABLE knowledge_documents ADD COLUMN source_file_id VARCHAR(36) DEFAULT NULL`,
+    ];
+    for (const sql of knowledgeDocumentColumns) {
+      try {
+        await this.adapter.exec(sql);
+      } catch {
+        // column already exists
+      }
     }
 
     try {

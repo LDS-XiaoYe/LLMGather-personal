@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import { Cpu, ChatDotRound, DataAnalysis, Delete, Document, EditPen, Headset, InfoFilled, Lightning, MoreFilled, Monitor, Picture, PictureFilled, Plus, Promotion, Refresh, Search, Setting, Star, Sunny, SwitchButton, TrendCharts, User, UserFilled, VideoCamera, Coin } from '@element-plus/icons-vue';
+import { Cpu, ChatDotRound, DataAnalysis, Delete, Document, EditPen, Headset, InfoFilled, Lightning, MoreFilled, Monitor, Picture, PictureFilled, Plus, Promotion, Refresh, Search, Setting, Star, Sunny, SwitchButton, TrendCharts, User, UserFilled, VideoCamera, Coin, Upload } from '@element-plus/icons-vue';
 import * as echarts from 'echarts';
 import { useDagNodes } from '../composables/useDagNodes';
 import {
@@ -48,6 +48,10 @@ import {
   fetchConversations,
   fetchDailyUsage,
   fetchKnowledgeBases,
+  fetchKnowledgeDocumentDetail,
+  fetchKnowledgeDocuments as apiFetchKnowledgeDocuments,
+  fetchUserLibraryFile as apiFetchUserLibraryFile,
+  fetchUserLibraryFiles as apiFetchUserLibraryFiles,
   fetchMe,
   fetchMemories,
   fetchModels,
@@ -78,7 +82,11 @@ import {
   runWorkflow as apiRunWorkflow,
   sendVerificationCode,
   searchKnowledgeBase as apiSearchKnowledgeBase,
+  addUserLibraryFileToKnowledge as apiAddUserLibraryFileToKnowledge,
   createRechargeOrder,
+  createUserLibraryFile as apiCreateUserLibraryFile,
+  deleteKnowledgeDocument as apiDeleteKnowledgeDocument,
+  deleteUserLibraryFile as apiDeleteUserLibraryFile,
   fetchRechargeOrders,
   checkRechargeOrder,
   type RechargeOrder,
@@ -109,6 +117,9 @@ import {
   fetchInvitationCode,
   updateSkill as apiUpdateSkill,
   updateAdminSetting,
+  parseKnowledgeFile as apiParseKnowledgeFile,
+  renameUserLibraryFile as apiRenameUserLibraryFile,
+  reparseKnowledgeDocument as apiReparseKnowledgeDocument,
   fetchAdminModelTiers,
   updateAdminModelTiers,
   addModelsToTier,
@@ -145,6 +156,8 @@ import {
   type TierPriceInfo,
   type ModelTiersData,
   type KnowledgeBase,
+  type KnowledgeDocument,
+  type UserLibraryFile,
   type MemoryItem,
   type McpServer,
   type SkillDefinition,
@@ -290,9 +303,30 @@ export function useAppController() {
   const knowledgeCreating = ref(false);
   const knowledgeDocSaving = ref(false);
   const knowledgeFileParsing = ref(false);
-  const knowledgeDocuments = ref<any[]>([]);
+  const knowledgeDocuments = ref<KnowledgeDocument[]>([]);
   const knowledgeDocPreviewVisible = ref(false);
   const knowledgeDocPreview = ref<any>({});
+  const knowledgeContentSearch = ref('');
+  const knowledgeDocumentLoading = ref(false);
+  const knowledgeActiveDoc = ref<any>(null);
+  const knowledgeActiveDocLoading = ref(false);
+  const knowledgeReparsing = ref(false);
+  const ragActiveTab = ref<'content' | 'library'>('content');
+  const userLibraryFiles = ref<UserLibraryFile[]>([]);
+  const userLibraryLoading = ref(false);
+  const userLibraryUploading = ref(false);
+  const userLibrarySavingToKb = ref(false);
+  const userLibraryPreviewVisible = ref(false);
+  const userLibraryPreview = ref<UserLibraryFile | null>(null);
+  const userLibraryAddDialogVisible = ref(false);
+  const userLibrarySelectedFile = ref<UserLibraryFile | null>(null);
+  const userLibraryTargetKbId = ref('');
+  const userLibraryFilters = ref({
+    query: '',
+    fileType: '',
+    source: '',
+    kbStatus: '',
+  });
   const showKnowledgeCreateDialog = ref(false);
   const memorySaving = ref(false);
   const skillCreating = ref(false);
@@ -1318,6 +1352,10 @@ export function useAppController() {
       builtinAgents.value = [];
       customTools.value = [];
       agentMemories.value = [];
+      knowledgeDocuments.value = [];
+      knowledgeActiveDoc.value = null;
+      userLibraryFiles.value = [];
+      userLibraryPreview.value = null;
       return;
     }
 
@@ -1344,6 +1382,7 @@ export function useAppController() {
       workflows.value = workflowItems;
       if (!knowledgeDocForm.value.kbId && bases[0]) knowledgeDocForm.value.kbId = bases[0].id;
       if (!ragLabForm.value.kbId && bases[0]) ragLabForm.value.kbId = bases[0].id;
+      if (!userLibraryTargetKbId.value && bases[0]) userLibraryTargetKbId.value = bases[0].id;
       if (!activeTeamId.value && teamItems[0]) activeTeamId.value = teamItems[0].id;
       if (activeWorkflowId.value && workflowItems.some((item) => item.id === activeWorkflowId.value)) {
         syncWorkflowCanvasFromSelected();
@@ -1357,6 +1396,8 @@ export function useAppController() {
       await loadAgentEvaluations();
       await loadAgentVersions();
       await loadAgentTestSuites();
+      if (knowledgeDocForm.value.kbId) await loadKnowledgeDocuments(knowledgeDocForm.value.kbId);
+      await loadUserLibraryFiles();
     } catch (error) {
       console.error('[loadAgentResources] failed:', error);
     } finally {
@@ -2626,30 +2667,9 @@ export function useAppController() {
       if (['txt', 'md', 'csv', 'json'].includes(ext)) {
         content = await file.text();
       } else if (['doc', 'docx', 'pdf', 'xls', 'xlsx'].includes(ext)) {
-        // 对于Word、PDF、Excel文件，使用FileReader读取为base64，然后发送到后端解析
-        const base64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
-        });
-        
-        // 发送到后端解析
-        const response = await fetch(`${backendBaseUrl.value}/knowledge/parse-file`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(getStoredToken() ? { Authorization: `Bearer ${getStoredToken()}` } : {}) },
-          body: JSON.stringify({ file: base64, filename: file.name }),
-          credentials: 'include',
-        });
-        
-        const result = await response.json();
-        if (!response.ok) {
-          const message = Array.isArray(result?.message)
-            ? result.message.join('；')
-            : result?.message || result?.error || '文件解析失败';
-          throw new Error(message);
-        }
-
-        content = result.data?.content || '';
+        const base64 = await readFileAsDataUrl(file);
+        const result = await apiParseKnowledgeFile({ file: base64, filename: file.name }, backendBaseUrl.value);
+        content = result.content || '';
       } else {
         throw new Error(`不支持的文件格式: ${ext}`);
       }
@@ -2668,40 +2688,178 @@ export function useAppController() {
     }
   }
 
+  function readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error('文件读取失败'));
+      reader.readAsDataURL(file);
+    });
+  }
+
   async function loadKnowledgeDocuments(kbId: string) {
     if (!kbId) return;
+    knowledgeDocumentLoading.value = true;
     try {
-      const response = await fetch(`${backendBaseUrl.value}/knowledge/bases/${kbId}/documents`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-      });
-      if (response.ok) {
-        const result = await response.json();
-        knowledgeDocuments.value = result.data || [];
-      }
+      knowledgeDocuments.value = await apiFetchKnowledgeDocuments(kbId, knowledgeContentSearch.value, backendBaseUrl.value);
     } catch (error) {
       console.error('加载文档列表失败:', error);
+      status.value = error instanceof Error ? error.message : '加载知识库文档失败';
+    } finally {
+      knowledgeDocumentLoading.value = false;
     }
   }
 
-  function previewKnowledgeDocument(doc: any) {
+  async function previewKnowledgeDocument(doc: any) {
     knowledgeDocPreview.value = doc;
+    knowledgeActiveDoc.value = doc;
     knowledgeDocPreviewVisible.value = true;
+    knowledgeActiveDocLoading.value = true;
+    try {
+      const detail = await fetchKnowledgeDocumentDetail(doc.id, backendBaseUrl.value);
+      knowledgeDocPreview.value = detail;
+      knowledgeActiveDoc.value = detail;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '加载文档详情失败';
+    } finally {
+      knowledgeActiveDocLoading.value = false;
+    }
   }
 
   async function deleteKnowledgeDocument(docId: string) {
     try {
-      const response = await fetch(`${backendBaseUrl.value}/knowledge/documents/${docId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-      });
-      if (response.ok) {
-        knowledgeDocuments.value = knowledgeDocuments.value.filter(d => d.id !== docId);
-        status.value = '文档已删除';
-        await loadAgentResources();
-      }
+      await apiDeleteKnowledgeDocument(docId, backendBaseUrl.value);
+      knowledgeDocuments.value = knowledgeDocuments.value.filter(d => d.id !== docId);
+      if (knowledgeActiveDoc.value?.id === docId) knowledgeActiveDoc.value = null;
+      status.value = '文档已删除';
+      await loadAgentResources();
     } catch (error) {
-      status.value = '删除文档失败';
+      status.value = error instanceof Error ? error.message : '删除文档失败';
     }
+  }
+
+  async function reparseKnowledgeDocument(docId: string) {
+    if (!docId || knowledgeReparsing.value) return;
+    knowledgeReparsing.value = true;
+    try {
+      const result = await apiReparseKnowledgeDocument(docId, backendBaseUrl.value);
+      status.value = `重新解析完成：${result.chunkCount} 个片段`;
+      if (knowledgeDocForm.value.kbId) await loadKnowledgeDocuments(knowledgeDocForm.value.kbId);
+      await previewKnowledgeDocument({ id: docId });
+      await loadAgentResources();
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '重新解析失败';
+    } finally {
+      knowledgeReparsing.value = false;
+    }
+  }
+
+  async function loadUserLibraryFiles() {
+    if (!isAuthenticated.value) return;
+    userLibraryLoading.value = true;
+    try {
+      userLibraryFiles.value = await apiFetchUserLibraryFiles(userLibraryFilters.value, backendBaseUrl.value);
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '加载用户库失败';
+    } finally {
+      userLibraryLoading.value = false;
+    }
+  }
+
+  async function handleUserLibraryUpload(uploadFile: any) {
+    const file = uploadFile.raw || uploadFile;
+    if (!file || userLibraryUploading.value) return;
+    userLibraryUploading.value = true;
+    try {
+      const fileBase64 = await readFileAsDataUrl(file);
+      const saved = await apiCreateUserLibraryFile({
+        filename: file.name,
+        fileBase64,
+        mimeType: file.type || '',
+        source: 'user_upload',
+      }, backendBaseUrl.value);
+      userLibraryFiles.value = [saved, ...userLibraryFiles.value.filter((item) => item.id !== saved.id)];
+      status.value = `文件已保存到用户库：${file.name}`;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '保存用户库文件失败';
+    } finally {
+      userLibraryUploading.value = false;
+    }
+  }
+
+  async function previewUserLibraryFile(file: UserLibraryFile) {
+    userLibraryPreviewVisible.value = true;
+    userLibraryPreview.value = file;
+    try {
+      userLibraryPreview.value = await apiFetchUserLibraryFile(file.id, backendBaseUrl.value);
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '加载文件预览失败';
+    }
+  }
+
+  async function renameUserLibraryFile(file: UserLibraryFile) {
+    try {
+      const nextName = window.prompt('重命名文件', file.filename)?.trim();
+      if (!nextName || nextName === file.filename) return;
+      const updated = await apiRenameUserLibraryFile(file.id, nextName, backendBaseUrl.value);
+      userLibraryFiles.value = userLibraryFiles.value.map((item) => item.id === updated.id ? updated : item);
+      if (userLibraryPreview.value?.id === updated.id) userLibraryPreview.value = updated;
+      status.value = '文件已重命名';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '重命名失败';
+    }
+  }
+
+  async function deleteUserLibraryFile(fileId: string) {
+    try {
+      await apiDeleteUserLibraryFile(fileId, backendBaseUrl.value);
+      userLibraryFiles.value = userLibraryFiles.value.filter((item) => item.id !== fileId);
+      if (userLibraryPreview.value?.id === fileId) userLibraryPreview.value = null;
+      status.value = '用户库文件已删除';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '删除用户库文件失败';
+    }
+  }
+
+  function openAddUserLibraryFileToKnowledge(file: UserLibraryFile) {
+    userLibrarySelectedFile.value = file;
+    userLibraryTargetKbId.value = userLibraryTargetKbId.value || knowledgeDocForm.value.kbId || knowledgeBases.value[0]?.id || '';
+    userLibraryAddDialogVisible.value = true;
+  }
+
+  async function addUserLibraryFileToKnowledge() {
+    const file = userLibrarySelectedFile.value;
+    const kbId = userLibraryTargetKbId.value;
+    if (!file || !kbId || userLibrarySavingToKb.value) return;
+    userLibrarySavingToKb.value = true;
+    try {
+      const result = await apiAddUserLibraryFileToKnowledge(file.id, kbId, backendBaseUrl.value);
+      userLibraryFiles.value = userLibraryFiles.value.map((item) => item.id === file.id ? { ...item, kbStatus: 'added', knowledgeDocumentId: result.id } : item);
+      userLibraryAddDialogVisible.value = false;
+      knowledgeDocForm.value.kbId = kbId;
+      await loadKnowledgeDocuments(kbId);
+      await loadAgentResources();
+      await loadUserLibraryFiles();
+      status.value = `已添加到知识库，切分 ${result.chunkCount} 个片段`;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '添加到知识库失败';
+    } finally {
+      userLibrarySavingToKb.value = false;
+    }
+  }
+
+  function downloadUserLibraryFile(file: UserLibraryFile) {
+    const fileBase64 = file.fileBase64;
+    if (!fileBase64) {
+      void apiFetchUserLibraryFile(file.id, backendBaseUrl.value).then(downloadUserLibraryFile);
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = fileBase64;
+    link.download = file.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   function formatDate(dateStr: string) {
@@ -7724,6 +7882,7 @@ export function useAppController() {
     UserFilled,
     VideoCamera,
     Coin,
+    Upload,
     useDagNodes,
     getModelLogo,
     createId,
@@ -7847,6 +8006,22 @@ export function useAppController() {
     knowledgeDocuments,
     knowledgeDocPreviewVisible,
     knowledgeDocPreview,
+    knowledgeContentSearch,
+    knowledgeDocumentLoading,
+    knowledgeActiveDoc,
+    knowledgeActiveDocLoading,
+    knowledgeReparsing,
+    ragActiveTab,
+    userLibraryFiles,
+    userLibraryLoading,
+    userLibraryUploading,
+    userLibrarySavingToKb,
+    userLibraryPreviewVisible,
+    userLibraryPreview,
+    userLibraryAddDialogVisible,
+    userLibrarySelectedFile,
+    userLibraryTargetKbId,
+    userLibraryFilters,
     showKnowledgeCreateDialog,
     memorySaving,
     skillCreating,
@@ -8156,6 +8331,15 @@ export function useAppController() {
     loadKnowledgeDocuments,
     previewKnowledgeDocument,
     deleteKnowledgeDocument,
+    reparseKnowledgeDocument,
+    loadUserLibraryFiles,
+    handleUserLibraryUpload,
+    previewUserLibraryFile,
+    renameUserLibraryFile,
+    deleteUserLibraryFile,
+    openAddUserLibraryFileToKnowledge,
+    addUserLibraryFileToKnowledge,
+    downloadUserLibraryFile,
     formatDate,
     runRagLabSearch,
     createAgentMemory,

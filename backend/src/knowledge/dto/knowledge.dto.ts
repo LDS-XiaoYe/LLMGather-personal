@@ -22,6 +22,14 @@ export class AddKnowledgeDocumentDto {
   @IsNotEmpty()
   @MaxLength(200000)
   content!: string;
+
+  @IsOptional()
+  @IsString()
+  sourceFileId?: string;
+
+  @IsOptional()
+  @IsString()
+  fileType?: string;
 }
 
 export class ParseFileDto {
@@ -53,4 +61,29 @@ export class SearchKnowledgeDto {
   @IsOptional()
   @IsIn(['hybrid', 'keyword', 'vector'])
   mode?: 'hybrid' | 'keyword' | 'vector';
+}
+
+export class CreateUserLibraryFileDto {
+  @IsString()
+  @IsNotEmpty()
+  filename!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  fileBase64!: string;
+
+  @IsOptional()
+  @IsString()
+  mimeType?: string;
+
+  @IsOptional()
+  @IsIn(['user_upload', 'agent_generated', 'conversation_attachment', 'intermediate'])
+  source?: 'user_upload' | 'agent_generated' | 'conversation_attachment' | 'intermediate';
+}
+
+export class RenameUserLibraryFileDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(191)
+  filename!: string;
 }

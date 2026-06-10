@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../database/database.service';
-import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto } from './dto/knowledge.dto';
+import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto, CreateUserLibraryFileDto } from './dto/knowledge.dto';
 
 export interface KnowledgeBase {
   id: string;
@@ -23,6 +23,21 @@ export interface KnowledgeSearchResult {
   score: number;
 }
 
+export interface UserLibraryFile {
+  id: string;
+  userId: string;
+  filename: string;
+  fileType: string;
+  mimeType: string;
+  source: string;
+  kbStatus: string;
+  fileSize: number;
+  createdAt: string;
+  updatedAt: string;
+  knowledgeDocumentId?: string | null;
+  preview?: string;
+}
+
 type KnowledgeBaseRow = {
   id: string;
   userId: string;
@@ -32,6 +47,12 @@ type KnowledgeBaseRow = {
   chunkCount?: number | string;
   createdAt: string;
   updatedAt: string;
+};
+
+type UserLibraryFileRow = Omit<UserLibraryFile, 'fileSize'> & {
+  fileSize?: number | string;
+  fileBase64?: string;
+  parsedContent?: string;
 };
 
 @Injectable()
@@ -83,10 +104,11 @@ export class KnowledgeService {
     await this.get(userId, kbId);
     const docId = randomUUID();
     const now = this.databaseService.now();
+    const fileType = (dto.fileType || this.fileTypeFromName(dto.title) || 'text').slice(0, 32);
     await this.databaseService.connection.prepare(
-      `INSERT INTO knowledge_documents (id, kb_id, user_id, title, content, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(docId, kbId, userId, dto.title.trim(), dto.content, now, now);
+      `INSERT INTO knowledge_documents (id, kb_id, user_id, title, file_type, parse_status, vector_status, failure_reason, source_file_id, content, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(docId, kbId, userId, dto.title.trim(), fileType, 'succeeded', 'succeeded', '', dto.sourceFileId ?? '', dto.content, now, now);
 
     const chunks = this.chunkText(dto.content);
     const stmt = this.databaseService.connection.prepare(
@@ -110,24 +132,94 @@ export class KnowledgeService {
     return { id: docId, kbId, title: dto.title.trim(), chunkCount: chunks.length };
   }
 
-  async listDocuments(userId: string, kbId: string) {
+  async listDocuments(userId: string, kbId: string, query = '') {
     await this.get(userId, kbId);
+    const whereSearch = query.trim() ? 'AND (d.title LIKE ? OR d.content LIKE ?)' : '';
+    const searchParams = query.trim() ? [`%${query.trim()}%`, `%${query.trim()}%`] : [];
     const rows = await this.databaseService.connection.prepare(
-      `SELECT d.id, d.kb_id as kbId, d.title, d.content, d.created_at as createdAt,
+      `SELECT d.id, d.kb_id as kbId, d.title, d.file_type as fileType,
+              d.parse_status as parseStatus, d.vector_status as vectorStatus, d.failure_reason as failureReason,
+              d.content, d.created_at as createdAt, d.updated_at as updatedAt,
               COALESCE(c.chunkCount, 0) as chunkCount
        FROM knowledge_documents d
        LEFT JOIN (
          SELECT document_id, COUNT(*) as chunkCount FROM knowledge_chunks GROUP BY document_id
        ) c ON c.document_id = d.id
-       WHERE d.kb_id = ? AND d.user_id = ? AND d.deleted_at IS NULL
+       WHERE d.kb_id = ? AND d.user_id = ? AND d.deleted_at IS NULL ${whereSearch}
        ORDER BY d.created_at DESC`,
-    ).all(kbId, userId) as unknown as Array<{ id: string; kbId: string; title: string; content: string; createdAt: string; chunkCount: number | string }>;
+    ).all(kbId, userId, ...searchParams) as unknown as Array<{ id: string; kbId: string; title: string; fileType?: string; parseStatus?: string; vectorStatus?: string; failureReason?: string; content: string; createdAt: string; updatedAt: string; chunkCount: number | string }>;
     
     return rows.map(row => ({
       ...row,
       chunkCount: Number(row.chunkCount ?? 0),
-      content: row.content.substring(0, 500) + (row.content.length > 500 ? '...' : ''),
+      fileType: row.fileType || this.fileTypeFromName(row.title),
+      parseStatus: row.parseStatus || 'succeeded',
+      vectorStatus: row.vectorStatus || 'succeeded',
+      failureReason: row.failureReason || '',
+      preview: row.content.substring(0, 500) + (row.content.length > 500 ? '...' : ''),
+      content: row.content,
     }));
+  }
+
+  async getDocumentDetail(userId: string, docId: string) {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT d.id, d.kb_id as kbId, d.title, d.file_type as fileType,
+              d.parse_status as parseStatus, d.vector_status as vectorStatus, d.failure_reason as failureReason,
+              d.content, d.created_at as createdAt, d.updated_at as updatedAt,
+              COALESCE(c.chunkCount, 0) as chunkCount
+       FROM knowledge_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*) as chunkCount FROM knowledge_chunks GROUP BY document_id
+       ) c ON c.document_id = d.id
+       WHERE d.id = ? AND d.user_id = ? AND d.deleted_at IS NULL`,
+    ).get(docId, userId) as unknown as { id: string; kbId: string; title: string; fileType?: string; parseStatus?: string; vectorStatus?: string; failureReason?: string; content: string; createdAt: string; updatedAt: string; chunkCount: number | string } | undefined;
+    if (!row) throw new NotFoundException('知识库文档不存在');
+    const chunks = await this.listDocumentChunks(userId, docId);
+    return {
+      ...row,
+      chunkCount: Number(row.chunkCount ?? 0),
+      fileType: row.fileType || this.fileTypeFromName(row.title),
+      parseStatus: row.parseStatus || 'succeeded',
+      vectorStatus: row.vectorStatus || 'succeeded',
+      failureReason: row.failureReason || '',
+      chunks,
+    };
+  }
+
+  async listDocumentChunks(userId: string, docId: string) {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, kb_id as kbId, document_id as documentId, chunk_index as chunkIndex, content,
+              embedding_json as embeddingJson, token_estimate as tokenEstimate, created_at as createdAt
+       FROM knowledge_chunks
+       WHERE document_id = ? AND user_id = ?
+       ORDER BY chunk_index ASC`,
+    ).all(docId, userId) as unknown as Array<{ id: string; kbId: string; documentId: string; chunkIndex: number | string; content: string; embeddingJson?: string; tokenEstimate: number | string; createdAt: string }>;
+    return rows.map((row) => ({
+      ...row,
+      chunkIndex: Number(row.chunkIndex ?? 0),
+      tokenEstimate: Number(row.tokenEstimate ?? 0),
+      vectorStatus: row.embeddingJson ? 'succeeded' : 'pending',
+    }));
+  }
+
+  async reparseDocument(userId: string, docId: string) {
+    const detail = await this.getDocumentDetail(userId, docId);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `DELETE FROM knowledge_chunks WHERE document_id = ? AND user_id = ?`,
+    ).run(docId, userId);
+    const chunks = this.chunkText(detail.content);
+    const stmt = this.databaseService.connection.prepare(
+      `INSERT INTO knowledge_chunks (id, kb_id, document_id, user_id, chunk_index, content, embedding_json, token_estimate, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (let i = 0; i < chunks.length; i++) {
+      await stmt.run(randomUUID(), detail.kbId, docId, userId, i, chunks[i], JSON.stringify(this.embed(chunks[i])), this.estimateTokens(chunks[i]), now);
+    }
+    await this.databaseService.connection.prepare(
+      `UPDATE knowledge_documents SET parse_status = ?, vector_status = ?, failure_reason = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+    ).run('succeeded', 'succeeded', '', now, docId, userId);
+    return { id: docId, kbId: detail.kbId, title: detail.title, chunkCount: chunks.length };
   }
 
   async deleteDocument(userId: string, docId: string) {
@@ -139,6 +231,133 @@ export class KnowledgeService {
       `DELETE FROM knowledge_chunks WHERE document_id = ? AND user_id = ?`,
     ).run(docId, userId);
     return { success: true };
+  }
+
+  async listUserLibraryFiles(
+    userId: string,
+    filters: { query?: string; fileType?: string; source?: string; kbStatus?: string } = {},
+  ): Promise<UserLibraryFile[]> {
+    const clauses = ['user_id = ?', 'deleted_at IS NULL'];
+    const params: unknown[] = [userId];
+    if (filters.query?.trim()) {
+      clauses.push('filename LIKE ?');
+      params.push(`%${filters.query.trim()}%`);
+    }
+    if (filters.fileType?.trim()) {
+      clauses.push('file_type = ?');
+      params.push(filters.fileType.trim());
+    }
+    if (filters.source?.trim()) {
+      clauses.push('source = ?');
+      params.push(filters.source.trim());
+    }
+    if (filters.kbStatus?.trim()) {
+      clauses.push('kb_status = ?');
+      params.push(filters.kbStatus.trim());
+    }
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, filename, file_type as fileType, mime_type as mimeType, source,
+              kb_status as kbStatus, file_size as fileSize, knowledge_document_id as knowledgeDocumentId,
+              parsed_content as parsedContent, created_at as createdAt, updated_at as updatedAt
+       FROM user_library_files
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY updated_at DESC`,
+    ).all(...params) as unknown as UserLibraryFileRow[];
+    return rows.map((row) => ({
+      ...row,
+      fileSize: Number(row.fileSize ?? 0),
+      preview: (row.parsedContent || '').substring(0, 300),
+    }));
+  }
+
+  async createUserLibraryFile(userId: string, dto: CreateUserLibraryFileDto): Promise<UserLibraryFile> {
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    const base64Data = dto.fileBase64.includes(',') ? dto.fileBase64.split(',')[1] : dto.fileBase64;
+    const fileSize = Buffer.from(base64Data, 'base64').byteLength;
+    const fileType = this.fileTypeFromName(dto.filename);
+    let parsedContent = '';
+    try {
+      parsedContent = (await this.parseFile(dto.fileBase64, dto.filename)).content;
+    } catch {
+      parsedContent = this.plainTextPreview(dto.fileBase64, dto.filename);
+    }
+    await this.databaseService.connection.prepare(
+      `INSERT INTO user_library_files (id, user_id, filename, file_type, mime_type, source, kb_status, file_size, file_base64, parsed_content, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      userId,
+      dto.filename.trim(),
+      fileType,
+      dto.mimeType ?? '',
+      dto.source ?? 'user_upload',
+      'not_added',
+      fileSize,
+      dto.fileBase64,
+      parsedContent,
+      now,
+      now,
+    );
+    return this.getUserLibraryFile(userId, id, false);
+  }
+
+  async getUserLibraryFile(userId: string, fileId: string, includeContent = true): Promise<UserLibraryFile & { fileBase64?: string; parsedContent?: string }> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, filename, file_type as fileType, mime_type as mimeType, source,
+              kb_status as kbStatus, file_size as fileSize, file_base64 as fileBase64,
+              parsed_content as parsedContent, knowledge_document_id as knowledgeDocumentId,
+              created_at as createdAt, updated_at as updatedAt
+       FROM user_library_files
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).get(fileId, userId) as unknown as UserLibraryFileRow | undefined;
+    if (!row) throw new NotFoundException('用户库文件不存在');
+    const file = {
+      ...row,
+      fileSize: Number(row.fileSize ?? 0),
+      preview: (row.parsedContent || '').substring(0, 300),
+    };
+    if (!includeContent) {
+      delete file.fileBase64;
+      delete file.parsedContent;
+    }
+    return file;
+  }
+
+  async renameUserLibraryFile(userId: string, fileId: string, filename: string) {
+    const now = this.databaseService.now();
+    await this.getUserLibraryFile(userId, fileId, false);
+    await this.databaseService.connection.prepare(
+      `UPDATE user_library_files SET filename = ?, file_type = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+    ).run(filename.trim(), this.fileTypeFromName(filename), now, fileId, userId);
+    return this.getUserLibraryFile(userId, fileId, false);
+  }
+
+  async deleteUserLibraryFile(userId: string, fileId: string) {
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE user_library_files SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+    ).run(now, now, fileId, userId);
+    return { success: true };
+  }
+
+  async addUserLibraryFileToKnowledge(userId: string, fileId: string, kbId: string) {
+    const file = await this.getUserLibraryFile(userId, fileId, true);
+    let content = file.parsedContent || '';
+    if (!content.trim() && file.fileBase64) {
+      content = (await this.parseFile(file.fileBase64, file.filename)).content;
+    }
+    if (!content.trim()) throw new BadRequestException('该文件无法解析出可入库文本');
+    const result = await this.addDocument(userId, kbId, {
+      title: file.filename,
+      content,
+      sourceFileId: file.id,
+      fileType: file.fileType,
+    });
+    await this.databaseService.connection.prepare(
+      `UPDATE user_library_files SET kb_status = ?, parsed_content = ?, knowledge_document_id = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+    ).run('added', content, result.id, this.databaseService.now(), fileId, userId);
+    return result;
   }
 
   async parseFile(fileBase64: string, filename: string): Promise<{ content: string }> {
@@ -263,6 +482,28 @@ export class KnowledgeService {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
       .slice(0, 200000);
+  }
+
+  private fileTypeFromName(filename: string): string {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    if (['doc', 'docx'].includes(ext)) return 'word';
+    if (ext === 'pdf') return 'pdf';
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return 'excel';
+    if (['md', 'markdown'].includes(ext)) return 'markdown';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+    if (['txt', 'json'].includes(ext)) return 'text';
+    return ext || 'unknown';
+  }
+
+  private plainTextPreview(fileBase64: string, filename: string): string {
+    const type = this.fileTypeFromName(filename);
+    if (!['text', 'markdown', 'excel'].includes(type)) return '';
+    try {
+      const base64Data = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+      return Buffer.from(base64Data, 'base64').toString('utf-8').slice(0, 200000);
+    } catch {
+      return '';
+    }
   }
 
   async search(

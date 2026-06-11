@@ -124,7 +124,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id ${pk}, user_id VARCHAR(36) NOT NULL,
         model VARCHAR(128) NOT NULL, request_type VARCHAR(32) NOT NULL,
         prompt_tokens ${int}, completion_tokens ${int}, total_tokens ${int},
-        cost DECIMAL(14,6) NOT NULL, created_at ${ts}
+        cost DECIMAL(14,6) NOT NULL,
+        provider_name VARCHAR(64) NOT NULL DEFAULT '',
+        provider_key_id VARCHAR(36) NOT NULL DEFAULT '',
+        provider_key_name VARCHAR(128) NOT NULL DEFAULT '',
+        provider_key_prefix VARCHAR(32) NOT NULL DEFAULT '',
+        audit_metadata TEXT,
+        created_at ${ts}
       )${fk};`);
 
     await this.adapter.exec(`
@@ -670,6 +676,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
     } catch {
       // 同上
+    }
+
+    for (const statement of [
+      `ALTER TABLE billing_ledger ADD COLUMN provider_name VARCHAR(64) NOT NULL DEFAULT ''`,
+      `ALTER TABLE billing_ledger ADD COLUMN provider_key_id VARCHAR(36) NOT NULL DEFAULT ''`,
+      `ALTER TABLE billing_ledger ADD COLUMN provider_key_name VARCHAR(128) NOT NULL DEFAULT ''`,
+      `ALTER TABLE billing_ledger ADD COLUMN provider_key_prefix VARCHAR(32) NOT NULL DEFAULT ''`,
+      `ALTER TABLE billing_ledger ADD COLUMN audit_metadata TEXT`,
+      `CREATE INDEX idx_billing_provider_key ON billing_ledger (provider_name, provider_key_id)`,
+    ]) {
+      try {
+        await this.adapter.exec(statement);
+      } catch {}
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误

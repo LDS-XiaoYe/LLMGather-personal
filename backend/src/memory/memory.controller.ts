@@ -37,6 +37,15 @@ export class MemoryController {
     return { data: await this.memoryService.update(user.id, id, payload) };
   }
 
+  @Delete()
+  async removeAll(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Query('agentId') agentId?: string,
+  ) {
+    const count = await this.memoryService.removeAll(user.id, agentId);
+    return { data: { ok: true, count } };
+  }
+
   @Delete(':id')
   async remove(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string) {
     await this.memoryService.remove(user.id, id);

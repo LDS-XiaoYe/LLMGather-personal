@@ -4,6 +4,15 @@ import { AuthUser } from '../auth/auth.types';
 import { ChatCompletionRequest, ChatCompletionUsage } from '../providers/provider.types';
 import { DatabaseService } from '../database/database.service';
 
+export interface BillingAuditInfo {
+  provider?: string;
+  providerKeyId?: string | null;
+  providerKeyName?: string;
+  providerKeyPrefix?: string;
+  providerKeySource?: 'db' | 'env' | string;
+  metadata?: Record<string, unknown>;
+}
+
 @Injectable()
 export class BillingService {
   private readonly defaultPromptPricePer1k = Number(process.env.BILLING_PROMPT_PRICE_PER_1K || 0.002);
@@ -27,9 +36,10 @@ export class BillingService {
     request: ChatCompletionRequest,
     usage?: ChatCompletionUsage,
     requestType: 'chat' | 'openai' | 'anthropic' | 'agent' = 'chat',
+    audit?: BillingAuditInfo,
   ): Promise<AuthUser> {
     const normalizedUsage = usage ?? this.estimateNonStreamUsage(request);
-    return this.charge(userId, request.model, requestType, normalizedUsage);
+    return this.charge(userId, request.model, requestType, normalizedUsage, audit);
   }
 
   async getBalance(userId: string): Promise<AuthUser> {
@@ -130,6 +140,7 @@ export class BillingService {
     model: string,
     requestType: 'chat' | 'openai' | 'anthropic' | 'agent',
     usage: ChatCompletionUsage,
+    audit?: BillingAuditInfo,
   ): Promise<AuthUser> {
     const cost = await this.calculateCost(model, usage);
 
@@ -153,11 +164,20 @@ export class BillingService {
       .run(newCredits, newTotalSpent, userId);
 
     await db.prepare(
-      'INSERT INTO billing_ledger (id, user_id, model, request_type, prompt_tokens, completion_tokens, total_tokens, cost, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      `INSERT INTO billing_ledger
+        (id, user_id, model, request_type, prompt_tokens, completion_tokens, total_tokens, cost,
+         provider_name, provider_key_id, provider_key_name, provider_key_prefix, audit_metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       randomUUID(), userId, model, requestType,
       usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
-      cost, this.databaseService.now(),
+      cost,
+      audit?.provider ?? '',
+      audit?.providerKeyId ?? '',
+      audit?.providerKeyName ?? '',
+      audit?.providerKeyPrefix ?? '',
+      JSON.stringify({ providerKeySource: audit?.providerKeySource ?? '', ...(audit?.metadata ?? {}) }),
+      this.databaseService.now(),
     );
 
     return {

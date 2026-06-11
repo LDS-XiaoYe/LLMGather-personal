@@ -7,6 +7,7 @@ import {
   ProviderConfig,
   ProviderConfigInput,
 } from '../providers/provider-api-key.store';
+import { ApiKeyPoolSnapshot } from '../providers/api-key-pool';
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { SystemSettingsService } from '../common/system-settings.service';
 import { AuthUser } from '../auth/auth.types';
@@ -55,6 +56,11 @@ export interface AdminBillingRow {
   username: string;
   model: string;
   requestType: string;
+  providerName: string;
+  providerKeyId: string;
+  providerKeyName: string;
+  providerKeyPrefix: string;
+  auditMetadata: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -204,7 +210,7 @@ export class AdminService {
   async listBillingLedger(
     page = 1,
     pageSize = 50,
-    filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
+    filters?: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string },
   ): Promise<{ data: AdminBillingRow[]; total: number }> {
     const db = this.databaseService.connection;
     const offset = (page - 1) * pageSize;
@@ -219,6 +225,10 @@ export class AdminService {
     if (filters?.model) {
       conditions.push('bl.model = ?');
       params.push(filters.model);
+    }
+    if (filters?.provider) {
+      conditions.push('bl.provider_name = ?');
+      params.push(filters.provider);
     }
     if (filters?.fromDate) {
       conditions.push('bl.created_at >= ?');
@@ -242,6 +252,9 @@ export class AdminService {
     const rows = await db.prepare(
       `SELECT bl.id, bl.user_id as userId, COALESCE(u.username, 'deleted') as username,
               bl.model, bl.request_type as requestType,
+              bl.provider_name as providerName, bl.provider_key_id as providerKeyId,
+              bl.provider_key_name as providerKeyName, bl.provider_key_prefix as providerKeyPrefix,
+              bl.audit_metadata as auditMetadata,
               bl.prompt_tokens as promptTokens, bl.completion_tokens as completionTokens,
               bl.total_tokens as totalTokens, bl.cost, bl.created_at as createdAt
        FROM billing_ledger bl
@@ -385,7 +398,7 @@ export class AdminService {
   }
 
   async exportBillingCsv(
-    filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
+    filters?: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string },
   ): Promise<string> {
     const db = this.databaseService.connection;
 
@@ -394,6 +407,7 @@ export class AdminService {
 
     if (filters?.username) { conditions.push('u.username LIKE ?'); params.push(`%${filters.username}%`); }
     if (filters?.model) { conditions.push('bl.model = ?'); params.push(filters.model); }
+    if (filters?.provider) { conditions.push('bl.provider_name = ?'); params.push(filters.provider); }
     if (filters?.fromDate) { conditions.push('bl.created_at >= ?'); params.push(filters.fromDate); }
     if (filters?.toDate) { conditions.push('bl.created_at <= ?'); params.push(filters.toDate); }
 
@@ -402,6 +416,8 @@ export class AdminService {
     const rows = await db.prepare(
       `SELECT bl.id, COALESCE(u.username, 'deleted') as username,
               bl.model, bl.request_type as requestType,
+              bl.provider_name as providerName, bl.provider_key_name as providerKeyName,
+              bl.provider_key_prefix as providerKeyPrefix, bl.audit_metadata as auditMetadata,
               bl.prompt_tokens as promptTokens, bl.completion_tokens as completionTokens,
               bl.total_tokens as totalTokens, bl.cost, bl.created_at as createdAt
        FROM billing_ledger bl
@@ -410,13 +426,14 @@ export class AdminService {
        ORDER BY bl.created_at DESC`,
     ).all(...params) as Array<{
       id: string; username: string; model: string; requestType: string;
+      providerName: string; providerKeyName: string; providerKeyPrefix: string; auditMetadata: string;
       promptTokens: number; completionTokens: number; totalTokens: number;
       cost: number; createdAt: string;
     }>;
 
-    const header = 'ID,用户,模型,请求类型,输入Token,输出Token,总Token,费用,时间';
+    const header = 'ID,用户,模型,请求类型,Provider,Provider Key,Key 前缀,审计元数据,输入Token,输出Token,总Token,费用,时间';
     const csvRows = rows.map((r) =>
-      [r.id, r.username, r.model, r.requestType, r.promptTokens, r.completionTokens, r.totalTokens, Number(r.cost).toFixed(6), r.createdAt].join(','),
+      [r.id, r.username, r.model, r.requestType, r.providerName || '', r.providerKeyName || '', r.providerKeyPrefix || '', JSON.stringify(r.auditMetadata || ''), r.promptTokens, r.completionTokens, r.totalTokens, Number(r.cost).toFixed(6), r.createdAt].join(','),
     );
 
     // Add BOM for Excel UTF-8 compatibility
@@ -427,6 +444,10 @@ export class AdminService {
 
   async listProviderApiKeys(providerName?: string): Promise<ProviderApiKeyRow[]> {
     return this.apiKeyStore.listKeys(providerName);
+  }
+
+  async listProviderKeyMetrics(providerName?: string): Promise<Array<{ providerName: string; pool: ApiKeyPoolSnapshot }>> {
+    return this.apiKeyStore.listPoolMetrics(providerName);
   }
 
   async addProviderApiKey(

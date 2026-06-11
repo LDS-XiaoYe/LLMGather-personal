@@ -154,7 +154,7 @@ const openVideoUploadInput = bind(app, "openVideoUploadInput");
   <div class="multimodal-page">
     <el-tabs v-model="multimodalTab" type="border-card" class="mm-tabs">
       <!-- ====== Tab 1: Autonomous Driving Simulation ====== -->
-      <el-tab-pane label="自动驾驶仿真" name="driving">
+      <el-tab-pane label="自动驾驶模拟" name="driving">
         <div class="driving-layout">
           <div class="driving-main">
             <div class="driving-canvas-wrap">

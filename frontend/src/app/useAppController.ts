@@ -24,6 +24,7 @@ import {
   deleteAdminUser,
   deleteAgent as apiDeleteAgent,
   deleteConversation,
+  deleteAllMemories as apiDeleteAllMemories,
   deleteMemory as apiDeleteMemory,
   deleteSkill as apiDeleteSkill,
   deleteTool as apiDeleteTool,
@@ -112,6 +113,7 @@ import {
   createAdminProviderConfig,
   updateAdminProviderConfig,
   deleteAdminProviderConfig,
+  fetchAdminProviderKeyMetrics,
   fetchAdminSettings,
   fetchPageModels,
   fetchInvitationCode,
@@ -149,6 +151,8 @@ import {
   type ModelDescriptor,
   type ModelUsageStat,
   type ProviderApiKeyRow,
+  type ProviderKeyMetric,
+  type ProviderKeyPoolMetric,
   type ProviderConfigRow,
   type ProviderConfigInput,
   type SystemSetting,
@@ -180,6 +184,7 @@ import { MagicStick } from '@element-plus/icons-vue';
 export function useAppController() {
   const BASE_URL_KEY = 'llm_gather_base_url';
   const THEME_KEY = 'llm_gather_theme';
+  const CHAT_THINKING_KEY = 'llm_gather_chat_thinking';
 
   type ThemeMode = 'light' | 'dark' | 'auto';
 
@@ -225,6 +230,7 @@ export function useAppController() {
   /* ---------- State ---------- */
   const backendBaseUrl = ref(getStoredValue(BASE_URL_KEY) || '/v1');
   const isSettingsOpen = ref(false);
+  const chatThinkingMode = ref(getStoredValue(CHAT_THINKING_KEY) !== 'off');
   const isAuthDialogOpen = ref(false);
   const authUser = ref<AuthUser | null>(null);
   const authMode = ref<'login' | 'register'>('login');
@@ -329,6 +335,10 @@ export function useAppController() {
   });
   const showKnowledgeCreateDialog = ref(false);
   const memorySaving = ref(false);
+  const settingsMemories = ref<MemoryItem[]>([]);
+  const settingsMemoryLoading = ref(false);
+  const settingsMemorySaving = ref(false);
+  const settingsMemoryForm = ref({ content: '', importance: 3, namespace: 'manual', memoryType: 'fact' });
   const skillCreating = ref(false);
   const showSkillCreateDialog = ref(false);
   const skillPreviewOpen = ref(false);
@@ -1001,6 +1011,7 @@ export function useAppController() {
   const adminBillingFilterUsername = ref('');
   const adminBillingFilterUserId = adminBillingFilterUsername;
   const adminBillingFilterModel = ref('');
+  const adminBillingFilterProvider = ref('');
   const adminEditUserDialog = ref(false);
   const adminEditUserId = ref('');
   const adminEditUserCredits = ref(0);
@@ -1060,6 +1071,7 @@ export function useAppController() {
 
   // Provider API key admin state
   const adminProviderKeys = ref<ProviderApiKeyRow[]>([]);
+  const adminProviderKeyMetrics = ref<ProviderKeyPoolMetric[]>([]);
   const adminAddKeyDialog = ref(false);
   const adminNewKeyProvider = ref('qwen');
   const adminNewKeyName = ref('');
@@ -1148,6 +1160,7 @@ export function useAppController() {
   });
 
   watch(backendBaseUrl, (val) => setStoredValue(BASE_URL_KEY, val));
+  watch(chatThinkingMode, (value) => setStoredValue(CHAT_THINKING_KEY, value ? 'on' : 'off'));
 
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash;
@@ -1508,11 +1521,18 @@ export function useAppController() {
     if (!agentId || !isAuthenticated.value) {
       agentRuns.value = [];
       activeAgentRun.value = null;
+      activeAgentTraceStepId.value = null;
       return;
     }
+    agentRuns.value = [];
+    activeAgentRun.value = null;
+    activeAgentTraceStepId.value = null;
+    agentTraceReplayIndex.value = 0;
+    agentTraceReplayPlaying.value = false;
     try {
-      agentRuns.value = await fetchAgentRuns(agentId, backendBaseUrl.value);
+      agentRuns.value = (await fetchAgentRuns(agentId, backendBaseUrl.value)).filter((run) => run.agentId === agentId);
       activeAgentRun.value = agentRuns.value[0] ?? activeAgentRun.value;
+      activeAgentTraceStepId.value = activeAgentRun.value?.steps[0]?.id ?? null;
     } catch (error) {
       console.error('[loadAgentRuns] failed:', error);
     }
@@ -1603,6 +1623,13 @@ export function useAppController() {
   function selectAgent(agent: AgentDefinition) {
     activeAgentId.value = agent.id;
     fillAgentForm(agent);
+    agentRuns.value = [];
+    activeAgentRun.value = null;
+    activeAgentTraceStepId.value = null;
+    agentTraceReplayIndex.value = 0;
+    agentTraceReplayPlaying.value = false;
+    agentImprovementSuggestions.value = null;
+    agentInvokePanelTab.value = 'trace';
     void loadAgentRuns(agent.id);
     void loadAgentMemories(agent.id);
     void loadAgentEvaluations(agent.id);
@@ -2202,8 +2229,22 @@ export function useAppController() {
     if (!runId) return;
     try {
       const run = await fetchAgentRun(runId, backendBaseUrl.value);
+      if (run.agentId && run.agentId !== activeAgentId.value) {
+        const owner = agents.value.find((agent) => agent.id === run.agentId);
+        if (owner) {
+          activeAgentId.value = owner.id;
+          fillAgentForm(owner);
+          agentImprovementSuggestions.value = null;
+          await Promise.all([
+            loadAgentMemories(owner.id),
+            loadAgentEvaluations(owner.id),
+            loadAgentVersions(owner.id),
+            loadAgentTestSuites(owner.id),
+          ]);
+        }
+      }
       selectAgentRun(run);
-      agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id)].slice(0, 20);
+      agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id && item.agentId === run.agentId)].slice(0, 20);
       agentWorkspaceMode.value = 'invoke';
       status.value = '已打开运行 Trace';
     } catch (error) {
@@ -2533,7 +2574,10 @@ export function useAppController() {
   });
 
   const filteredAgentRuns = computed(() => {
-    const items = agentRuns.value.filter((run) => agentRunHistoryFilter.value === 'all' || run.status === agentRunHistoryFilter.value);
+    const items = agentRuns.value.filter((run) =>
+      (!activeAgentId.value || run.agentId === activeAgentId.value)
+      && (agentRunHistoryFilter.value === 'all' || run.status === agentRunHistoryFilter.value),
+    );
     return [...items].sort((a, b) => {
       if (agentRunHistorySort.value === 'latency') return (b.latencyMs || 0) - (a.latencyMs || 0);
       if (agentRunHistorySort.value === 'tokens') return (b.totalTokens || 0) - (a.totalTokens || 0);
@@ -2968,6 +3012,84 @@ export function useAppController() {
       status.value = '记忆已删除';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '删除记忆失败';
+    }
+  }
+
+  async function loadSettingsMemories() {
+    if (!isAuthenticated.value) {
+      settingsMemories.value = [];
+      return;
+    }
+    settingsMemoryLoading.value = true;
+    try {
+      settingsMemories.value = await fetchMemories(undefined, backendBaseUrl.value);
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '加载记忆失败';
+    } finally {
+      settingsMemoryLoading.value = false;
+    }
+  }
+
+  async function createSettingsMemory() {
+    const content = settingsMemoryForm.value.content.trim();
+    if (!content || settingsMemorySaving.value) return;
+    settingsMemorySaving.value = true;
+    try {
+      await apiCreateMemory({
+        content,
+        namespace: settingsMemoryForm.value.namespace.trim() || 'manual',
+        memoryType: settingsMemoryForm.value.memoryType,
+        importance: settingsMemoryForm.value.importance,
+      }, backendBaseUrl.value);
+      settingsMemoryForm.value.content = '';
+      await loadSettingsMemories();
+      status.value = '记忆已新增';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '新增记忆失败';
+    } finally {
+      settingsMemorySaving.value = false;
+    }
+  }
+
+  async function deleteSettingsMemory(memory: MemoryItem) {
+    try {
+      await ElMessageBox.confirm(`确定删除这条记忆吗？\n\n${memory.content.slice(0, 120)}`, '删除记忆', {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      });
+    } catch {
+      return;
+    }
+    try {
+      await apiDeleteMemory(memory.id, backendBaseUrl.value);
+      settingsMemories.value = settingsMemories.value.filter((item) => item.id !== memory.id);
+      if (memory.agentId === agentForm.value.id) {
+        agentMemories.value = agentMemories.value.filter((item) => item.id !== memory.id);
+      }
+      status.value = '记忆已删除';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '删除记忆失败';
+    }
+  }
+
+  async function forgetAllSettingsMemories() {
+    try {
+      await ElMessageBox.confirm('确定忘记所有长期记忆吗？此操作会删除当前账户下所有全局和 Agent 记忆。', '忘记所有记忆', {
+        confirmButtonText: '全部忘记',
+        cancelButtonText: '取消',
+        type: 'warning',
+      });
+    } catch {
+      return;
+    }
+    try {
+      const count = await apiDeleteAllMemories(undefined, backendBaseUrl.value);
+      settingsMemories.value = [];
+      agentMemories.value = [];
+      status.value = `已忘记 ${count} 条记忆`;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '忘记记忆失败';
     }
   }
 
@@ -4280,6 +4402,7 @@ export function useAppController() {
     let streamedReasoning = '';
     let routedModel = currentModel;
     let keyRotationNotice = '';
+    const thinkingEnabledForRequest = chatThinkingMode.value;
 
     if (currentModel === 'auto') {
       // ── Auto routing: direct fetch with SSE parsing ──
@@ -4291,6 +4414,7 @@ export function useAppController() {
             model: 'auto',
             messages: requestMessages.map((m) => ({ role: m.role, content: m.content })),
             temperature: 0.7,
+            extra_body: { enable_thinking: thinkingEnabledForRequest },
             stream: true,
           }),
           signal: chatAbortController.signal,
@@ -4393,7 +4517,7 @@ export function useAppController() {
             model: currentModel,
             messages: requestMessages.map((m) => ({ role: m.role, content: m.content })),
             temperature: 0.7,
-            extra_body: { enable_thinking: true },
+            extra_body: { enable_thinking: thinkingEnabledForRequest },
           },
           {
             onRequestId: (rid) => { requestId.value = rid; status.value = '正在流式生成回复'; },
@@ -4408,7 +4532,7 @@ export function useAppController() {
               const reason = d?.reasoning_content ?? '';
               if (!token && !reason && !choice?.finish_reason) return;
               if (token) streamedContent += token;
-              if (reason) streamedReasoning += reason;
+              if (reason && thinkingEnabledForRequest) streamedReasoning += reason;
               upsertActiveSession([
                 ...requestMessages,
                 { id: assistantMsgId, role: 'assistant', content: streamedContent, reasoning: streamedReasoning, model: currentModel },
@@ -4803,9 +4927,10 @@ export function useAppController() {
 
   async function loadAdminBilling() {
     try {
-      const filters: { username?: string; model?: string; fromDate?: string; toDate?: string } = {};
+      const filters: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string } = {};
       if (adminBillingFilterUsername.value) filters.username = adminBillingFilterUsername.value;
       if (adminBillingFilterModel.value) filters.model = adminBillingFilterModel.value;
+      if (adminBillingFilterProvider.value) filters.provider = adminBillingFilterProvider.value;
       if (adminBillingFromDate.value) filters.fromDate = adminBillingFromDate.value;
       if (adminBillingToDate.value) filters.toDate = adminBillingToDate.value;
       const res = await fetchAdminBilling(adminBillingPage.value, 50, filters, backendBaseUrl.value);
@@ -4842,10 +4967,37 @@ export function useAppController() {
   async function loadAdminProviderKeys() {
     try {
       const provider = adminApiKeyProviderFilter.value || undefined;
-      adminProviderKeys.value = await fetchAdminProviderKeys(provider, backendBaseUrl.value);
+      const [keys, metrics] = await Promise.all([
+        fetchAdminProviderKeys(provider, backendBaseUrl.value),
+        fetchAdminProviderKeyMetrics(provider, backendBaseUrl.value),
+      ]);
+      adminProviderKeys.value = keys;
+      adminProviderKeyMetrics.value = metrics;
     } catch (e: any) {
       console.error('[admin] load provider keys error:', e);
     }
+  }
+
+  function getAdminProviderKeyMetric(row: ProviderApiKeyRow): ProviderKeyMetric | null {
+    return adminProviderKeyMetrics.value
+      .find((item) => item.providerName === row.providerName)
+      ?.pool.keys.find((key) => key.id === row.id || key.keyPrefix === row.keyPrefix) ?? null;
+  }
+
+  function providerKeyStatusTagType(statusValue?: string) {
+    if (statusValue === 'available') return 'success';
+    if (statusValue === 'half_open') return 'warning';
+    if (statusValue === 'circuit_open') return 'danger';
+    if (statusValue === 'disabled') return 'info';
+    return 'info';
+  }
+
+  function providerKeyStatusLabel(statusValue?: string) {
+    if (statusValue === 'available') return '可用';
+    if (statusValue === 'half_open') return '半开';
+    if (statusValue === 'circuit_open') return '熔断';
+    if (statusValue === 'disabled') return '禁用';
+    return '未知';
   }
 
   function openAddProviderKey() {
@@ -5025,9 +5177,10 @@ export function useAppController() {
   }
 
   function handleExportBillingCsv() {
-    const filters: { username?: string; model?: string; fromDate?: string; toDate?: string } = {};
+    const filters: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string } = {};
     if (adminBillingFilterUsername.value) filters.username = adminBillingFilterUsername.value;
     if (adminBillingFilterModel.value) filters.model = adminBillingFilterModel.value;
+    if (adminBillingFilterProvider.value) filters.provider = adminBillingFilterProvider.value;
     if (adminBillingFromDate.value) filters.fromDate = adminBillingFromDate.value;
     if (adminBillingToDate.value) filters.toDate = adminBillingToDate.value;
     exportAdminBillingCsv(filters, backendBaseUrl.value);
@@ -7906,6 +8059,7 @@ export function useAppController() {
     menuActiveColor,
     backendBaseUrl,
     isSettingsOpen,
+    chatThinkingMode,
     isAuthDialogOpen,
     authUser,
     authMode,
@@ -7989,6 +8143,10 @@ export function useAppController() {
     availableTools,
     knowledgeBases,
     agentMemories,
+    settingsMemories,
+    settingsMemoryLoading,
+    settingsMemorySaving,
+    settingsMemoryForm,
     availableSkills,
     workflows,
     agentTeams,
@@ -8197,6 +8355,7 @@ export function useAppController() {
     adminBillingFilterUsername,
     adminBillingFilterUserId,
     adminBillingFilterModel,
+    adminBillingFilterProvider,
     adminEditUserDialog,
     adminEditUserId,
     adminEditUserCredits,
@@ -8237,6 +8396,7 @@ export function useAppController() {
     consoleDailyUsage,
     consoleChartDays,
     adminProviderKeys,
+    adminProviderKeyMetrics,
     adminAddKeyDialog,
     adminNewKeyProvider,
     adminNewKeyName,
@@ -8347,6 +8507,10 @@ export function useAppController() {
     resetMemoryEditor,
     saveAgentMemory,
     deleteAgentMemory,
+    loadSettingsMemories,
+    createSettingsMemory,
+    deleteSettingsMemory,
+    forgetAllSettingsMemories,
     createSkillFromForm,
     exportSkillAsMarkdown,
     agentExportPreview,
@@ -8431,6 +8595,9 @@ export function useAppController() {
     openEditUser,
     saveEditUser,
     loadAdminProviderKeys,
+    getAdminProviderKeyMetric,
+    providerKeyStatusTagType,
+    providerKeyStatusLabel,
     openAddProviderKey,
     saveAddProviderKey,
     deleteProviderKey,

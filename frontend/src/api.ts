@@ -1853,6 +1853,18 @@ export async function deleteMemory(id: string, baseUrl = defaultBaseUrl): Promis
   if (!response.ok) throw new Error(await readError(response));
 }
 
+export async function deleteAllMemories(agentId?: string, baseUrl = defaultBaseUrl): Promise<number> {
+  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
+  const response = await fetch(`${baseUrl}/memory${query}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: { count?: number } };
+  return Number(payload.data?.count ?? 0);
+}
+
 export async function searchMemory(
   query: string,
   agentId?: string,
@@ -1952,6 +1964,11 @@ export interface AdminBillingRow {
   username: string;
   model: string;
   requestType: string;
+  providerName: string;
+  providerKeyId: string;
+  providerKeyName: string;
+  providerKeyPrefix: string;
+  auditMetadata: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -2030,12 +2047,13 @@ export async function fetchAdminTodayStats(baseUrl = defaultBaseUrl): Promise<To
 }
 
 export async function fetchAdminBilling(
-  page = 1, pageSize = 50, filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
+  page = 1, pageSize = 50, filters?: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string },
   baseUrl = defaultBaseUrl,
 ): Promise<{ data: AdminBillingRow[]; total: number }> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   if (filters?.username) params.set('username', filters.username);
   if (filters?.model) params.set('model', filters.model);
+  if (filters?.provider) params.set('provider', filters.provider);
   if (filters?.fromDate) params.set('fromDate', filters.fromDate);
   if (filters?.toDate) params.set('toDate', filters.toDate);
   const response = await fetch(`${baseUrl}/admin/billing?${params}`, { headers: buildHeaders(), ...credOpts });
@@ -2044,12 +2062,13 @@ export async function fetchAdminBilling(
 }
 
 export function exportAdminBillingCsv(
-  filters?: { username?: string; model?: string; fromDate?: string; toDate?: string },
+  filters?: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string },
   baseUrl = defaultBaseUrl,
 ): void {
   const params = new URLSearchParams();
   if (filters?.username) params.set('username', filters.username);
   if (filters?.model) params.set('model', filters.model);
+  if (filters?.provider) params.set('provider', filters.provider);
   if (filters?.fromDate) params.set('fromDate', filters.fromDate);
   if (filters?.toDate) params.set('toDate', filters.toDate);
   const qs = params.toString();
@@ -2128,6 +2147,42 @@ export interface ProviderApiKeyRow {
   createdAt: string;
 }
 
+export interface ProviderKeyMetric {
+  id: string | null;
+  name: string;
+  keyPrefix: string;
+  source: 'db' | 'env';
+  status: 'available' | 'circuit_open' | 'half_open' | 'disabled';
+  weight: number;
+  usageCount: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+  failureRate: number;
+  consecutiveFailures: number;
+  circuitBreakerCount: number;
+  halfOpenProbeInFlight: number;
+  halfOpenSuccesses: number;
+  circuitOpenUntil: number;
+  lastUsedAt: number;
+  lastStatusChangeAt: number;
+  lastError: string;
+  lastFailureReason: string;
+}
+
+export interface ProviderKeyPoolMetric {
+  providerName: string;
+  pool: {
+    strategy: 'round_robin' | 'random' | 'weighted_round_robin';
+    size: number;
+    availableCount: number;
+    halfOpenCount: number;
+    circuitOpenCount: number;
+    disabledCount: number;
+    keys: ProviderKeyMetric[];
+  };
+}
+
 export async function fetchAdminProviderKeys(
   provider?: string,
   baseUrl = defaultBaseUrl,
@@ -2142,6 +2197,23 @@ export async function fetchAdminProviderKeys(
   });
   if (!response.ok) throw new Error(await readError(response));
   const payload = (await response.json()) as { data: ProviderApiKeyRow[] };
+  return payload.data ?? [];
+}
+
+export async function fetchAdminProviderKeyMetrics(
+  provider?: string,
+  baseUrl = defaultBaseUrl,
+): Promise<ProviderKeyPoolMetric[]> {
+  const params = new URLSearchParams();
+  if (provider) params.set('provider', provider);
+  const qs = params.toString();
+  const response = await fetch(`${baseUrl}/admin/provider-key-metrics${qs ? '?' + qs : ''}`, {
+    headers: buildHeaders(),
+    cache: noStore,
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data?: ProviderKeyPoolMetric[] };
   return payload.data ?? [];
 }
 

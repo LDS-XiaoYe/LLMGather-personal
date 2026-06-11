@@ -14,6 +14,7 @@ import { extractContentDelta } from '../common/stream-utils';
 import { AgentsService } from '../agents/agents.service';
 import { RouteDecision } from '../router/router.service';
 import { RunAgentDto } from '../agents/dto/agent.dto';
+import { ProviderKeyAuditInfo } from '../providers/provider.types';
 
 function flushSse(res: Response): void {
   (res as Response & { flush?: () => void }).flush?.();
@@ -35,6 +36,21 @@ function writeStreamError(res: Response, model: string, error: unknown): void {
   });
   res.write('data: [DONE]\n\n');
   flushSse(res);
+}
+
+function readProviderKeyAuditHeader(response: globalThis.Response): ProviderKeyAuditInfo | undefined {
+  const raw = response.headers.get('x-provider-key-audit');
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw.startsWith('{') ? raw : decodeURIComponent(raw)) as ProviderKeyAuditInfo;
+    return parsed?.provider ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProviderKeyAuditCompletion(completion: unknown): ProviderKeyAuditInfo | undefined {
+  return (completion as { _providerKeyAudit?: ProviderKeyAuditInfo } | null)?._providerKeyAudit;
 }
 
 @Controller('chat')
@@ -110,6 +126,7 @@ export class ChatController {
     if (payload.stream) {
       const usageEstimate = this.billingService.reserveForStream(user.id, payload);
       const upstream = await this.chatService.createCompletionStream(payload);
+      const providerAudit = readProviderKeyAuditHeader(upstream);
       const reader = upstream.body?.getReader();
       if (!reader) {
         res.status(502).json({ error: { message: 'Upstream stream unavailable' } });
@@ -152,7 +169,13 @@ export class ChatController {
       finalUsage.total_tokens = finalUsage.prompt_tokens + finalUsage.completion_tokens;
 
       const updatedUser = await this.billingService.chargeForCompletion(
-        user.id, payload, finalUsage, 'chat',
+        user.id, payload, finalUsage, 'chat', {
+          provider: providerAudit?.provider,
+          providerKeyId: providerAudit?.keyId,
+          providerKeyName: providerAudit?.keyName,
+          providerKeyPrefix: providerAudit?.keyPrefix,
+          providerKeySource: providerAudit?.keySource,
+        },
       );
       void updatedUser;
 
@@ -168,8 +191,15 @@ export class ChatController {
     }
 
     const completion = await this.chatService.createCompletion(payload);
+    const providerAudit = readProviderKeyAuditCompletion(completion);
     const updatedUser = await this.billingService.chargeForCompletion(
-      user.id, payload, completion.usage, 'chat',
+      user.id, payload, completion.usage, 'chat', {
+        provider: providerAudit?.provider,
+        providerKeyId: providerAudit?.keyId,
+        providerKeyName: providerAudit?.keyName,
+        providerKeyPrefix: providerAudit?.keyPrefix,
+        providerKeySource: providerAudit?.keySource,
+      },
     );
     res.setHeader('x-credit-balance', updatedUser.credits.toFixed(6));
     const rotation = (completion as typeof completion & { _providerKeyRotation?: unknown })._providerKeyRotation;
@@ -211,6 +241,7 @@ export class ChatController {
     if (payload.stream) {
       const usageEstimate = this.billingService.reserveForStream(user.id, payload);
       const upstream = await this.chatService.createCompletionStream(payload);
+      const providerAudit = readProviderKeyAuditHeader(upstream);
       const reader = upstream.body?.getReader();
       if (!reader) {
         res.status(502).json({ error: { message: 'Upstream stream unavailable' } });
@@ -259,7 +290,13 @@ export class ChatController {
       };
       finalUsage.total_tokens = finalUsage.prompt_tokens + finalUsage.completion_tokens;
 
-      const updatedUser = await this.billingService.chargeForCompletion(user.id, payload, finalUsage, 'chat');
+      const updatedUser = await this.billingService.chargeForCompletion(user.id, payload, finalUsage, 'chat', {
+        provider: providerAudit?.provider,
+        providerKeyId: providerAudit?.keyId,
+        providerKeyName: providerAudit?.keyName,
+        providerKeyPrefix: providerAudit?.keyPrefix,
+        providerKeySource: providerAudit?.keySource,
+      });
       void updatedUser;
 
       const latencyMs = Date.now() - startedAt;
@@ -271,7 +308,14 @@ export class ChatController {
 
     // Non-streaming
     const completion = await this.chatService.createCompletion(payload);
-    const updatedUser = await this.billingService.chargeForCompletion(user.id, payload, completion.usage, 'chat');
+    const providerAudit = readProviderKeyAuditCompletion(completion);
+    const updatedUser = await this.billingService.chargeForCompletion(user.id, payload, completion.usage, 'chat', {
+      provider: providerAudit?.provider,
+      providerKeyId: providerAudit?.keyId,
+      providerKeyName: providerAudit?.keyName,
+      providerKeyPrefix: providerAudit?.keyPrefix,
+      providerKeySource: providerAudit?.keySource,
+    });
 
     const latencyMs = Date.now() - startedAt;
     this.routerService.recordCompletion(decision.selectedModel, latencyMs, true, decision.intent);

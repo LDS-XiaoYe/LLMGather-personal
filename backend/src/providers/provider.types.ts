@@ -82,6 +82,14 @@ export interface ProviderKeyRotationInfo {
   reason: 'rate_limit' | 'balance_exhausted' | 'retryable_failure' | 'network';
 }
 
+export interface ProviderKeyAuditInfo {
+  provider: string;
+  keyId: string | null;
+  keyName: string;
+  keyPrefix: string;
+  keySource: 'db' | 'env';
+}
+
 export interface ModelDescriptor {
   id: string;
   object: 'model';

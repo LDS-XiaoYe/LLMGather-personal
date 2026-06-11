@@ -122,12 +122,13 @@ export class AdminController {
     @Query('pageSize') pageSize?: string,
     @Query('username') username?: string,
     @Query('model') model?: string,
+    @Query('provider') provider?: string,
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
   ) {
     const p = Math.max(1, Number(page) || 1);
     const ps = Math.min(200, Math.max(1, Number(pageSize) || 50));
-    return this.adminService.listBillingLedger(p, ps, { username, model, fromDate, toDate });
+    return this.adminService.listBillingLedger(p, ps, { username, model, provider, fromDate, toDate });
   }
 
   /** GET /v1/admin/billing/export — export billing data as CSV */
@@ -135,11 +136,12 @@ export class AdminController {
   async exportBillingCsv(
     @Query('username') username: string,
     @Query('model') model: string,
+    @Query('provider') provider: string,
     @Query('fromDate') fromDate: string,
     @Query('toDate') toDate: string,
     @Res() res: Response,
   ) {
-    const csv = await this.adminService.exportBillingCsv({ username, model, fromDate, toDate });
+    const csv = await this.adminService.exportBillingCsv({ username, model, provider, fromDate, toDate });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename=billing-export.csv');
     res.send(csv);
@@ -166,6 +168,12 @@ export class AdminController {
   async listProviderKeys(@Query('provider') provider?: string) {
     const keys = await this.adminService.listProviderApiKeys(provider);
     return { data: keys };
+  }
+
+  /** GET /v1/admin/provider-key-metrics — runtime pool/circuit-breaker metrics */
+  @Get('provider-key-metrics')
+  async listProviderKeyMetrics(@Query('provider') provider?: string) {
+    return { data: await this.adminService.listProviderKeyMetrics(provider) };
   }
 
   /** POST /v1/admin/provider-keys — add a new provider API key */

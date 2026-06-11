@@ -51,23 +51,13 @@ describe('ApiKeyPool', () => {
       expect(pool.getKey()).toBe('B'); // A still cooling, B/C rotate
     });
 
-    it('should return earliest-expiring key when all are in cooldown', () => {
+    it('should remove all cooled keys from the usable pool', () => {
       const pool = new ApiKeyPool(['A', 'B', 'C']);
-      pool.markRateLimited('A'); // A: now + 30s
-      // Manually set B's cooldown to a future time later than A
-      const entries = pool._debugEntries();
-      const entryB = entries.find((e) => e.key === 'B')!;
-      // Override via internal — we need to test the "all cooled" path
-      // Use markRateLimited on B and C, then advance time for A only
+      pool.markRateLimited('A');
       pool.markRateLimited('B');
       pool.markRateLimited('C');
-
-      // All 3 are in cooldown — should return the earliest expiring
-      const key = pool.getKey();
-      // A was marked first, so it expires first (within the same 30s window)
-      // They were all marked in the same ms, so any is fine — but the code
-      // should NOT throw and should return one of them.
-      expect(['A', 'B', 'C']).toContain(key);
+      expect(pool.availableCount()).toBe(0);
+      expect(() => pool.getKey()).toThrow('ApiKeyPool has no usable keys');
     });
   });
 
@@ -108,23 +98,52 @@ describe('ApiKeyPool', () => {
     });
   });
 
-  describe('markBalanceExhausted', () => {
-    it('should skip an exhausted key and keep using the remaining keys', () => {
+  describe('circuit breaker states', () => {
+    it('should circuit-break a balance-exhausted key and keep using the remaining keys', () => {
       const pool = new ApiKeyPool(['A', 'B', 'C']);
       pool.markBalanceExhausted('A');
-      expect(pool.usableCount()).toBe(2);
       expect(pool.availableCount()).toBe(2);
+      expect(pool.getMetrics().keys.find((item) => item.keyPrefix === '***')?.status).toBeDefined();
       expect(pool.getKey()).toBe('B');
       expect(pool.getKey()).toBe('C');
       expect(pool.getKey()).toBe('B');
     });
 
-    it('should throw when all keys are exhausted', () => {
+    it('should throw when all keys are circuit-open', () => {
       const pool = new ApiKeyPool(['A', 'B']);
       pool.markBalanceExhausted('A');
       pool.markBalanceExhausted('B');
-      expect(pool.usableCount()).toBe(0);
+      expect(pool.availableCount()).toBe(0);
       expect(() => pool.getKey()).toThrow('ApiKeyPool has no usable keys');
+    });
+
+    it('should enter half-open after cooldown and recover after successful probes', () => {
+      jest.useFakeTimers().setSystemTime(1000);
+      const pool = new ApiKeyPool(['sk-A111', 'sk-B222'], { circuitBreakerMs: 1000, halfOpenProbeCount: 1, halfOpenSuccessThreshold: 1 });
+      pool.markRateLimited('sk-A111');
+      expect(pool.getMetrics().keys.find((item) => item.keyPrefix === '***A111')?.status).toBe('circuit_open');
+      jest.setSystemTime(2100);
+      expect(pool.getKey()).toBe('sk-B222');
+      expect(pool.getKey()).toBe('sk-A111');
+      expect(pool.getMetrics().keys.find((item) => item.keyPrefix === '***A111')?.status).toBe('half_open');
+      pool.markSuccess('sk-A111');
+      const metric = pool.getMetrics().keys.find((item) => item.keyPrefix === '***A111')!;
+      expect(metric.status).toBe('available');
+      expect(metric.successCount).toBe(1);
+      jest.useRealTimers();
+    });
+
+    it('should reopen circuit when a half-open probe fails', () => {
+      jest.useFakeTimers().setSystemTime(1000);
+      const pool = new ApiKeyPool(['A'], { circuitBreakerMs: 1000, halfOpenProbeCount: 1 });
+      pool.markRateLimited('A');
+      jest.setSystemTime(2100);
+      expect(pool.getKey()).toBe('A');
+      pool.markRetryableFailure('A');
+      const metric = pool.getMetrics().keys[0];
+      expect(metric.status).toBe('circuit_open');
+      expect(metric.circuitBreakerCount).toBe(2);
+      jest.useRealTimers();
     });
   });
 
@@ -172,6 +191,47 @@ describe('ApiKeyPool', () => {
       const entries = pool._debugEntries();
       expect(entries[0].cooldownUntil).toBeGreaterThanOrEqual(before + 10_000);
       expect(entries[0].cooldownUntil).toBeLessThanOrEqual(Date.now() + 10_000 + 100);
+    });
+  });
+
+  describe('selection strategies and metrics', () => {
+    it('should support weighted round-robin', () => {
+      const pool = new ApiKeyPool([
+        { key: 'A', weight: 2 },
+        { key: 'B', weight: 1 },
+      ], { strategy: 'weighted_round_robin' });
+      const picks = [pool.getKey(), pool.getKey(), pool.getKey()];
+      expect(picks.filter((key) => key === 'A')).toHaveLength(2);
+      expect(picks.filter((key) => key === 'B')).toHaveLength(1);
+    });
+
+    it('should dynamically add, remove, disable and enable keys', () => {
+      const pool = new ApiKeyPool(['A']);
+      expect(pool.addKey('B')).toBe(true);
+      expect(pool.size()).toBe(2);
+      pool.disableKey('A');
+      expect(pool.getKey()).toBe('B');
+      pool.enableKey('A');
+      expect(pool.availableCount()).toBe(2);
+      expect(pool.removeKey('B')).toBe(true);
+      expect(pool.size()).toBe(1);
+    });
+
+    it('should expose usage, success/failure rates, circuit count and last error', () => {
+      const pool = new ApiKeyPool(['A'], { failureThreshold: 2 });
+      expect(pool.getKey()).toBe('A');
+      pool.markSuccess('A');
+      expect(pool.getKey()).toBe('A');
+      pool.markRetryableFailure('A', 'upstream 500');
+      pool.markRetryableFailure('A', 'upstream 502');
+      const metric = pool.getMetrics().keys[0];
+      expect(metric.usageCount).toBe(2);
+      expect(metric.successCount).toBe(1);
+      expect(metric.failureCount).toBe(2);
+      expect(metric.successRate).toBeCloseTo(1 / 3, 3);
+      expect(metric.failureRate).toBeCloseTo(2 / 3, 3);
+      expect(metric.circuitBreakerCount).toBe(1);
+      expect(metric.lastError).toBe('upstream 502');
     });
   });
 });

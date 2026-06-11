@@ -26,6 +26,7 @@ const isAuthDialogOpen = bind(app, 'isAuthDialogOpen');
 const authUser = bind(app, 'authUser');
 const userInvitationCode = bind(app, 'userInvitationCode');
 const selectedModel = bind(app, 'selectedModel');
+const chatThinkingMode = bind(app, 'chatThinkingMode');
 const isLoadingModels = bind(app, 'isLoadingModels');
 const status = bind(app, 'status');
 const isAuthLoaded = bind(app, 'isAuthLoaded');
@@ -165,6 +166,21 @@ const switchPage = bind(app, 'switchPage');
                 <el-text v-if="requestId" type="info" size="small">request id: {{ requestId }}</el-text>
               </div>
               <div class="composer-actions">
+                <button
+                  type="button"
+                  class="thinking-mode-toggle"
+                  :class="{ active: chatThinkingMode }"
+                  :aria-pressed="chatThinkingMode"
+                  :title="chatThinkingMode ? '当前为思考模式，点击切换直答' : '当前为直答模式，点击开启思考'"
+                  @click="chatThinkingMode = !chatThinkingMode"
+                >
+                  <span class="thinking-toggle-thumb" />
+                  <span class="thinking-toggle-option thinking-on">
+                    <el-icon><Sunny /></el-icon>
+                    思考
+                  </span>
+                  <span class="thinking-toggle-option thinking-off">直答</span>
+                </button>
                 <el-button :icon="Delete" @click="clearChat()">清空</el-button>
                 <el-button v-if="isSubmitting" type="danger" :icon="SwitchButton" @click="stopChatGeneration()">停止</el-button>
                 <el-button v-else type="primary" :icon="Promotion" @click="submitPrompt()" :disabled="!draft.trim()">发送</el-button>
@@ -173,3 +189,82 @@ const switchPage = bind(app, 'switchPage');
           </el-card>
         </div>
 </template>
+
+<style scoped>
+.thinking-mode-toggle {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 128px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid #d7dce8;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+  color: #64748b;
+  cursor: pointer;
+  overflow: hidden;
+  vertical-align: middle;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(15, 23, 42, .05);
+}
+
+.thinking-mode-toggle:hover {
+  border-color: #b7c3d8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 4px 14px rgba(15, 23, 42, .08);
+}
+
+.thinking-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  height: calc(100% - 4px);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #334155 0%, #0f766e 100%);
+  box-shadow: 0 2px 7px rgba(15, 23, 42, .18);
+  transform: translateX(100%);
+  transition: transform .2s ease, background .2s ease;
+}
+
+.thinking-mode-toggle.active {
+  border-color: #9d8cff;
+  background: linear-gradient(180deg, #fbfaff 0%, #f4f1ff 100%);
+}
+
+.thinking-mode-toggle.active .thinking-toggle-thumb {
+  transform: translateX(0);
+  background: linear-gradient(135deg, #7b68ee 0%, #5f8cff 100%);
+}
+
+.thinking-toggle-option {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  transition: color .18s ease;
+}
+
+.thinking-mode-toggle.active .thinking-on,
+.thinking-mode-toggle:not(.active) .thinking-off {
+  color: #ffffff;
+}
+
+.thinking-mode-toggle:not(.active) .thinking-on {
+  color: #64748b;
+}
+
+.thinking-mode-toggle.active .thinking-off {
+  color: #8a93a3;
+}
+</style>

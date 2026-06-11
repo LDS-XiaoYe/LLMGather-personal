@@ -4,6 +4,7 @@ import {
   ChatCompletionResponse,
   ModelDescriptor,
   ProviderAdapter,
+  ProviderKeyAuditInfo,
   ProviderKeyRotationInfo,
 } from './provider.types';
 import { ApiKeyPool } from './api-key-pool';
@@ -77,7 +78,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
       model: this.normalizeModel(request.model),
       stream: false,
     });
-    const { response, rotation } = await this.fetchWithRetry({
+    const { response, rotation, audit } = await this.fetchWithRetry({
       ...payload,
     });
 
@@ -87,6 +88,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
 
     const data = (await response.json()) as ChatCompletionResponse;
     attachKeyRotation(data, rotation);
+    attachKeyAudit(data, audit);
     return data;
   }
 
@@ -96,7 +98,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
       model: this.normalizeModel(request.model),
       stream: true,
     });
-    const { response, rotation } = await this.fetchWithRetry({
+    const { response, rotation, audit } = await this.fetchWithRetry({
       ...payload,
     });
 
@@ -108,7 +110,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
       throw new ServiceUnavailableException(`${this.providerName} stream unavailable`);
     }
 
-    return withKeyRotationHeader(response, rotation);
+    return withProviderAuditHeaders(response, rotation, audit);
   }
 
   listModels(): ModelDescriptor[] {
@@ -125,7 +127,18 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
   }
 
   protected preparePayload(payload: ChatCompletionRequest): ChatCompletionRequest {
-    return payload;
+    return this.withExtraBody(payload);
+  }
+
+  protected withExtraBody(payload: ChatCompletionRequest): ChatCompletionRequest {
+    const { extra_body: extraBody, ...basePayload } = payload;
+    if (!extraBody || typeof extraBody !== 'object') {
+      return basePayload;
+    }
+    return {
+      ...basePayload,
+      ...extraBody,
+    } as ChatCompletionRequest;
   }
 
   /* ──────── private ──────── */
@@ -173,7 +186,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
    */
   private async fetchWithRetry(
     payload: ChatCompletionRequest,
-  ): Promise<{ response: Response; rotation?: ProviderKeyRotationInfo }> {
+  ): Promise<{ response: Response; rotation?: ProviderKeyRotationInfo; audit?: ProviderKeyAuditInfo }> {
     let lastError = 'unknown error';
     let currentKey = this.keyPool.getRandomKey();
     let rotation: ProviderKeyRotationInfo | undefined;
@@ -194,7 +207,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
 
         // 429 — rate limit: cooldown this key, rotate, retry
         if (response.status === 429 && attempt < this.retryCount) {
-          this.keyPool.markRateLimited(currentKey);
+          this.keyPool.markRateLimited(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'rate_limit' };
           console.warn(
             JSON.stringify({
@@ -210,7 +223,7 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
 
         // Provider account/key balance exhausted — retire this key and try the next one.
         if (attempt < this.retryCount && this.keyPool.usableCount() > 1 && await isBalanceExhaustedResponse(response)) {
-          this.keyPool.markBalanceExhausted(currentKey);
+          this.keyPool.markBalanceExhausted(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'balance_exhausted' };
           console.warn(
             JSON.stringify({
@@ -224,16 +237,28 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
           continue;
         }
 
+        if ([401, 403].includes(response.status) && attempt < this.retryCount && this.keyPool.usableCount() > 1) {
+          this.keyPool.markAuthenticationFailure(currentKey, `HTTP ${response.status}`);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
+          currentKey = this.keyPool.getRandomKey();
+          continue;
+        }
+
         // 5xx — server error: rotate key without cooldown, retry
         if (response.status >= 500 && attempt < this.retryCount) {
-          this.keyPool.markRetryableFailure(currentKey);
+          this.keyPool.markRetryableFailure(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
         // 4xx (non-429) or final attempt — don't retry
-        return { response, rotation };
+        if (response.ok) {
+          this.keyPool.markSuccess(currentKey);
+        } else if ([401, 403].includes(response.status)) {
+          this.keyPool.markAuthenticationFailure(currentKey, `HTTP ${response.status}`);
+        }
+        return { response, rotation, audit: this.describeCurrentKey(currentKey) };
       } catch (error) {
         clearTimeout(timeoutId);
         const reason =
@@ -265,13 +290,24 @@ export class OpenAiCompatibleProvider implements ProviderAdapter {
         }
 
         // Network error — rotate key (no cooldown), retry
-        this.keyPool.markRetryableFailure(currentKey);
+        this.keyPool.markNetworkFailure(currentKey, lastError);
         rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'network' };
         currentKey = this.keyPool.getRandomKey();
       }
     }
 
     throw new ServiceUnavailableException(`${this.providerName} request failed: ${lastError}`);
+  }
+
+  private describeCurrentKey(key: string): ProviderKeyAuditInfo {
+    const descriptor = this.keyPool.describeKey(key);
+    return {
+      provider: this.providerName,
+      keyId: descriptor.id,
+      keyName: descriptor.name,
+      keyPrefix: descriptor.keyPrefix,
+      keySource: descriptor.source,
+    };
   }
 }
 
@@ -314,10 +350,20 @@ function attachKeyRotation(response: ChatCompletionResponse, rotation?: Provider
   });
 }
 
-function withKeyRotationHeader(response: Response, rotation?: ProviderKeyRotationInfo): Response {
-  if (!rotation) return response;
+function attachKeyAudit(response: ChatCompletionResponse, audit?: ProviderKeyAuditInfo): void {
+  if (!audit) return;
+  Object.defineProperty(response, '_providerKeyAudit', {
+    value: audit,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+function withProviderAuditHeaders(response: Response, rotation?: ProviderKeyRotationInfo, audit?: ProviderKeyAuditInfo): Response {
+  if (!rotation && !audit) return response;
   const headers = new Headers(response.headers);
-  headers.set('x-provider-key-rotation', JSON.stringify(rotation));
+  if (rotation) headers.set('x-provider-key-rotation', JSON.stringify(rotation));
+  if (audit) headers.set('x-provider-key-audit', encodeURIComponent(JSON.stringify(audit)));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

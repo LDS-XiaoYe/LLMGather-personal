@@ -45,11 +45,13 @@ const UserFilled = bind(app, 'UserFilled');
 const VideoCamera = bind(app, 'VideoCamera');
 const MagicStick = bind(app, 'MagicStick');
 const theme = bind(app, 'theme');
+const chatThinkingMode = bind(app, 'chatThinkingMode');
 const menuBgColor = bind(app, 'menuBgColor');
 const menuTextColor = bind(app, 'menuTextColor');
 const menuActiveColor = bind(app, 'menuActiveColor');
 const isSettingsOpen = bind(app, 'isSettingsOpen');
 const isAuthDialogOpen = bind(app, 'isAuthDialogOpen');
+const isAuthenticated = bind(app, 'isAuthenticated');
 const authMode = bind(app, 'authMode');
 const authUsername = bind(app, 'authUsername');
 const authPassword = bind(app, 'authPassword');
@@ -69,6 +71,10 @@ const rechargeChecking = bind(app, 'rechargeChecking');
 const agents = bind(app, 'agents');
 const activeAgentId = bind(app, 'activeAgentId');
 const agentLoading = bind(app, 'agentLoading');
+const settingsMemories = bind(app, 'settingsMemories');
+const settingsMemoryLoading = bind(app, 'settingsMemoryLoading');
+const settingsMemorySaving = bind(app, 'settingsMemorySaving');
+const settingsMemoryForm = bind(app, 'settingsMemoryForm');
 const sessions = bind(app, 'sessions');
 const activeSessionId = bind(app, 'activeSessionId');
 const pageMode = bind(app, 'pageMode');
@@ -77,6 +83,10 @@ const isAdmin = bind(app, 'isAdmin');
 const createAgentDraft = bind(app, 'createAgentDraft');
 const selectAgent = bind(app, 'selectAgent');
 const removeAgent = bind(app, 'removeAgent');
+const loadSettingsMemories = bind(app, 'loadSettingsMemories');
+const createSettingsMemory = bind(app, 'createSettingsMemory');
+const deleteSettingsMemory = bind(app, 'deleteSettingsMemory');
+const forgetAllSettingsMemories = bind(app, 'forgetAllSettingsMemories');
 const submitAuth = bind(app, 'submitAuth');
 const onAuthDialogClosed = bind(app, 'onAuthDialogClosed');
 const handleSendCode = bind(app, 'handleSendCode');
@@ -334,7 +344,7 @@ const switchPage = bind(app, 'switchPage');
     </el-main>
 
     <!-- ====== SETTINGS DRAWER ====== -->
-    <el-drawer v-model="isSettingsOpen" title="设置" direction="rtl" :size="360">
+    <el-drawer v-model="isSettingsOpen" title="设置" direction="rtl" :size="360" @open="loadSettingsMemories()">
       <el-form class="settings-body" label-position="top">
         <el-form-item label="主题" class="settings-label-wrap">
           <el-segmented
@@ -346,6 +356,42 @@ const switchPage = bind(app, 'switchPage');
             ]"
           />
         </el-form-item>
+        <el-divider />
+        <div class="settings-section-head">
+          <strong>记忆管理</strong>
+          <div>
+            <el-button size="small" :loading="settingsMemoryLoading" @click="loadSettingsMemories()">刷新</el-button>
+            <el-button size="small" type="danger" plain :disabled="!settingsMemories.length" @click="forgetAllSettingsMemories()">忘记所有</el-button>
+          </div>
+        </div>
+        <el-empty v-if="!isAuthenticated" description="登录后管理记忆" :image-size="48" />
+        <template v-else>
+          <el-form-item label="新增记忆">
+            <el-input v-model="settingsMemoryForm.content" type="textarea" :rows="3" placeholder="写入一条长期记忆" />
+          </el-form-item>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+            <el-select v-model="settingsMemoryForm.memoryType" size="small" style="width:110px">
+              <el-option label="事实" value="fact" />
+              <el-option label="偏好" value="preference" />
+              <el-option label="流程" value="procedure" />
+              <el-option label="片段" value="episode" />
+            </el-select>
+            <el-input-number v-model="settingsMemoryForm.importance" size="small" :min="1" :max="5" />
+            <el-button size="small" type="primary" :loading="settingsMemorySaving" :disabled="!settingsMemoryForm.content.trim()" @click="createSettingsMemory()">新增</el-button>
+          </div>
+          <div v-loading="settingsMemoryLoading" class="settings-memory-list">
+            <el-empty v-if="!settingsMemories.length" description="暂无记忆" :image-size="48" />
+            <div v-for="memory in settingsMemories" :key="memory.id" class="settings-memory-item">
+              <div class="settings-memory-meta">
+                <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
+                <el-tag v-if="memory.agentId" size="small" type="success">Agent</el-tag>
+                <span>重要性 {{ memory.importance }}</span>
+              </div>
+              <div class="settings-memory-content">{{ memory.content }}</div>
+              <el-button size="small" type="danger" text :icon="Delete" @click="deleteSettingsMemory(memory)">删除</el-button>
+            </div>
+          </div>
+        </template>
       </el-form>
     </el-drawer>
 
@@ -427,3 +473,42 @@ const switchPage = bind(app, 'switchPage');
     </el-dialog>
   </el-container>
 </template>
+
+<style scoped>
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.settings-memory-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-memory-item {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--el-fill-color-blank);
+}
+
+.settings-memory-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.settings-memory-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+</style>

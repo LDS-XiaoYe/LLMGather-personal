@@ -1,12 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
-import { BillingService } from '../billing/billing.service';
+import { BillingAuditInfo, BillingService } from '../billing/billing.service';
 import { DatabaseService } from '../database/database.service';
 import { ChatService } from '../gateway/chat.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
 import { MemoryService } from '../memory/memory.service';
-import { ChatCompletionRequest, ChatCompletionUsage, ChatMessage, ChatToolDefinition } from '../providers/provider.types';
+import { ChatCompletionRequest, ChatCompletionResponse, ChatCompletionUsage, ChatMessage, ChatToolDefinition, ProviderKeyAuditInfo } from '../providers/provider.types';
 import { SkillsService } from '../skills/skills.service';
 import { ToolDefinition, ToolsService } from '../tools/tools.service';
 import { BUILTIN_AGENT_SPECS, BuiltinAgentKey, BuiltinAgentSpec, getBuiltinAgentSpec } from './builtin-agents';
@@ -1255,7 +1255,7 @@ export class AgentsService {
     };
     const completion = await this.chatService.createCompletion(request);
     const usage = this.usageForCompletion(request, completion.usage);
-    await this.billingService.chargeForCompletion(agent.userId, request, usage, 'agent');
+    await this.billingService.chargeForCompletion(agent.userId, request, usage, 'agent', this.providerAuditFromCompletion(completion));
     const content = completion.choices?.[0]?.message?.content ?? '{}';
     return { action: this.sanitizePlannerAction(this.parseJsonRecord(content.match(/```json\s*([\s\S]*?)```/i)?.[1] ?? content)), usage };
   }
@@ -1633,7 +1633,7 @@ export class AgentsService {
       };
       const completion = await this.chatService.createCompletion(request);
       const usage = this.usageForCompletion(request, completion.usage);
-      await this.billingService.chargeForCompletion(userId, request, usage, 'agent');
+      await this.billingService.chargeForCompletion(userId, request, usage, 'agent', this.providerAuditFromCompletion(completion));
       this.addUsage(usageTotal, usage);
 
       const message = completion.choices?.[0]?.message;
@@ -1675,7 +1675,7 @@ export class AgentsService {
     };
     const completion = await this.chatService.createCompletion(finalRequest);
     const usage = this.usageForCompletion(finalRequest, completion.usage);
-    await this.billingService.chargeForCompletion(userId, finalRequest, usage, 'agent');
+    await this.billingService.chargeForCompletion(userId, finalRequest, usage, 'agent', this.providerAuditFromCompletion(completion));
     this.addUsage(usageTotal, usage);
     return completion.choices?.[0]?.message?.content || '已达到最大工具调用轮数，但模型未返回最终文本。';
   }
@@ -1898,7 +1898,7 @@ export class AgentsService {
     try {
       const completion = await this.chatService.createCompletion(request);
       const usage = this.usageForCompletion(request, completion.usage);
-      await this.billingService.chargeForCompletion(userId, request, usage, 'agent');
+      await this.billingService.chargeForCompletion(userId, request, usage, 'agent', this.providerAuditFromCompletion(completion));
       this.addUsage(usageTotal, usage);
       const parsed = this.parseJsonRecord(completion.choices?.[0]?.message?.content ?? '{}');
       const items = Array.isArray(parsed.items) ? parsed.items : [];
@@ -1944,6 +1944,18 @@ export class AgentsService {
     const prompt = Math.max(1, Math.ceil(JSON.stringify(request.messages).length / 4));
     const completion = Math.min(request.max_tokens ?? 256, 512);
     return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
+  }
+
+  private providerAuditFromCompletion(completion: ChatCompletionResponse): BillingAuditInfo | undefined {
+    const audit = (completion as ChatCompletionResponse & { _providerKeyAudit?: ProviderKeyAuditInfo })._providerKeyAudit;
+    if (!audit) return undefined;
+    return {
+      provider: audit.provider,
+      providerKeyId: audit.keyId,
+      providerKeyName: audit.keyName,
+      providerKeyPrefix: audit.keyPrefix,
+      providerKeySource: audit.keySource,
+    };
   }
 
   async getRun(userId: string, runId: string): Promise<AgentRun> {
@@ -2204,7 +2216,7 @@ export class AgentsService {
         };
         const completion = await this.chatService.createCompletion(request);
         const usage = this.usageForCompletion(request, completion.usage);
-        await this.billingService.chargeForCompletion(userId, request, usage, 'agent');
+        await this.billingService.chargeForCompletion(userId, request, usage, 'agent', this.providerAuditFromCompletion(completion));
         const parsed = this.parseJsonRecord((completion.choices?.[0]?.message?.content ?? '{}').match(/```json\s*([\s\S]*?)```/i)?.[1] ?? completion.choices?.[0]?.message?.content ?? '{}');
         return this.normalizeAgentImprovementSuggestions(parsed, heuristic, { agentId, generatedAt: this.databaseService.now(), usage });
       } catch {

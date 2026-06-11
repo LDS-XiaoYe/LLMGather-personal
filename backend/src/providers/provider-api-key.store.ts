@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DatabaseService, dbNow } from '../database/database.service';
-import { ApiKeyPool } from './api-key-pool';
+import { ApiKeyPool, ApiKeyPoolInput, ApiKeyPoolOptions, ApiKeyPoolSnapshot, ApiKeyPoolStrategy } from './api-key-pool';
 import { parseKeysFromEnv } from './openai-compatible.provider';
 import { randomUUID } from 'crypto';
 
@@ -114,17 +114,34 @@ export class ProviderApiKeyStore implements OnModuleInit {
     return pool;
   }
 
+  listPoolMetrics(providerName?: string): Array<{ providerName: string; pool: ApiKeyPoolSnapshot }> {
+    const rows: Array<{ providerName: string; pool: ApiKeyPoolSnapshot }> = [];
+    for (const [name, pool] of this.pools.entries()) {
+      if (providerName && name !== providerName) continue;
+      rows.push({ providerName: name, pool: pool.getMetrics() });
+    }
+    return rows;
+  }
+
   async reloadPool(providerName: string): Promise<void> {
     const db = this.databaseService.connection;
 
     // 1. Load keys from DB (plaintext)
     const rows = (await db
       .prepare(
-        'SELECT api_key FROM provider_api_keys WHERE provider_name = ? ORDER BY created_at ASC',
+        'SELECT id, name, api_key, key_prefix FROM provider_api_keys WHERE provider_name = ? ORDER BY created_at ASC',
       )
-      .all(providerName)) as Array<{ api_key: string }>;
+      .all(providerName)) as Array<{ id: string; name: string; api_key: string; key_prefix: string }>;
 
-    const dbKeys: string[] = rows.map((r) => r.api_key).filter(Boolean);
+    const dbKeys = rows
+      .filter((r) => Boolean(r.api_key))
+      .map((r) => ({
+        key: r.api_key,
+        id: r.id,
+        name: r.name,
+        keyPrefix: r.key_prefix,
+        source: 'db' as const,
+      }));
 
     // 2. Load fallback keys from .env
     const envConfig = PROVIDER_ENV_MAP[providerName];
@@ -145,12 +162,12 @@ export class ProviderApiKeyStore implements OnModuleInit {
     }
 
     // 3. Merge: DB keys first, then .env fallback (deduplicated)
-    const seen = new Set(dbKeys);
-    const merged = [...dbKeys];
+    const seen = new Set(dbKeys.map((item) => item.key));
+    const merged: ApiKeyPoolInput[] = [...dbKeys];
     for (const k of envKeys) {
       if (!seen.has(k)) {
         seen.add(k);
-        merged.push(k);
+        merged.push({ key: k, id: null, name: '环境变量 Key', keyPrefix: maskApiKey(k), source: 'env' as const });
       }
     }
 
@@ -162,17 +179,38 @@ export class ProviderApiKeyStore implements OnModuleInit {
       return;
     }
 
-    // Read cooldown from system settings if configured
-    let cooldown = 30_000;
+    // Read circuit-breaker options from system settings if configured.
+    const poolOptions: ApiKeyPoolOptions = { cooldownMs: 30_000, circuitBreakerMs: 30_000 };
     try {
-      const row = (await this.databaseService.connection.prepare('SELECT value FROM system_settings WHERE `key` = ?').get('api_key_cooldown_ms')) as { value: string } | undefined;
-      if (row && row.value) {
-        const n = Number(row.value);
-        if (Number.isFinite(n) && n > 0) cooldown = n;
+      const rows = (await this.databaseService.connection.prepare(
+        'SELECT `key`, value FROM system_settings WHERE `key` IN (?, ?, ?, ?, ?, ?)',
+      ).all(
+        'api_key_cooldown_ms',
+        'api_key_circuit_breaker_ms',
+        'api_key_failure_threshold',
+        'api_key_half_open_probe_count',
+        'api_key_half_open_success_threshold',
+        'api_key_pool_strategy',
+      )) as Array<{ key: string; value: string }>;
+      const settings = new Map(rows.map((row) => [row.key, row.value]));
+      const cooldown = Number(settings.get('api_key_cooldown_ms'));
+      const breaker = Number(settings.get('api_key_circuit_breaker_ms'));
+      const failureThreshold = Number(settings.get('api_key_failure_threshold'));
+      const halfOpenProbeCount = Number(settings.get('api_key_half_open_probe_count'));
+      const halfOpenSuccessThreshold = Number(settings.get('api_key_half_open_success_threshold'));
+      const strategy = settings.get('api_key_pool_strategy') as ApiKeyPoolStrategy | undefined;
+      if (Number.isFinite(cooldown) && cooldown > 0) poolOptions.cooldownMs = cooldown;
+      if (Number.isFinite(breaker) && breaker > 0) poolOptions.circuitBreakerMs = breaker;
+      else poolOptions.circuitBreakerMs = poolOptions.cooldownMs;
+      if (Number.isFinite(failureThreshold) && failureThreshold > 0) poolOptions.failureThreshold = failureThreshold;
+      if (Number.isFinite(halfOpenProbeCount) && halfOpenProbeCount > 0) poolOptions.halfOpenProbeCount = halfOpenProbeCount;
+      if (Number.isFinite(halfOpenSuccessThreshold) && halfOpenSuccessThreshold > 0) poolOptions.halfOpenSuccessThreshold = halfOpenSuccessThreshold;
+      if (strategy && ['round_robin', 'random', 'weighted_round_robin'].includes(strategy)) {
+        poolOptions.strategy = strategy;
       }
     } catch {}
 
-    const pool = new ApiKeyPool(merged, cooldown);
+    const pool = new ApiKeyPool(merged, poolOptions);
     this.pools.set(providerName, pool);
     console.log(
       `[ProviderApiKeyStore] Pool "${providerName}" reloaded: ${pool.size()} keys (${dbKeys.length} DB + ${merged.length - dbKeys.length} env fallback)`,

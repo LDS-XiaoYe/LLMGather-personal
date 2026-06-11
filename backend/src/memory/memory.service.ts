@@ -123,6 +123,16 @@ export class MemoryService {
     ).run(this.databaseService.now(), this.databaseService.now(), id, userId);
   }
 
+  async removeAll(userId: string, agentId?: string): Promise<number> {
+    const now = this.databaseService.now();
+    const result = await this.databaseService.connection.prepare(
+      `UPDATE memories
+       SET deleted_at = ?, updated_at = ?
+       WHERE user_id = ? AND deleted_at IS NULL AND (? = '' OR agent_id = ?)`,
+    ).run(now, now, userId, agentId ?? '', agentId ?? '');
+    return Number((result as { changes?: number }).changes ?? 0);
+  }
+
   async autoRemember(userId: string, agentId: string, input: string, output: string): Promise<MemoryItem | null> {
     const content = `用户任务: ${input.slice(0, 500)}\nAgent 结果摘要: ${output.slice(0, 800)}`;
     if (content.trim().length < 20) return null;

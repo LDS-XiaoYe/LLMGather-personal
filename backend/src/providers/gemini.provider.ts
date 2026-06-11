@@ -7,6 +7,7 @@ import {
   ContentPart,
   ModelDescriptor,
   ProviderAdapter,
+  ProviderKeyAuditInfo,
   ProviderKeyRotationInfo,
 } from './provider.types';
 
@@ -105,25 +106,26 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    const { response, rotation } = await this.fetchWithRetry(request, false);
+    const { response, rotation, audit } = await this.fetchWithRetry(request, false);
     if (!response.ok) throw await this.buildProviderException(response);
     const data = (await response.json()) as GeminiResponse;
     const completion = this.toOpenAiResponse(request, data);
     attachKeyRotation(completion, rotation);
+    attachKeyAudit(completion, audit);
     return completion;
   }
 
   async chatCompletionStream(request: ChatCompletionRequest): Promise<Response> {
-    const { response, rotation } = await this.fetchWithRetry(request, true);
+    const { response, rotation, audit } = await this.fetchWithRetry(request, true);
     if (!response.ok) throw await this.buildProviderException(response);
     if (!response.body) throw new ServiceUnavailableException(`${this.providerName} stream unavailable`);
-    return withKeyRotationHeader(this.toOpenAiStream(request, response), rotation);
+    return withProviderAuditHeaders(this.toOpenAiStream(request, response), rotation, audit);
   }
 
   private async fetchWithRetry(
     request: ChatCompletionRequest,
     stream: boolean,
-  ): Promise<{ response: Response; rotation?: ProviderKeyRotationInfo }> {
+  ): Promise<{ response: Response; rotation?: ProviderKeyRotationInfo; audit?: ProviderKeyAuditInfo }> {
     if (!this.keyPool) throw new ServiceUnavailableException(`${this.providerName} API key pool is not configured`);
     let currentKey = this.keyPool.getRandomKey();
     let lastError = 'unknown error';
@@ -152,27 +154,39 @@ export class GeminiProvider implements ProviderAdapter {
         clearTimeout(timeoutId);
 
         if (response.status === 429 && attempt < maxAttempts) {
-          this.keyPool.markRateLimited(currentKey);
+          this.keyPool.markRateLimited(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'rate_limit' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
         if (attempt < maxAttempts && this.keyPool.usableCount() > 1 && await isBalanceExhaustedResponse(response)) {
-          this.keyPool.markBalanceExhausted(currentKey);
+          this.keyPool.markBalanceExhausted(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'balance_exhausted' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
-        if (response.status >= 500 && attempt < maxAttempts) {
-          this.keyPool.markRetryableFailure(currentKey);
+        if ([401, 403].includes(response.status) && attempt < maxAttempts && this.keyPool.usableCount() > 1) {
+          this.keyPool.markAuthenticationFailure(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
           currentKey = this.keyPool.getRandomKey();
           continue;
         }
 
-        return { response, rotation };
+        if (response.status >= 500 && attempt < maxAttempts) {
+          this.keyPool.markRetryableFailure(currentKey, `HTTP ${response.status}`);
+          rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
+          currentKey = this.keyPool.getRandomKey();
+          continue;
+        }
+
+        if (response.ok) {
+          this.keyPool.markSuccess(currentKey);
+        } else if ([401, 403].includes(response.status)) {
+          this.keyPool.markAuthenticationFailure(currentKey, `HTTP ${response.status}`);
+        }
+        return { response, rotation, audit: this.describeCurrentKey(currentKey) };
       } catch (error) {
         clearTimeout(timeoutId);
         lastError = error instanceof Error ? error.message : String(error);
@@ -182,13 +196,24 @@ export class GeminiProvider implements ProviderAdapter {
             : `request failed after retries: ${lastError}`;
           throw new ServiceUnavailableException(`${this.providerName} ${detail}`);
         }
-        this.keyPool.markRetryableFailure(currentKey);
+        this.keyPool.markNetworkFailure(currentKey, lastError);
         rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'network' };
         currentKey = this.keyPool.getRandomKey();
       }
     }
 
     throw new ServiceUnavailableException(`${this.providerName} request failed: ${lastError}`);
+  }
+
+  private describeCurrentKey(key: string): ProviderKeyAuditInfo {
+    const descriptor = this.keyPool?.describeKey(key);
+    return {
+      provider: this.providerName,
+      keyId: descriptor?.id ?? null,
+      keyName: descriptor?.name ?? '未知 Key',
+      keyPrefix: descriptor?.keyPrefix ?? maskKey(key),
+      keySource: descriptor?.source ?? 'env',
+    };
   }
 
   private toGeminiRequest(request: ChatCompletionRequest): GeminiRequest {
@@ -357,6 +382,9 @@ export class GeminiProvider implements ProviderAdapter {
     if (includeThoughts !== undefined) thinkingConfig.includeThoughts = includeThoughts;
     if (extra.enable_thinking === true && thinkingConfig.includeThoughts === undefined) {
       thinkingConfig.includeThoughts = true;
+    }
+    if (extra.enable_thinking === false && thinkingConfig.includeThoughts === undefined) {
+      thinkingConfig.includeThoughts = false;
     }
     return Object.keys(thinkingConfig).length ? thinkingConfig : undefined;
   }
@@ -658,6 +686,20 @@ function attachKeyRotation(response: ChatCompletionResponse, rotation?: Provider
   });
 }
 
+function maskKey(key: string): string {
+  if (!key || key.length <= 4) return '***';
+  return `***${key.slice(-4)}`;
+}
+
+function attachKeyAudit(response: ChatCompletionResponse, audit?: ProviderKeyAuditInfo): void {
+  if (!audit) return;
+  Object.defineProperty(response, '_providerKeyAudit', {
+    value: audit,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
 async function isBalanceExhaustedResponse(response: Response): Promise<boolean> {
   if (![400, 402, 403].includes(response.status)) return false;
   let text = response.statusText || '';
@@ -682,10 +724,11 @@ async function isBalanceExhaustedResponse(response: Response): Promise<boolean> 
   ].some((needle) => normalized.includes(needle));
 }
 
-function withKeyRotationHeader(response: Response, rotation?: ProviderKeyRotationInfo): Response {
-  if (!rotation) return response;
+function withProviderAuditHeaders(response: Response, rotation?: ProviderKeyRotationInfo, audit?: ProviderKeyAuditInfo): Response {
+  if (!rotation && !audit) return response;
   const headers = new Headers(response.headers);
-  headers.set('x-provider-key-rotation', JSON.stringify(rotation));
+  if (rotation) headers.set('x-provider-key-rotation', JSON.stringify(rotation));
+  if (audit) headers.set('x-provider-key-audit', encodeURIComponent(JSON.stringify(audit)));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

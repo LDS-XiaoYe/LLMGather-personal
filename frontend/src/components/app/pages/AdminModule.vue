@@ -37,6 +37,7 @@ const adminBillingTotal = bind(app, 'adminBillingTotal');
 const adminBillingPage = bind(app, 'adminBillingPage');
 const adminBillingFilterUsername = bind(app, 'adminBillingFilterUsername');
 const adminBillingFilterModel = bind(app, 'adminBillingFilterModel');
+const adminBillingFilterProvider = bind(app, 'adminBillingFilterProvider');
 const adminEditUserDialog = bind(app, 'adminEditUserDialog');
 const adminEditUserCredits = bind(app, 'adminEditUserCredits');
 const adminEditUserRole = bind(app, 'adminEditUserRole');
@@ -72,6 +73,7 @@ const adminEditSettingTagFilter = bind(app, 'adminEditSettingTagFilter');
 const adminEditSettingTextMode = bind(app, 'adminEditSettingTextMode');
 const filteredModelsForSetting = bind(app, 'filteredModelsForSetting');
 const adminProviderKeys = bind(app, 'adminProviderKeys');
+const adminProviderKeyMetrics = bind(app, 'adminProviderKeyMetrics');
 const adminAddKeyDialog = bind(app, 'adminAddKeyDialog');
 const adminNewKeyProvider = bind(app, 'adminNewKeyProvider');
 const adminNewKeyName = bind(app, 'adminNewKeyName');
@@ -89,6 +91,9 @@ const loadAdminBilling = bind(app, 'loadAdminBilling');
 const openEditUser = bind(app, 'openEditUser');
 const saveEditUser = bind(app, 'saveEditUser');
 const loadAdminProviderKeys = bind(app, 'loadAdminProviderKeys');
+const getAdminProviderKeyMetric = bind(app, 'getAdminProviderKeyMetric');
+const providerKeyStatusTagType = bind(app, 'providerKeyStatusTagType');
+const providerKeyStatusLabel = bind(app, 'providerKeyStatusLabel');
 const openAddProviderKey = bind(app, 'openAddProviderKey');
 const saveAddProviderKey = bind(app, 'saveAddProviderKey');
 const deleteProviderKey = bind(app, 'deleteProviderKey');
@@ -323,6 +328,7 @@ const getModelTags = bind(app, 'getModelTags');
               <div class="admin-toolbar" style="flex-wrap:wrap;gap:8px">
                 <el-input v-model="adminBillingFilterUsername" placeholder="用户名" clearable style="width: 180px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
                 <el-input v-model="adminBillingFilterModel" placeholder="模型" clearable style="width: 140px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
+                <el-input v-model="adminBillingFilterProvider" placeholder="Provider" clearable style="width: 130px" @keyup.enter="loadAdminBillingWithDates()" @clear="loadAdminBillingWithDates()" />
                 <el-date-picker v-model="adminBillingFromDate" type="date" placeholder="开始日期" value-format="YYYY-MM-DD" style="width:150px" clearable @change="loadAdminBillingWithDates()" />
                 <el-date-picker v-model="adminBillingToDate" type="date" placeholder="结束日期" value-format="YYYY-MM-DD" style="width:150px" clearable @change="loadAdminBillingWithDates()" />
                 <el-button type="primary" plain @click="loadAdminBillingWithDates()">筛选</el-button>
@@ -332,6 +338,17 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-table-column prop="username" label="用户" min-width="90" />
                 <el-table-column prop="model" label="模型" min-width="140" />
                 <el-table-column prop="requestType" label="类型" width="70" />
+                <el-table-column prop="providerName" label="Provider" width="110">
+                  <template #default="{ row }">{{ row.providerName || '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="providerKeyName" label="出站 Key" min-width="140">
+                  <template #default="{ row }">
+                    <div style="display:flex;gap:6px;align-items:center;min-width:0">
+                      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.providerKeyName || '-' }}</span>
+                      <el-tag v-if="row.providerKeyPrefix" size="small" type="info">{{ row.providerKeyPrefix }}</el-tag>
+                    </div>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="promptTokens" label="输入Tokens" width="100" align="right" />
                 <el-table-column prop="completionTokens" label="输出Tokens" width="100" align="right" />
                 <el-table-column prop="totalTokens" label="总Tokens" width="100" align="right" />
@@ -431,6 +448,22 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-select v-model="adminApiKeyProviderFilter" placeholder="按 Provider 筛选" clearable style="width:200px" @change="loadAdminProviderKeys()">
                   <el-option v-for="cfg in adminProviderConfigs" :key="cfg.providerName" :label="cfg.displayName" :value="cfg.providerName" />
                 </el-select>
+                <el-button :icon="Refresh" @click="loadAdminProviderKeys()">刷新指标</el-button>
+              </div>
+              <div v-if="adminProviderKeyMetrics.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
+                <div v-for="metric in adminProviderKeyMetrics" :key="metric.providerName" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fff">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <strong>{{ metric.providerName }}</strong>
+                    <el-tag size="small" type="info">{{ metric.pool.strategy }}</el-tag>
+                  </div>
+                  <div style="display:flex;gap:10px;font-size:12px;color:#64748b;flex-wrap:wrap">
+                    <span>总数 {{ metric.pool.size }}</span>
+                    <span>可用 {{ metric.pool.availableCount }}</span>
+                    <span>半开 {{ metric.pool.halfOpenCount }}</span>
+                    <span>熔断 {{ metric.pool.circuitOpenCount }}</span>
+                    <span>禁用 {{ metric.pool.disabledCount }}</span>
+                  </div>
+                </div>
               </div>
               <el-table :data="adminProviderKeys" stripe size="small" class="admin-table" empty-text="暂无 Provider API Key，请添加或检查 .env 配置">
                 <el-table-column prop="providerName" label="Provider" width="130" />
@@ -438,6 +471,30 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-table-column label="API Key" min-width="280">
                   <template #default="{ row }">
                     <code style="font-size:12px;word-break:break-all;user-select:all">{{ row.apiKey }}</code>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="90" align="center">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="providerKeyStatusTagType(getAdminProviderKeyMetric(row)?.status)">
+                      {{ providerKeyStatusLabel(getAdminProviderKeyMetric(row)?.status) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="调用" width="80" align="right">
+                  <template #default="{ row }">{{ getAdminProviderKeyMetric(row)?.usageCount ?? 0 }}</template>
+                </el-table-column>
+                <el-table-column label="成功率" width="90" align="right">
+                  <template #default="{ row }">{{ (((getAdminProviderKeyMetric(row)?.successRate ?? 0) * 100).toFixed(1)) }}%</template>
+                </el-table-column>
+                <el-table-column label="失败率" width="90" align="right">
+                  <template #default="{ row }">{{ (((getAdminProviderKeyMetric(row)?.failureRate ?? 0) * 100).toFixed(1)) }}%</template>
+                </el-table-column>
+                <el-table-column label="熔断" width="80" align="right">
+                  <template #default="{ row }">{{ getAdminProviderKeyMetric(row)?.circuitBreakerCount ?? 0 }}</template>
+                </el-table-column>
+                <el-table-column label="最近错误" min-width="180">
+                  <template #default="{ row }">
+                    <span style="font-size:12px;color:#64748b;word-break:break-all">{{ getAdminProviderKeyMetric(row)?.lastError || '-' }}</span>
                   </template>
                 </el-table-column>
                 <el-table-column prop="createdAt" label="创建时间" width="170">

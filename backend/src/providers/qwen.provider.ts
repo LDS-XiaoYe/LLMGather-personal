@@ -57,9 +57,10 @@ export class QwenProvider extends OpenAiCompatibleProvider {
   }
 
   protected preparePayload(payload: ChatCompletionRequest): ChatCompletionRequest {
+    const prepared = this.withExtraBody(payload);
     return {
-      ...payload,
-      messages: payload.messages.map((message) => this.normalizeMessageContent(message)),
+      ...prepared,
+      messages: prepared.messages.map((message) => this.normalizeMessageContent(message)),
     };
   }
 

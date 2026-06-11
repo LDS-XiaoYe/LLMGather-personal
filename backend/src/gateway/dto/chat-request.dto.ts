@@ -66,6 +66,7 @@ export class ChatRequestDto {
   @IsObject()
   extra_body?: {
     enable_thinking?: boolean;
+    agentMode?: boolean;
     [key: string]: unknown;
   };
 

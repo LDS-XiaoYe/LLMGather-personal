@@ -450,10 +450,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         user_id VARCHAR(36) NOT NULL,
         name VARCHAR(128) NOT NULL,
         description TEXT NOT NULL,
+        provider VARCHAR(32) NOT NULL DEFAULT 'native',
+        external_id VARCHAR(191) DEFAULT NULL,
+        engine_config_json TEXT,
         created_at ${ts},
         updated_at ${ts},
         deleted_at DATETIME(3) DEFAULT NULL,
-        INDEX idx_kb_user (user_id)
+        INDEX idx_kb_user (user_id),
+        INDEX idx_kb_provider (provider),
+        INDEX idx_kb_external (provider, external_id)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -467,12 +472,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         vector_status VARCHAR(24) NOT NULL DEFAULT 'succeeded',
         failure_reason TEXT,
         source_file_id VARCHAR(36) DEFAULT NULL,
+        external_id VARCHAR(191) DEFAULT NULL,
         content LONGTEXT NOT NULL,
         created_at ${ts},
         updated_at ${ts},
         deleted_at DATETIME(3) DEFAULT NULL,
         INDEX idx_kb_docs_kb (kb_id),
-        INDEX idx_kb_docs_user (user_id)
+        INDEX idx_kb_docs_user (user_id),
+        INDEX idx_kb_docs_external (external_id)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -535,11 +542,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         user_id VARCHAR(36) NOT NULL,
         version_number INT NOT NULL,
         label VARCHAR(120) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'draft',
+        traffic_percent INT NOT NULL DEFAULT 0,
+        notes TEXT,
         snapshot_json TEXT NOT NULL,
+        published_at DATETIME(3) DEFAULT NULL,
+        rolled_back_at DATETIME(3) DEFAULT NULL,
         created_at ${ts},
         UNIQUE KEY uniq_agent_versions_number (agent_id, version_number),
         INDEX idx_agent_versions_agent (agent_id),
-        INDEX idx_agent_versions_user (user_id)
+        INDEX idx_agent_versions_user (user_id),
+        INDEX idx_agent_versions_release (agent_id, status, published_at)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -596,6 +609,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at ${ts},
         PRIMARY KEY (agent_id, kb_id),
         INDEX idx_agent_kbs_user (user_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_workflows (
+        agent_id VARCHAR(36) NOT NULL,
+        workflow_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        created_at ${ts},
+        PRIMARY KEY (agent_id, workflow_id),
+        INDEX idx_agent_workflows_user (user_id),
+        INDEX idx_agent_workflows_workflow (workflow_id)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -692,7 +716,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
-    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'user_library_files', 'agent_knowledge_bases', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
+    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'user_library_files', 'agent_knowledge_bases', 'agent_workflows', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
         await this.adapter.exec(
@@ -739,6 +763,86 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await this.adapter.exec(
         `CREATE INDEX idx_cache_user_model ON semantic_cache (user_id, model)`,
       );
+    } catch {}
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE knowledge_bases ADD COLUMN provider VARCHAR(32) NOT NULL DEFAULT 'native'`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE knowledge_bases ADD COLUMN external_id VARCHAR(191) DEFAULT NULL`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE knowledge_bases ADD COLUMN engine_config_json TEXT`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `CREATE INDEX idx_kb_provider ON knowledge_bases (provider)`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `CREATE INDEX idx_kb_external ON knowledge_bases (provider, external_id)`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE knowledge_documents ADD COLUMN external_id VARCHAR(191) DEFAULT NULL`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `CREATE INDEX idx_kb_docs_external ON knowledge_documents (external_id)`,
+      );
+    } catch {}
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agent_versions ADD COLUMN status VARCHAR(24) NOT NULL DEFAULT 'draft'`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agent_versions ADD COLUMN traffic_percent INT NOT NULL DEFAULT 0`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agent_versions ADD COLUMN notes TEXT`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agent_versions ADD COLUMN published_at DATETIME(3) DEFAULT NULL`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE agent_versions ADD COLUMN rolled_back_at DATETIME(3) DEFAULT NULL`,
+      );
+    } catch {}
+    try {
+      await this.adapter.exec(
+        `CREATE INDEX idx_agent_versions_release ON agent_versions (agent_id, status, published_at)`,
+      );
+    } catch {}
+
+    try {
+      await this.adapter.exec(`
+        CREATE TABLE IF NOT EXISTS agent_workflows (
+          agent_id VARCHAR(36) NOT NULL,
+          workflow_id VARCHAR(36) NOT NULL,
+          user_id VARCHAR(36) NOT NULL,
+          created_at ${ts},
+          PRIMARY KEY (agent_id, workflow_id),
+          INDEX idx_agent_workflows_user (user_id),
+          INDEX idx_agent_workflows_workflow (workflow_id)
+        )${fk};`);
     } catch {}
 
     // conversations: add deleted_at column
@@ -948,6 +1052,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       displayName: string;
       description: string;
       schema: Record<string, unknown>;
+      category?: string;
+      riskLevel?: 'low' | 'medium' | 'high';
     }> = [
       {
         name: 'current_time',
@@ -1027,6 +1133,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         },
       },
       {
+        name: 'weather_query',
+        displayName: '真实天气查询',
+        description: '通过 Open-Meteo 真实天气接口查询当前位置天气和未来几天预报。支持城市名或经纬度。',
+        category: 'utility',
+        riskLevel: 'low',
+        schema: {
+          type: 'object',
+          properties: {
+            location: { type: 'string', description: '城市、地区或地点名称，例如 北京、上海、Tokyo、New York。提供 latitude/longitude 时可省略。' },
+            latitude: { type: 'number' },
+            longitude: { type: 'number' },
+            forecastDays: { type: 'number', default: 3 },
+            language: { type: 'string', default: 'zh' },
+          },
+        },
+      },
+      {
         name: 'text_stats',
         displayName: '文本统计',
         description: '统计文本的字符数、中文字符数、英文词数和行数。',
@@ -1038,6 +1161,49 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         description: '生成一个随机 UUID。',
         schema: { type: 'object', properties: {} },
       },
+      {
+        name: 'platform_agent_api',
+        displayName: '平台 Agent API',
+        description: '让 Agent 通过受控平台 API 查询、创建、更新 Agent 与 Workflow，并把执行结果返回给用户。高风险工具，建议设置为 confirm。',
+        category: 'platform',
+        riskLevel: 'high',
+        schema: {
+          type: 'object',
+          required: ['operation'],
+          properties: {
+            operation: {
+              type: 'string',
+              enum: [
+                'list_agents',
+                'get_agent',
+                'create_agent',
+                'update_agent',
+                'list_workflows',
+                'create_workflow',
+                'bind_workflow_to_agent',
+                'create_skill',
+                'update_skill',
+                'bind_skill_to_agent',
+                'create_tool',
+                'update_tool',
+                'bind_tool_to_agent',
+                'list_tools',
+                'list_skills',
+                'list_knowledge_bases',
+              ],
+            },
+            agentId: { type: 'string' },
+            workflowId: { type: 'string' },
+            skillId: { type: 'string' },
+            toolId: { type: 'string' },
+            agent: { type: 'object' },
+            workflow: { type: 'object' },
+            skill: { type: 'object' },
+            tool: { type: 'object' },
+            limit: { type: 'number', default: 20 },
+          },
+        },
+      },
     ];
 
     for (const tool of tools) {
@@ -1048,14 +1214,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (existing) {
         await this.adapter.prepare(
           `UPDATE tools
-           SET display_name = ?, description = ?, schema_json = ?, enabled = 1, updated_at = ?
+           SET display_name = ?, description = ?, category = ?, schema_json = ?, risk_level = ?, enabled = 1, updated_at = ?
            WHERE id = ?`,
-        ).run(tool.displayName, tool.description, JSON.stringify(tool.schema), now, existing.id);
+        ).run(tool.displayName, tool.description, tool.category ?? 'builtin', JSON.stringify(tool.schema), tool.riskLevel ?? 'low', now, existing.id);
       } else {
         await this.adapter.prepare(
-          `INSERT INTO tools (id, user_id, name, display_name, description, schema_json, implementation_type, enabled, created_at, updated_at)
-           VALUES (?, NULL, ?, ?, ?, ?, 'builtin', 1, ?, ?)`,
-        ).run(randomUUID(), tool.name, tool.displayName, tool.description, JSON.stringify(tool.schema), now, now);
+          `INSERT INTO tools (id, user_id, name, display_name, description, category, schema_json, implementation_type, runtime, risk_level, enabled, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, 'builtin', 'builtin', ?, 1, ?, ?)`,
+        ).run(randomUUID(), tool.name, tool.displayName, tool.description, tool.category ?? 'builtin', JSON.stringify(tool.schema), tool.riskLevel ?? 'low', now, now);
       }
     }
   }

@@ -78,6 +78,7 @@ function makeService(overrides: {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   );
   return { service, chatService, billingService, toolsService };
 }
@@ -95,6 +96,7 @@ const agent = {
   toolIds: ['tool-1'],
   knowledgeBaseIds: [],
   skillIds: [],
+  workflowIds: [],
   published: false,
   apiEnabled: false,
   publicSlug: '',

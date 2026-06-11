@@ -10,6 +10,25 @@ export class CreateKnowledgeBaseDto {
   @IsString()
   @MaxLength(1000)
   description?: string;
+
+  @IsOptional()
+  @IsIn(['native', 'ragflow'])
+  provider?: 'native' | 'ragflow';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  ragflowBaseUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  ragflowApiKey?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  ragflowDatasetId?: string;
 }
 
 export class AddKnowledgeDocumentDto {

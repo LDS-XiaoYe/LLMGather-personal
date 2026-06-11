@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
 import { AgentsService } from '../agents/agents.service';
@@ -62,10 +62,16 @@ type WorkflowGraphState = {
   error: string;
 };
 
+type WorkflowRunOptions = {
+  skipWorkflowAgentIds?: string[];
+  runtimeAgentId?: string;
+};
+
 @Injectable()
 export class WorkflowsService {
   constructor(
     private readonly databaseService: DatabaseService,
+    @Inject(forwardRef(() => AgentsService))
     private readonly agentsService: AgentsService,
     private readonly toolsService: ToolsService,
     private readonly knowledgeService: KnowledgeService,
@@ -105,7 +111,7 @@ export class WorkflowsService {
     return this.mapWorkflow(row);
   }
 
-  async run(userId: string, workflowId: string, input: string): Promise<WorkflowRun> {
+  async run(userId: string, workflowId: string, input: string, options: WorkflowRunOptions = {}): Promise<WorkflowRun> {
     const workflow = await this.get(userId, workflowId);
     const runId = randomUUID();
     const now = this.databaseService.now();
@@ -114,7 +120,7 @@ export class WorkflowsService {
        VALUES (?, ?, ?, 'running', ?, '', '', ?)`,
     ).run(runId, workflowId, userId, input, now);
 
-    const graph = this.buildWorkflowGraph(userId, workflow, runId, input);
+    const graph = this.buildWorkflowGraph(userId, workflow, runId, input, options);
     const finalState = await graph.invoke({
       nodes: [],
       current: input,
@@ -130,7 +136,7 @@ export class WorkflowsService {
     return this.getRun(userId, runId);
   }
 
-  private buildWorkflowGraph(userId: string, workflow: Workflow, runId: string, input: string) {
+  private buildWorkflowGraph(userId: string, workflow: Workflow, runId: string, input: string, options: WorkflowRunOptions) {
     const State = Annotation.Root({
       nodes: Annotation<WorkflowNodeDto[]>(),
       current: Annotation<string>(),
@@ -155,7 +161,7 @@ export class WorkflowsService {
         const node = state.nodes[state.index];
         if (!node) return state;
         try {
-          const output = await this.runNode(userId, node, state.current, state.originalInput);
+          const output = await this.runNode(userId, node, state.current, state.originalInput, options);
           await this.insertStep(runId, workflow.id, userId, node, state.current, output, 'succeeded', '');
           return { ...state, current: output, index: state.index + 1 };
         } catch (err) {
@@ -196,10 +202,22 @@ export class WorkflowsService {
     return { ...row, steps };
   }
 
-  private async runNode(userId: string, node: WorkflowNodeDto, input: string, originalInput: string): Promise<string> {
+  private async runNode(userId: string, node: WorkflowNodeDto, input: string, originalInput: string, options: WorkflowRunOptions): Promise<string> {
     if (node.type === 'prompt') {
       const template = String(node.config.template ?? '{{input}}');
-      return this.interpolateText(template, input, originalInput);
+      const rendered = this.interpolateText(template, input, originalInput);
+      if (options.runtimeAgentId && this.shouldRunPromptWithAgent(node)) {
+        const run = await this.agentsService.runFromWorkflow(userId, options.runtimeAgentId, {
+          input: rendered,
+          mode: 'fast',
+          maxSteps: 3,
+        }, options.skipWorkflowAgentIds ?? []);
+        if (run.status === 'failed') {
+          throw new Error(run.error || 'Workflow Prompt 节点执行失败');
+        }
+        return run.output;
+      }
+      return rendered;
     }
 
     if (node.type === 'tool') {
@@ -213,9 +231,9 @@ export class WorkflowsService {
       const agentId = String(node.config.agentId || '');
       if (!agentId) throw new NotFoundException('Workflow Agent 节点缺少 agentId');
       const agentInputTemplate = typeof node.config.input === 'string' ? node.config.input : '{{input}}';
-      const run = await this.agentsService.run(userId, agentId, {
+      const run = await this.agentsService.runFromWorkflow(userId, agentId, {
         input: this.interpolateText(agentInputTemplate, input, originalInput),
-      });
+      }, options.skipWorkflowAgentIds ?? []);
       if (run.status === 'failed') {
         throw new Error(run.error || 'Agent 节点执行失败');
       }
@@ -255,6 +273,26 @@ export class WorkflowsService {
       result[key] = typeof value === 'string' ? this.interpolateText(value, input, originalInput) : value;
     }
     return result;
+  }
+
+  private shouldRunPromptWithAgent(node: WorkflowNodeDto): boolean {
+    const dagType = typeof node.config.dagType === 'string' ? node.config.dagType : '';
+    return [
+      'intent_detection',
+      'parameter_extract',
+      'info_extract',
+      'content_classify',
+      'condition',
+      'multi_branch',
+      'confidence_check',
+      'llm_generate',
+      'prompt_builder',
+      'result_summary',
+      'result_rewrite',
+      'format_output',
+      'json_parse',
+      'multi_result_merge',
+    ].includes(dagType);
   }
 
   private interpolateText(template: string, input: string, originalInput: string): string {

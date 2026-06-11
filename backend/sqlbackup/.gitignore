@@ -1,3 +1,5 @@
 .env
 backups/
 *.log
+*.sql
+*.sql.gz

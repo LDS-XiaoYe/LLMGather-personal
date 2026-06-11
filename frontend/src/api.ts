@@ -512,6 +512,7 @@ export interface AgentDefinition {
   toolIds: string[];
   knowledgeBaseIds: string[];
   skillIds: string[];
+  workflowIds: string[];
   published: boolean;
   apiEnabled: boolean;
   publicSlug: string;
@@ -523,6 +524,8 @@ export interface AgentDefinition {
   builtinKey?: string;
   source?: 'user' | 'builtin';
 }
+
+export type AgentVersionStatus = 'draft' | 'released' | 'canary' | 'superseded' | 'rolled_back';
 
 export interface BuiltinAgentSpec {
   key: string;
@@ -563,6 +566,7 @@ export interface AgentInput {
   toolIds?: string[];
   knowledgeBaseIds?: string[];
   skillIds?: string[];
+  workflowIds?: string[];
   status?: 'active' | 'archived';
 }
 
@@ -993,6 +997,14 @@ export interface KnowledgeBase {
   userId: string;
   name: string;
   description: string;
+  provider: 'native' | 'ragflow';
+  externalId?: string | null;
+  engine?: {
+    provider: 'native' | 'ragflow';
+    baseUrl?: string;
+    datasetId?: string;
+    apiKeyConfigured?: boolean;
+  };
   documentCount: number;
   chunkCount: number;
   createdAt: string;
@@ -1193,8 +1205,19 @@ export interface AgentVersion {
   userId: string;
   versionNumber: number;
   label: string;
+  status: AgentVersionStatus;
+  trafficPercent: number;
+  notes?: string;
   snapshot: Record<string, unknown>;
+  publishedAt?: string | null;
+  rolledBackAt?: string | null;
   createdAt: string;
+}
+
+export interface AgentVersionCompareResult {
+  left: AgentVersion;
+  right: AgentVersion;
+  changes: Array<{ field: string; left: unknown; right: unknown; changed: boolean }>;
 }
 
 export interface AgentTestSuite {
@@ -1491,15 +1514,50 @@ export async function fetchAgentVersions(id: string, baseUrl = defaultBaseUrl): 
   return payload.data ?? [];
 }
 
-export async function createAgentVersion(id: string, label = '', baseUrl = defaultBaseUrl): Promise<AgentVersion> {
+export async function createAgentVersion(id: string, label = '', notes = '', baseUrl = defaultBaseUrl): Promise<AgentVersion> {
   const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ label }),
+    body: JSON.stringify({ label, notes }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
   const data = (await response.json()) as { data: AgentVersion };
+  return data.data;
+}
+
+export async function publishAgentVersion(
+  id: string,
+  payload: { versionId?: string; label?: string; releaseMode?: 'stable' | 'canary'; trafficPercent?: number; notes?: string; published?: boolean; apiEnabled?: boolean; publicSlug?: string },
+  baseUrl = defaultBaseUrl,
+): Promise<{ agent: AgentDefinition; version: AgentVersion }> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions/publish`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: { agent: AgentDefinition; version: AgentVersion } };
+  return data.data;
+}
+
+export async function compareAgentVersions(id: string, left: string, right: string, baseUrl = defaultBaseUrl): Promise<AgentVersionCompareResult> {
+  const params = new URLSearchParams({ left, right });
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions/compare?${params.toString()}`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: AgentVersionCompareResult };
+  return data.data;
+}
+
+export async function rollbackAgentVersion(id: string, versionId: string, baseUrl = defaultBaseUrl): Promise<{ agent: AgentDefinition; version: AgentVersion }> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/rollback`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const data = (await response.json()) as { data: { agent: AgentDefinition; version: AgentVersion } };
   return data.data;
 }
 
@@ -1632,7 +1690,7 @@ export async function fetchKnowledgeBases(baseUrl = defaultBaseUrl): Promise<Kno
 }
 
 export async function createKnowledgeBase(
-  payload: { name: string; description?: string },
+  payload: { name: string; description?: string; provider?: 'native' | 'ragflow'; ragflowBaseUrl?: string; ragflowApiKey?: string; ragflowDatasetId?: string },
   baseUrl = defaultBaseUrl,
 ): Promise<KnowledgeBase> {
   const response = await fetch(`${baseUrl}/knowledge/bases`, {
@@ -1906,12 +1964,13 @@ export async function createWorkflow(
 export async function runWorkflow(
   id: string,
   input: string,
+  agentId?: string,
   baseUrl = defaultBaseUrl,
 ): Promise<WorkflowRun> {
   const response = await fetch(`${baseUrl}/workflows/${encodeURIComponent(id)}/runs`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ input }),
+    body: JSON.stringify({ input, agentId }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));

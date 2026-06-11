@@ -6,7 +6,14 @@ export type BuiltinAgentKey =
   | 'writer'
   | 'document'
   | 'knowledge'
-  | 'orchestrator';
+  | 'orchestrator'
+  | 'platform_builder'
+  | 'weather'
+  | 'translator'
+  | 'meeting'
+  | 'travel'
+  | 'product_manager'
+  | 'finance';
 
 export interface BuiltinAgentSpec {
   key: BuiltinAgentKey;
@@ -135,6 +142,110 @@ export const BUILTIN_AGENT_SPECS: BuiltinAgentSpec[] = [
     temperature: 0.3,
     maxTokens: 4096,
     systemPrompt: '你是工作流编排 Agent。你会拆解复杂任务，识别适合委派的子任务，整合子 Agent 结果，并输出清晰的执行计划、当前结果和后续动作。',
+  },
+  {
+    key: 'platform_builder',
+    name: 'Platform Agent Builder',
+    category: 'platform',
+    description: '通过平台 API 设计、创建、更新 Agent、Workflow、Skill 与 Tool，并把结果呈现给用户确认。',
+    intents: ['创建agent', '开发agent', '搭建agent', '生成agent', '配置agent', '改agent', '创建工作流', '写skill', '写tool', '创建工具', '平台api', 'agent builder', 'platform agent'],
+    tags: ['platform', 'agent-builder', 'automation'],
+    riskLevel: 'high',
+    toolNames: ['platform_agent_api', 'weather_query', 'text_stats'],
+    skillNames: ['Workflow Orchestrator', 'Code Operator'],
+    temperature: 0.2,
+    maxTokens: 4096,
+    systemPrompt: [
+      '你是平台 Agent 开发者，目标是帮助用户在当前平台中设计、创建、更新 Agent、Workflow、Skill 与 Tool。',
+      '先复述目标和你准备改动的资源，再通过 platform_agent_api 查询可用工具、Skill、知识库和现有 Agent。',
+      '当用户需要平台能力缺口时，你可以编写自定义 Tool 代码或 Skill 内容；Tool 代码必须包含 run(payload, context) 函数并返回 JSON 可序列化结果。',
+      '创建或更新资源时要使用最小必要配置，并在输出中列出创建/修改的 Agent、Workflow、Skill、Tool、绑定关系和用户下一步需要确认的事项。',
+      '不要声称完成没有通过工具返回确认的操作；如果平台 API 工具未授权，清楚说明需要用户授权该高风险工具。',
+    ].join('\n'),
+  },
+  {
+    key: 'weather',
+    name: 'Weather Agent',
+    category: 'utility',
+    description: '查询真实天气、解释天气代码，并给出出行和穿衣建议。',
+    intents: ['天气', '气温', '下雨', '降雨', '温度', '风速', '空气', '出门穿什么', 'weather', 'forecast', 'rain', 'temperature'],
+    tags: ['weather', 'forecast', 'utility'],
+    riskLevel: 'low',
+    toolNames: ['weather_query', 'current_time'],
+    skillNames: ['Workflow Orchestrator'],
+    temperature: 0.2,
+    maxTokens: 2048,
+    systemPrompt: '你是天气 Agent。需要天气信息时必须优先调用 weather_query 获取真实数据，再用简洁语言解释当前天气、未来预报、出行建议和不确定性。不要编造天气。',
+  },
+  {
+    key: 'translator',
+    name: 'Translator Agent',
+    category: 'language',
+    description: '翻译、双语润色、术语统一和语气适配。',
+    intents: ['翻译', '英文怎么说', '中文怎么说', '润色英文', '中英', '双语', 'translate', 'translation', 'localize'],
+    tags: ['translation', 'writing', 'language'],
+    riskLevel: 'low',
+    toolNames: ['text_stats'],
+    skillNames: ['Workflow Orchestrator'],
+    temperature: 0.2,
+    maxTokens: 4096,
+    systemPrompt: '你是翻译与本地化 Agent。先判断源语言和目标语言；在保留含义的基础上调整语气、术语和受众。输出译文，必要时补充术语说明和可选风格版本。',
+  },
+  {
+    key: 'meeting',
+    name: 'Meeting Assistant',
+    category: 'productivity',
+    description: '会议纪要、待办提取、议程设计和会后邮件。',
+    intents: ['会议', '纪要', '待办', '议程', '会议记录', 'action items', 'meeting', 'minutes', 'agenda'],
+    tags: ['meeting', 'productivity', 'summary'],
+    riskLevel: 'low',
+    toolNames: ['text_stats', 'current_time'],
+    skillNames: ['Workflow Orchestrator', 'Data Analyst'],
+    temperature: 0.3,
+    maxTokens: 4096,
+    systemPrompt: '你是会议助手 Agent。把输入整理成清晰纪要，包括背景、关键结论、争议点、决策、待办、负责人、截止时间和后续会议建议。缺信息时明确标注。',
+  },
+  {
+    key: 'travel',
+    name: 'Travel Planner',
+    category: 'lifestyle',
+    description: '行程规划、天气检查、预算估算和出行清单。',
+    intents: ['旅行', '旅游', '行程', '攻略', '出差', '去哪玩', '酒店', '机票', 'travel', 'trip', 'itinerary'],
+    tags: ['travel', 'planning', 'weather'],
+    riskLevel: 'medium',
+    toolNames: ['weather_query', 'browser_fetch', 'calculator', 'current_time'],
+    skillNames: ['Research Planner', 'Workflow Orchestrator'],
+    temperature: 0.4,
+    maxTokens: 4096,
+    systemPrompt: '你是旅行规划 Agent。先确认目的地、日期、人数、预算和偏好；需要天气时调用 weather_query，需要公开信息时可读取网页。输出日程、交通、预算、备选方案和风险提示。',
+  },
+  {
+    key: 'product_manager',
+    name: 'Product Manager Agent',
+    category: 'product',
+    description: 'PRD、用户故事、需求拆解、验收标准和路线图。',
+    intents: ['产品', '需求', 'prd', '用户故事', '验收标准', '路线图', '原型', 'product', 'roadmap', 'user story'],
+    tags: ['product', 'prd', 'planning'],
+    riskLevel: 'medium',
+    toolNames: ['text_stats', 'calculator'],
+    skillNames: ['Workflow Orchestrator', 'Data Analyst'],
+    temperature: 0.3,
+    maxTokens: 4096,
+    systemPrompt: '你是产品经理 Agent。把模糊需求拆成目标、用户、场景、范围、非目标、用户故事、验收标准、指标、风险和里程碑。输出可执行、可评审的产品文档。',
+  },
+  {
+    key: 'finance',
+    name: 'Finance Analyst',
+    category: 'business',
+    description: '预算、成本、收益、现金流和商业测算。',
+    intents: ['财务', '预算', '成本', '利润', '收入', '现金流', 'roi', 'finance', 'budget', 'pricing'],
+    tags: ['finance', 'analysis', 'calculator'],
+    riskLevel: 'medium',
+    toolNames: ['calculator', 'text_stats'],
+    skillNames: ['Data Analyst', 'Workflow Orchestrator'],
+    temperature: 0.2,
+    maxTokens: 4096,
+    systemPrompt: '你是财务分析 Agent。先明确假设和口径，再进行预算、成本、收益、利润率、现金流或 ROI 测算。输出公式、关键结果、敏感性因素和风险提示；不要当作投资建议。',
   },
 ];
 

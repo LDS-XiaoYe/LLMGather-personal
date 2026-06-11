@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { AuthModule } from '../auth/auth.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
@@ -9,8 +9,9 @@ import { WorkflowsController } from './workflows.controller';
 import { WorkflowsService } from './workflows.service';
 
 @Module({
-  imports: [AuthModule, AgentsModule, ToolsModule, KnowledgeModule, MemoryModule, SkillsModule],
+  imports: [AuthModule, forwardRef(() => AgentsModule), ToolsModule, KnowledgeModule, MemoryModule, SkillsModule],
   controllers: [WorkflowsController],
   providers: [WorkflowsService],
+  exports: [WorkflowsService],
 })
 export class WorkflowsModule {}

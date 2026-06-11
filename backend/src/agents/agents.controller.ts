@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -15,6 +15,7 @@ import {
   GenerateAgentDto,
   InstallBuiltinAgentDto,
   InstallAgentTemplateDto,
+  PublishAgentVersionDto,
   RunAgentDto,
   RunAgentTestSuiteDto,
   UpdateAgentDto,
@@ -215,6 +216,25 @@ export class AgentsController {
     return { data: await this.agentsService.createVersion(user.id, id, payload) };
   }
 
+  @Post(':id/versions/publish')
+  async publishVersion(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: PublishAgentVersionDto,
+  ) {
+    return { data: await this.agentsService.publishVersion(user.id, id, payload) };
+  }
+
+  @Get(':id/versions/compare')
+  async compareVersions(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Query('left') left: string,
+    @Query('right') right: string,
+  ) {
+    return { data: await this.agentsService.compareVersions(user.id, id, left, right) };
+  }
+
   @Post(':id/versions/:versionId/restore')
   async restoreVersion(
     @CurrentUser() user: AuthenticatedRequestUser,
@@ -222,6 +242,15 @@ export class AgentsController {
     @Param('versionId') versionId: string,
   ) {
     return { data: await this.agentsService.restoreVersion(user.id, id, versionId) };
+  }
+
+  @Post(':id/versions/:versionId/rollback')
+  async rollbackVersion(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+  ) {
+    return { data: await this.agentsService.rollbackToVersion(user.id, id, versionId) };
   }
 
   @Get(':id/test-suites')

@@ -12,6 +12,7 @@ export interface AgentForm {
   toolPermissions: Record<string, string>;
   knowledgeBaseIds: string[];
   skillIds: string[];
+  workflowIds: string[];
   status: 'active' | 'archived';
   published: boolean;
   apiEnabled: boolean;
@@ -121,6 +122,8 @@ export interface KnowledgeBase {
   id: string;
   name: string;
   description: string;
+  provider?: 'native' | 'ragflow';
+  externalId?: string | null;
   documentCount: number;
   chunkCount: number;
   createdAt: string;

@@ -3,11 +3,23 @@ import { randomUUID } from 'crypto';
 import { DatabaseService } from '../database/database.service';
 import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto, CreateUserLibraryFileDto } from './dto/knowledge.dto';
 
+export type KnowledgeProvider = 'native' | 'ragflow';
+
+export interface KnowledgeEngineInfo {
+  provider: KnowledgeProvider;
+  baseUrl?: string;
+  datasetId?: string;
+  apiKeyConfigured?: boolean;
+}
+
 export interface KnowledgeBase {
   id: string;
   userId: string;
   name: string;
   description: string;
+  provider: KnowledgeProvider;
+  externalId?: string | null;
+  engine?: KnowledgeEngineInfo;
   documentCount: number;
   chunkCount: number;
   createdAt: string;
@@ -43,10 +55,34 @@ type KnowledgeBaseRow = {
   userId: string;
   name: string;
   description: string;
+  provider?: string;
+  externalId?: string | null;
+  engineConfigJson?: string | null;
   documentCount?: number | string;
   chunkCount?: number | string;
   createdAt: string;
   updatedAt: string;
+};
+
+type KnowledgeDocumentRow = {
+  id: string;
+  kbId: string;
+  title: string;
+  fileType?: string;
+  parseStatus?: string;
+  vectorStatus?: string;
+  failureReason?: string;
+  externalId?: string | null;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  chunkCount: number | string;
+};
+
+type RagflowConfig = {
+  baseUrl: string;
+  apiKey?: string;
+  datasetId?: string;
 };
 
 type UserLibraryFileRow = Omit<UserLibraryFile, 'fileSize'> & {
@@ -61,7 +97,9 @@ export class KnowledgeService {
 
   async list(userId: string): Promise<KnowledgeBase[]> {
     const rows = await this.databaseService.connection.prepare(
-      `SELECT kb.id, kb.user_id as userId, kb.name, kb.description, kb.created_at as createdAt, kb.updated_at as updatedAt,
+      `SELECT kb.id, kb.user_id as userId, kb.name, kb.description,
+              COALESCE(kb.provider, 'native') as provider, kb.external_id as externalId, kb.engine_config_json as engineConfigJson,
+              kb.created_at as createdAt, kb.updated_at as updatedAt,
               COALESCE(docs.documentCount, 0) as documentCount,
               COALESCE(chunks.chunkCount, 0) as chunkCount
        FROM knowledge_bases kb
@@ -75,20 +113,29 @@ export class KnowledgeService {
        WHERE kb.user_id = ? AND kb.deleted_at IS NULL
        ORDER BY kb.updated_at DESC`,
     ).all(userId) as unknown as KnowledgeBaseRow[];
-    return rows.map((row) => ({
-      ...row,
-      documentCount: Number(row.documentCount ?? 0),
-      chunkCount: Number(row.chunkCount ?? 0),
-    }));
+    return rows.map((row) => this.mapKnowledgeBase(row));
   }
 
   async create(userId: string, dto: CreateKnowledgeBaseDto): Promise<KnowledgeBase> {
     const id = randomUUID();
     const now = this.databaseService.now();
+    const provider = this.normalizeProvider(dto.provider);
+    const name = dto.name.trim();
+    const description = dto.description?.trim() ?? '';
+    let externalId = '';
+    let engineConfigJson = '';
+    if (provider === 'ragflow') {
+      const config = this.buildRagflowConfig(dto);
+      externalId = dto.ragflowDatasetId?.trim() || '';
+      if (!externalId) {
+        externalId = await this.createRagflowDataset(config, name, description);
+      }
+      engineConfigJson = JSON.stringify({ ...config, datasetId: externalId });
+    }
     await this.databaseService.connection.prepare(
-      `INSERT INTO knowledge_bases (id, user_id, name, description, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(id, userId, dto.name.trim(), dto.description?.trim() ?? '', now, now);
+      `INSERT INTO knowledge_bases (id, user_id, name, description, provider, external_id, engine_config_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, userId, name, description, provider, externalId, engineConfigJson, now, now);
     const kb = (await this.list(userId)).find((item) => item.id === id);
     if (!kb) throw new NotFoundException('知识库创建失败');
     return kb;
@@ -101,7 +148,10 @@ export class KnowledgeService {
   }
 
   async addDocument(userId: string, kbId: string, dto: AddKnowledgeDocumentDto) {
-    await this.get(userId, kbId);
+    const kb = await this.get(userId, kbId);
+    if (kb.provider === 'ragflow') {
+      return this.addRagflowDocument(userId, kb, dto);
+    }
     const docId = randomUUID();
     const now = this.databaseService.now();
     const fileType = (dto.fileType || this.fileTypeFromName(dto.title) || 'text').slice(0, 32);
@@ -139,7 +189,7 @@ export class KnowledgeService {
     const rows = await this.databaseService.connection.prepare(
       `SELECT d.id, d.kb_id as kbId, d.title, d.file_type as fileType,
               d.parse_status as parseStatus, d.vector_status as vectorStatus, d.failure_reason as failureReason,
-              d.content, d.created_at as createdAt, d.updated_at as updatedAt,
+              d.external_id as externalId, d.content, d.created_at as createdAt, d.updated_at as updatedAt,
               COALESCE(c.chunkCount, 0) as chunkCount
        FROM knowledge_documents d
        LEFT JOIN (
@@ -147,7 +197,7 @@ export class KnowledgeService {
        ) c ON c.document_id = d.id
        WHERE d.kb_id = ? AND d.user_id = ? AND d.deleted_at IS NULL ${whereSearch}
        ORDER BY d.created_at DESC`,
-    ).all(kbId, userId, ...searchParams) as unknown as Array<{ id: string; kbId: string; title: string; fileType?: string; parseStatus?: string; vectorStatus?: string; failureReason?: string; content: string; createdAt: string; updatedAt: string; chunkCount: number | string }>;
+    ).all(kbId, userId, ...searchParams) as unknown as KnowledgeDocumentRow[];
     
     return rows.map(row => ({
       ...row,
@@ -165,14 +215,14 @@ export class KnowledgeService {
     const row = await this.databaseService.connection.prepare(
       `SELECT d.id, d.kb_id as kbId, d.title, d.file_type as fileType,
               d.parse_status as parseStatus, d.vector_status as vectorStatus, d.failure_reason as failureReason,
-              d.content, d.created_at as createdAt, d.updated_at as updatedAt,
+              d.external_id as externalId, d.content, d.created_at as createdAt, d.updated_at as updatedAt,
               COALESCE(c.chunkCount, 0) as chunkCount
        FROM knowledge_documents d
        LEFT JOIN (
          SELECT document_id, COUNT(*) as chunkCount FROM knowledge_chunks GROUP BY document_id
        ) c ON c.document_id = d.id
        WHERE d.id = ? AND d.user_id = ? AND d.deleted_at IS NULL`,
-    ).get(docId, userId) as unknown as { id: string; kbId: string; title: string; fileType?: string; parseStatus?: string; vectorStatus?: string; failureReason?: string; content: string; createdAt: string; updatedAt: string; chunkCount: number | string } | undefined;
+    ).get(docId, userId) as unknown as KnowledgeDocumentRow | undefined;
     if (!row) throw new NotFoundException('知识库文档不存在');
     const chunks = await this.listDocumentChunks(userId, docId);
     return {
@@ -204,6 +254,10 @@ export class KnowledgeService {
 
   async reparseDocument(userId: string, docId: string) {
     const detail = await this.getDocumentDetail(userId, docId);
+    const kb = await this.get(userId, detail.kbId);
+    if (kb.provider === 'ragflow') {
+      return this.reparseRagflowDocument(userId, kb, detail);
+    }
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
       `DELETE FROM knowledge_chunks WHERE document_id = ? AND user_id = ?`,
@@ -223,6 +277,16 @@ export class KnowledgeService {
   }
 
   async deleteDocument(userId: string, docId: string) {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT d.id, d.kb_id as kbId, d.external_id as externalId
+       FROM knowledge_documents d
+       WHERE d.id = ? AND d.user_id = ? AND d.deleted_at IS NULL`,
+    ).get(docId, userId) as unknown as { id: string; kbId: string; externalId?: string | null } | undefined;
+    if (!row) throw new NotFoundException('知识库文档不存在');
+    const kb = await this.get(userId, row.kbId);
+    if (kb.provider === 'ragflow' && row.externalId) {
+      await this.deleteRagflowDocument(kb, row.externalId);
+    }
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
       `UPDATE knowledge_documents SET deleted_at = ? WHERE id = ? AND user_id = ?`,
@@ -516,11 +580,28 @@ export class KnowledgeService {
     const uniqueKbIds = Array.from(new Set(kbIds.filter(Boolean)));
     if (uniqueKbIds.length === 0 || !query.trim()) return [];
 
-    for (const kbId of uniqueKbIds) {
-      await this.get(userId, kbId);
+    const kbs = await this.loadKnowledgeBasesByIds(userId, uniqueKbIds);
+    if (kbs.length !== uniqueKbIds.length) throw new NotFoundException('知识库不存在');
+    const nativeKbIds = kbs.filter((kb) => kb.provider === 'native').map((kb) => kb.id);
+    const ragflowKbs = kbs.filter((kb) => kb.provider === 'ragflow');
+    const results: KnowledgeSearchResult[] = [];
+    if (nativeKbIds.length) {
+      results.push(...await this.searchNative(userId, nativeKbIds, query, limit, options));
     }
+    for (const kb of ragflowKbs) {
+      results.push(...await this.searchRagflow(kb, query, limit));
+    }
+    return results.sort((a, b) => b.score - a.score).slice(0, limit);
+  }
 
-    const placeholders = uniqueKbIds.map(() => '?').join(',');
+  private async searchNative(
+    userId: string,
+    kbIds: string[],
+    query: string,
+    limit = 5,
+    options: { mode?: 'hybrid' | 'keyword' | 'vector' } = {},
+  ): Promise<KnowledgeSearchResult[]> {
+    const placeholders = kbIds.map(() => '?').join(',');
     const rows = await this.databaseService.connection.prepare(
       `SELECT c.id, c.kb_id as kbId, c.document_id as documentId, d.title, c.content, c.embedding_json as embeddingJson
        FROM knowledge_chunks c
@@ -528,7 +609,7 @@ export class KnowledgeService {
        WHERE c.user_id = ? AND c.kb_id IN (${placeholders}) AND d.deleted_at IS NULL
        ORDER BY c.created_at DESC
        LIMIT 300`,
-    ).all(userId, ...uniqueKbIds) as unknown as Array<Omit<KnowledgeSearchResult, 'score'> & { embeddingJson?: string }>;
+    ).all(userId, ...kbIds) as unknown as Array<Omit<KnowledgeSearchResult, 'score'> & { embeddingJson?: string }>;
 
     const terms = this.terms(query);
     const queryVector = this.embed(query);
@@ -553,18 +634,16 @@ export class KnowledgeService {
 
   async getAgentKnowledgeBases(userId: string, agentId: string): Promise<KnowledgeBase[]> {
     const rows = await this.databaseService.connection.prepare(
-      `SELECT kb.id, kb.user_id as userId, kb.name, kb.description, kb.created_at as createdAt, kb.updated_at as updatedAt,
+      `SELECT kb.id, kb.user_id as userId, kb.name, kb.description,
+              COALESCE(kb.provider, 'native') as provider, kb.external_id as externalId, kb.engine_config_json as engineConfigJson,
+              kb.created_at as createdAt, kb.updated_at as updatedAt,
               0 as documentCount, 0 as chunkCount
        FROM agent_knowledge_bases akb
        JOIN knowledge_bases kb ON kb.id = akb.kb_id
        WHERE akb.user_id = ? AND akb.agent_id = ? AND kb.deleted_at IS NULL
        ORDER BY kb.name ASC`,
     ).all(userId, agentId) as unknown as KnowledgeBaseRow[];
-    return rows.map((row) => ({
-      ...row,
-      documentCount: Number(row.documentCount ?? 0),
-      chunkCount: Number(row.chunkCount ?? 0),
-    }));
+    return rows.map((row) => this.mapKnowledgeBase(row));
   }
 
   async setAgentKnowledgeBases(userId: string, agentId: string, kbIds: string[]): Promise<void> {
@@ -579,6 +658,250 @@ export class KnowledgeService {
         'INSERT INTO agent_knowledge_bases (agent_id, kb_id, user_id, created_at) VALUES (?, ?, ?, ?)',
       ).run(agentId, kbId, userId, this.databaseService.now());
     }
+  }
+
+  private mapKnowledgeBase(row: KnowledgeBaseRow): KnowledgeBase {
+    const config = this.parseRagflowConfig(row.engineConfigJson);
+    const provider = this.normalizeProvider(row.provider);
+    return {
+      id: row.id,
+      userId: row.userId,
+      name: row.name,
+      description: row.description,
+      provider,
+      externalId: row.externalId ?? null,
+      engine: {
+        provider,
+        baseUrl: provider === 'ragflow' ? config?.baseUrl : undefined,
+        datasetId: provider === 'ragflow' ? (row.externalId || config?.datasetId) : undefined,
+        apiKeyConfigured: provider === 'ragflow' ? Boolean(config?.apiKey) : undefined,
+      },
+      documentCount: Number(row.documentCount ?? 0),
+      chunkCount: Number(row.chunkCount ?? 0),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private async loadKnowledgeBasesByIds(userId: string, kbIds: string[]): Promise<KnowledgeBase[]> {
+    if (!kbIds.length) return [];
+    const placeholders = kbIds.map(() => '?').join(',');
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT kb.id, kb.user_id as userId, kb.name, kb.description,
+              COALESCE(kb.provider, 'native') as provider, kb.external_id as externalId, kb.engine_config_json as engineConfigJson,
+              kb.created_at as createdAt, kb.updated_at as updatedAt,
+              COALESCE(docs.documentCount, 0) as documentCount,
+              COALESCE(chunks.chunkCount, 0) as chunkCount
+       FROM knowledge_bases kb
+       LEFT JOIN (
+         SELECT kb_id, COUNT(*) as documentCount FROM knowledge_documents
+         WHERE deleted_at IS NULL GROUP BY kb_id
+       ) docs ON docs.kb_id = kb.id
+       LEFT JOIN (
+         SELECT kb_id, COUNT(*) as chunkCount FROM knowledge_chunks GROUP BY kb_id
+       ) chunks ON chunks.kb_id = kb.id
+       WHERE kb.user_id = ? AND kb.deleted_at IS NULL AND kb.id IN (${placeholders})`,
+    ).all(userId, ...kbIds) as unknown as KnowledgeBaseRow[];
+    return rows.map((row) => this.mapKnowledgeBase(row));
+  }
+
+  private normalizeProvider(provider?: string): KnowledgeProvider {
+    return provider === 'ragflow' ? 'ragflow' : 'native';
+  }
+
+  private buildRagflowConfig(dto: CreateKnowledgeBaseDto): RagflowConfig {
+    const baseUrl = (dto.ragflowBaseUrl || process.env.RAGFLOW_BASE_URL || '').trim().replace(/\/+$/, '');
+    const apiKey = (dto.ragflowApiKey || process.env.RAGFLOW_API_KEY || '').trim();
+    if (!baseUrl) {
+      throw new BadRequestException('创建 RAGFlow 知识库需要填写 RAGFlow 地址，或配置 RAGFLOW_BASE_URL');
+    }
+    if (!apiKey) {
+      throw new BadRequestException('创建 RAGFlow 知识库需要填写 API Key，或配置 RAGFLOW_API_KEY');
+    }
+    return { baseUrl, apiKey, datasetId: dto.ragflowDatasetId?.trim() || undefined };
+  }
+
+  private parseRagflowConfig(raw?: string | null): RagflowConfig | undefined {
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as Partial<RagflowConfig>;
+      if (!parsed || typeof parsed !== 'object' || !parsed.baseUrl) return undefined;
+      return {
+        baseUrl: String(parsed.baseUrl).replace(/\/+$/, ''),
+        apiKey: parsed.apiKey ? String(parsed.apiKey) : undefined,
+        datasetId: parsed.datasetId ? String(parsed.datasetId) : undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private requireRagflowConfig(kb: KnowledgeBase): RagflowConfig {
+    const row = this.databaseService.connection.prepare(
+      `SELECT engine_config_json as engineConfigJson, external_id as externalId
+       FROM knowledge_bases
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).get(kb.id, kb.userId) as unknown as { engineConfigJson?: string | null; externalId?: string | null } | undefined;
+    const config = this.parseRagflowConfig(row?.engineConfigJson);
+    const datasetId = row?.externalId || config?.datasetId || kb.externalId || kb.engine?.datasetId;
+    if (!config?.baseUrl || !config.apiKey || !datasetId) {
+      throw new BadRequestException('RAGFlow 知识库配置不完整，请检查地址、API Key 和 Dataset ID');
+    }
+    return { ...config, datasetId };
+  }
+
+  private async addRagflowDocument(userId: string, kb: KnowledgeBase, dto: AddKnowledgeDocumentDto) {
+    const docId = randomUUID();
+    const now = this.databaseService.now();
+    const fileType = (dto.fileType || this.fileTypeFromName(dto.title) || 'text').slice(0, 32);
+    let externalId = '';
+    let parseStatus = 'succeeded';
+    let vectorStatus = 'succeeded';
+    let failureReason = '';
+    try {
+      externalId = await this.uploadRagflowDocument(kb, dto.title.trim(), dto.content, fileType);
+      if (externalId) await this.parseRagflowDocument(kb, externalId);
+    } catch (error) {
+      parseStatus = 'failed';
+      vectorStatus = 'failed';
+      failureReason = error instanceof Error ? error.message : 'RAGFlow 文档写入失败';
+    }
+    await this.databaseService.connection.prepare(
+      `INSERT INTO knowledge_documents (id, kb_id, user_id, title, file_type, parse_status, vector_status, failure_reason, source_file_id, external_id, content, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(docId, kb.id, userId, dto.title.trim(), fileType, parseStatus, vectorStatus, failureReason, dto.sourceFileId ?? '', externalId, dto.content, now, now);
+    if (failureReason) throw new BadRequestException(failureReason);
+    return { id: docId, kbId: kb.id, title: dto.title.trim(), chunkCount: 0 };
+  }
+
+  private async reparseRagflowDocument(userId: string, kb: KnowledgeBase, detail: KnowledgeDocumentRow & { chunks?: unknown[] }) {
+    if (!detail.externalId) throw new BadRequestException('该文档缺少 RAGFlow Document ID');
+    await this.parseRagflowDocument(kb, detail.externalId);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE knowledge_documents SET parse_status = ?, vector_status = ?, failure_reason = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+    ).run('succeeded', 'succeeded', '', now, detail.id, userId);
+    return { id: detail.id, kbId: detail.kbId, title: detail.title, chunkCount: 0 };
+  }
+
+  private async createRagflowDataset(config: RagflowConfig, name: string, description: string): Promise<string> {
+    const data = await this.ragflowRequest(config, '/api/v1/datasets', {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    });
+    const id = this.pickRagflowId(data);
+    if (!id) throw new BadRequestException('RAGFlow 创建 Dataset 后未返回 ID');
+    return id;
+  }
+
+  private async uploadRagflowDocument(kb: KnowledgeBase, title: string, content: string, fileType: string): Promise<string> {
+    const config = this.requireRagflowConfig(kb);
+    const form = new FormData();
+    const ext = fileType === 'markdown' ? 'md' : 'txt';
+    form.append('file', new Blob([content], { type: 'text/plain;charset=utf-8' }), this.ensureFilename(title, ext));
+    const data = await this.ragflowRequest(config, `/api/v1/datasets/${encodeURIComponent(config.datasetId || '')}/documents`, {
+      method: 'POST',
+      body: form,
+    });
+    const id = this.pickRagflowId(data);
+    if (!id) throw new BadRequestException('RAGFlow 上传文档后未返回 Document ID');
+    return id;
+  }
+
+  private async parseRagflowDocument(kb: KnowledgeBase, documentId: string): Promise<void> {
+    const config = this.requireRagflowConfig(kb);
+    await this.ragflowRequest(config, `/api/v1/datasets/${encodeURIComponent(config.datasetId || '')}/chunks`, {
+      method: 'POST',
+      body: JSON.stringify({ document_ids: [documentId] }),
+    });
+  }
+
+  private async deleteRagflowDocument(kb: KnowledgeBase, documentId: string): Promise<void> {
+    const config = this.requireRagflowConfig(kb);
+    await this.ragflowRequest(config, `/api/v1/datasets/${encodeURIComponent(config.datasetId || '')}/documents`, {
+      method: 'DELETE',
+      body: JSON.stringify({ ids: [documentId] }),
+    });
+  }
+
+  private async searchRagflow(kb: KnowledgeBase, query: string, limit: number): Promise<KnowledgeSearchResult[]> {
+    const config = this.requireRagflowConfig(kb);
+    const data = await this.ragflowRequest(config, '/api/v1/retrieval', {
+      method: 'POST',
+      body: JSON.stringify({
+        question: query,
+        dataset_ids: [config.datasetId],
+        page: 1,
+        page_size: limit,
+      }),
+    });
+    const chunks = this.extractRagflowChunks(data);
+    return chunks.slice(0, limit).map((chunk, index) => ({
+      id: String(chunk.id || chunk.chunk_id || `${kb.id}:${index}`),
+      kbId: kb.id,
+      documentId: String(chunk.document_id || chunk.doc_id || ''),
+      title: String(chunk.document_name || chunk.document_keyword || chunk.docnm_kwd || chunk.title || kb.name),
+      content: String(chunk.content || chunk.content_with_weight || chunk.text || ''),
+      score: Number(chunk.similarity || chunk.score || chunk.vector_similarity || 0),
+    })).filter((item) => item.content.trim());
+  }
+
+  private async ragflowRequest(config: RagflowConfig, path: string, init: RequestInit = {}): Promise<unknown> {
+    const headers = new Headers(init.headers);
+    if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
+    headers.set('Authorization', `Bearer ${config.apiKey}`);
+    const response = await fetch(`${config.baseUrl}${path}`, { ...init, headers });
+    const text = await response.text();
+    const payload = text ? this.parseJsonSafe(text) : {};
+    if (!response.ok) {
+      throw new BadRequestException(this.ragflowErrorMessage(payload, text, response.status));
+    }
+    if (this.isRecord(payload) && typeof payload.code !== 'undefined' && Number(payload.code) !== 0) {
+      throw new BadRequestException(this.ragflowErrorMessage(payload, text, response.status));
+    }
+    return this.isRecord(payload) && 'data' in payload ? payload.data : payload;
+  }
+
+  private ragflowErrorMessage(payload: unknown, fallback: string, status: number): string {
+    if (this.isRecord(payload)) {
+      const message = payload.message || payload.msg || payload.error;
+      if (message) return `RAGFlow 请求失败：${String(message)}`;
+    }
+    return `RAGFlow 请求失败：HTTP ${status}${fallback ? ` ${fallback.slice(0, 200)}` : ''}`;
+  }
+
+  private pickRagflowId(data: unknown): string {
+    const value = Array.isArray(data) ? data[0] : data;
+    if (!this.isRecord(value)) return '';
+    const nested = value.document || value.dataset;
+    if (this.isRecord(nested) && nested.id) return String(nested.id);
+    return String(value.id || value.document_id || value.dataset_id || '');
+  }
+
+  private extractRagflowChunks(data: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(data)) return data.filter(this.isRecord) as Array<Record<string, unknown>>;
+    if (!this.isRecord(data)) return [];
+    const chunks = data.chunks || data.results || data.documents;
+    if (Array.isArray(chunks)) return chunks.filter(this.isRecord) as Array<Record<string, unknown>>;
+    if (this.isRecord(chunks)) return Object.values(chunks).filter(this.isRecord) as Array<Record<string, unknown>>;
+    return [];
+  }
+
+  private parseJsonSafe(raw: string): unknown {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  }
+
+  private ensureFilename(title: string, ext: string): string {
+    const clean = title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'document';
+    return /\.[a-z0-9]+$/i.test(clean) ? clean : `${clean}.${ext}`;
   }
 
   private chunkText(text: string): string[] {

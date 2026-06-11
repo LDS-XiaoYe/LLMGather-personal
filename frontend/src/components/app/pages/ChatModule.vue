@@ -27,6 +27,7 @@ const authUser = bind(app, 'authUser');
 const userInvitationCode = bind(app, 'userInvitationCode');
 const selectedModel = bind(app, 'selectedModel');
 const chatThinkingMode = bind(app, 'chatThinkingMode');
+const chatAgentMode = bind(app, 'chatAgentMode');
 const isLoadingModels = bind(app, 'isLoadingModels');
 const status = bind(app, 'status');
 const isAuthLoaded = bind(app, 'isAuthLoaded');
@@ -54,8 +55,8 @@ const switchPage = bind(app, 'switchPage');
         <div class="page-header">
           <div class="header-left">
             <el-select v-model="selectedModel" placeholder="选择模型" filterable :style="{ width: '240px' }">
-              <el-option label="🤖 Auto (智能路由)" value="auto">
-                <span style="font-weight:600">🤖 Auto</span>
+              <el-option label="🤖 自动（智能路由）" value="auto">
+                <span style="font-weight:600">🤖 自动</span>
                 <el-tag size="small" type="danger" style="margin-left:6px">智能路由</el-tag>
               </el-option>
               <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id">
@@ -107,7 +108,7 @@ const switchPage = bind(app, 'switchPage');
                   <!-- Auto routing status -->
                   <div v-if="msg.routerInfo" style="padding:4px 10px;background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;font-size:12px;margin-bottom:4px">
                     <div style="display:flex;align-items:center;gap:6px">
-                      <el-tag size="small" type="danger">Auto</el-tag>
+                      <el-tag size="small" type="danger">自动</el-tag>
                       <span style="color:#3b82f6">→</span>
                       <el-tag size="small" :type="msg.routerInfo.targetType === 'builtin_agent' ? 'success' : (msg.routerInfo.intent === 'coding' ? 'warning' : 'primary')">
                         {{ msg.routerInfo.targetType === 'builtin_agent' ? 'Agent' : msg.routerInfo.intentLabel }}
@@ -119,14 +120,14 @@ const switchPage = bind(app, 'switchPage');
                         text
                         type="primary"
                         @click="switchPage('agent'); openAgentRunTrace(msg.routerInfo.runId)"
-                      >Trace</el-button>
+                      >追踪</el-button>
                     </div>
                     <!-- Debug panel per-message -->
                     <div v-if="msg.routerInfo.debug && msg.routerInfo.debug.classifierModel" style="margin-top:6px;padding:8px 10px;background:#fefce8;border:1px dashed #f59e0b;border-radius:4px;font-family:monospace;font-size:11px;line-height:1.6;color:#92400e">
                       <div><strong>分类模型:</strong> {{ msg.routerInfo.debug.classifierModel }}</div>
                       <div><strong>分类器输出:</strong> <code style="background:#fef3c7;padding:1px 4px;border-radius:2px">{{ msg.routerInfo.debug.rawOutput || '(空)' }}</code></div>
                       <div><strong>匹配方式:</strong> {{ msg.routerInfo.debug.matchedBy === 'label' ? '✅ 精确匹配' : msg.routerInfo.debug.matchedBy === 'fuzzy' ? '⚠️ 模糊匹配' : '❌ 降级通用' }}</div>
-                      <div style="margin-top:4px"><strong>Prompt:</strong><pre style="margin:2px 0 0;white-space:pre-wrap;font-size:10px;color:#78716c">{{ msg.routerInfo.debug.prompt }}</pre></div>
+                      <div style="margin-top:4px"><strong>提示词:</strong><pre style="margin:2px 0 0;white-space:pre-wrap;font-size:10px;color:#78716c">{{ msg.routerInfo.debug.prompt }}</pre></div>
                     </div>
                   </div>
                   <details v-if="msg.reasoning && !msg.routerInfo" open class="reasoning-box">
@@ -180,6 +181,17 @@ const switchPage = bind(app, 'switchPage');
                     思考
                   </span>
                   <span class="thinking-toggle-option thinking-off">直答</span>
+                </button>
+                <button
+                  type="button"
+                  class="agent-mode-toggle"
+                  :class="{ active: chatAgentMode }"
+                  :aria-pressed="chatAgentMode"
+                  title="开启后会先判断是否需要调用 Agent；命中任务型意图才调起 Agent，否则普通回复"
+                  @click="chatAgentMode = !chatAgentMode"
+                >
+                  <span class="agent-toggle-dot" />
+                  Agent 模式
                 </button>
                 <el-button :icon="Delete" @click="clearChat()">清空</el-button>
                 <el-button v-if="isSubmitting" type="danger" :icon="SwitchButton" @click="stopChatGeneration()">停止</el-button>
@@ -258,6 +270,47 @@ const switchPage = bind(app, 'switchPage');
 .thinking-mode-toggle.active .thinking-on,
 .thinking-mode-toggle:not(.active) .thinking-off {
   color: #ffffff;
+}
+
+.agent-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #d7dce8;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, color .18s ease, background .18s ease;
+}
+
+.agent-mode-toggle:hover {
+  border-color: #b7c3d8;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .08);
+}
+
+.agent-mode-toggle.active {
+  color: #065f46;
+  border-color: #6ee7b7;
+  background: linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%);
+}
+
+.agent-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #94a3b8;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, .14);
+}
+
+.agent-mode-toggle.active .agent-toggle-dot {
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, .18);
 }
 
 .thinking-mode-toggle:not(.active) .thinking-on {

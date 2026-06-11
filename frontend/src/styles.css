@@ -1385,6 +1385,31 @@ html, body, #app {
   margin: 0;
 }
 
+.agent-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.agent-version-compare-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.agent-mini-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-main);
+}
+
 .agent-endpoint-list {
   display: flex;
   flex-direction: column;
@@ -1583,9 +1608,10 @@ html, body, #app {
   pointer-events: none;
 }
 
-.dag-canvas-lines line {
+.dag-canvas-lines path {
   stroke: #2563eb;
   stroke-width: 2.5;
+  fill: none;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
@@ -2522,9 +2548,11 @@ html, body, #app {
   pointer-events: none;
 }
 
-.workflow-canvas-lines line {
+.workflow-canvas-lines path {
   stroke: #2563eb;
   stroke-width: 2.5;
+  fill: none;
+  stroke-linecap: round;
 }
 
 .workflow-canvas-node {

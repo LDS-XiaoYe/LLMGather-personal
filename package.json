@@ -9,7 +9,8 @@
     "dev:backend": "npm --prefix backend run start:dev",
     "build:backend": "npm --prefix backend run build",
     "dev:frontend": "npm --prefix frontend run dev",
-    "build:frontend": "npm --prefix frontend run build"
+    "build:frontend": "npm --prefix frontend run build",
+    "db:backup": "node backend/scripts/export-sanitized-sql.cjs"
   },
   "dependencies": {
     "class-transformer": "^0.5.1",

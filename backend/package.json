@@ -10,7 +10,8 @@
     "start": "node dist/main.js",
     "start:dev": "node ../node_modules/@nestjs/cli/bin/nest.js start --watch",
     "lint": "eslint \"src/**/*.ts\"",
-    "test": "jest"
+    "test": "jest",
+    "backup:sanitized": "node scripts/export-sanitized-sql.cjs"
   },
   "dependencies": {
     "@langchain/langgraph": "^1.3.6",

@@ -126,7 +126,8 @@ export class RouterService implements OnModuleInit {
     const lastUserMsg = [...payload.messages].reverse().find((m) => m.role === 'user');
     const query = this.extractTextContent(lastUserMsg?.content);
 
-    const builtinMatch = matchBuiltinAgent(query);
+    const agentMode = this.isAgentModeEnabled(payload);
+    const builtinMatch = agentMode ? matchBuiltinAgent(query) : null;
     if (builtinMatch) {
       const availableModels = this.providerRegistry.listModels();
       const rules = await this.getRules();
@@ -135,7 +136,8 @@ export class RouterService implements OnModuleInit {
         ...(rules[builtinMatch.spec.category] ?? []),
         ...(rules.general ?? []),
       ];
-      let selectedModel = candidates.find((model) => availableModels.some((item) => item.id === model));
+      let selectedModel = this.requestedModelIfAvailable(payload, availableModels);
+      if (!selectedModel) selectedModel = candidates.find((model) => availableModels.some((item) => item.id === model)) || '';
       if (!selectedModel) {
         selectedModel = availableModels.find((model) => !model.id.includes('tts') && !model.id.includes('voice'))?.id || availableModels[0]?.id || '';
       }
@@ -168,14 +170,14 @@ export class RouterService implements OnModuleInit {
 
     // 3. Find first available model
     const availableModels = this.providerRegistry.listModels();
-    let selectedModel = '';
+    let selectedModel = this.requestedModelIfAvailable(payload, availableModels);
     const fallbacks: string[] = [];
 
     for (const model of candidates) {
       const isAvailable = availableModels.some((m) => m.id === model);
       if (isAvailable && !selectedModel) {
         selectedModel = model;
-      } else if (isAvailable) {
+      } else if (isAvailable && model !== selectedModel) {
         fallbacks.push(model);
       }
     }
@@ -198,7 +200,9 @@ export class RouterService implements OnModuleInit {
       confidence: 0.9,
       selectedModel,
       fallbacks,
-      reason: `LLM 分类: 意图「${getIntentLabel(intent)}」→ 路由到 ${selectedModel}`,
+      reason: agentMode
+        ? `Agent 模式已开启，但未命中需要调用的内置 Agent；LLM 分类: 意图「${getIntentLabel(intent)}」→ 路由到 ${selectedModel}`
+        : `LLM 分类: 意图「${getIntentLabel(intent)}」→ 路由到 ${selectedModel}`,
       debug,
       targetType: 'model',
     };
@@ -237,6 +241,18 @@ export class RouterService implements OnModuleInit {
 
   private sanitizeRuleModels(models: string[]): string[] {
     return Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
+  }
+
+  private isAgentModeEnabled(payload: ChatRequestDto): boolean {
+    const extra = payload.extra_body && typeof payload.extra_body === 'object'
+      ? payload.extra_body as Record<string, unknown>
+      : {};
+    return extra.agentMode === true;
+  }
+
+  private requestedModelIfAvailable(payload: ChatRequestDto, availableModels: Array<{ id: string }>): string {
+    if (!payload.model || payload.model === 'auto') return '';
+    return availableModels.some((model) => model.id === payload.model) ? payload.model : '';
   }
 
   private extractTextContent(content: unknown): string {

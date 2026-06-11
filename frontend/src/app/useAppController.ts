@@ -102,6 +102,9 @@ import {
   updateAgentPublication as apiUpdateAgentPublication,
   updateTool as apiUpdateTool,
   updateMemory as apiUpdateMemory,
+  compareAgentVersions as apiCompareAgentVersions,
+  publishAgentVersion as apiPublishAgentVersion,
+  rollbackAgentVersion as apiRollbackAgentVersion,
   restoreAgentVersion as apiRestoreAgentVersion,
   testMcpServer as apiTestMcpServer,
   updateAdminBillingRule,
@@ -140,6 +143,7 @@ import {
   type AgentTestRun,
   type AgentTestSuite,
   type AgentVersion,
+  type AgentVersionCompareResult,
   type AgentMarketplaceTemplate,
   type BuiltinAgentSpec,
   type ApiKeyItem,
@@ -185,6 +189,7 @@ export function useAppController() {
   const BASE_URL_KEY = 'llm_gather_base_url';
   const THEME_KEY = 'llm_gather_theme';
   const CHAT_THINKING_KEY = 'llm_gather_chat_thinking';
+  const CHAT_AGENT_MODE_KEY = 'llm_gather_chat_agent_mode';
 
   type ThemeMode = 'light' | 'dark' | 'auto';
 
@@ -231,6 +236,7 @@ export function useAppController() {
   const backendBaseUrl = ref(getStoredValue(BASE_URL_KEY) || '/v1');
   const isSettingsOpen = ref(false);
   const chatThinkingMode = ref(getStoredValue(CHAT_THINKING_KEY) !== 'off');
+  const chatAgentMode = ref(getStoredValue(CHAT_AGENT_MODE_KEY) === 'on');
   const isAuthDialogOpen = ref(false);
   const authUser = ref<AuthUser | null>(null);
   const authMode = ref<'login' | 'register'>('login');
@@ -300,6 +306,8 @@ export function useAppController() {
   const agentTeams = ref<AgentTeam[]>([]);
   const mcpServers = ref<McpServer[]>([]);
   const agentVersions = ref<AgentVersion[]>([]);
+  const agentVersionCompare = ref<AgentVersionCompareResult | null>(null);
+  const agentVersionCompareVisible = ref(false);
   const agentTestSuites = ref<AgentTestSuite[]>([]);
   const agentTestCases = ref<AgentTestCase[]>([]);
   const agentTestRuns = ref<AgentTestRun[]>([]);
@@ -349,6 +357,7 @@ export function useAppController() {
   const showTestCaseCreateDialog = ref(false);
   const showMarketplacePublishDialog = ref(false);
   const showVersionCreateDialog = ref(false);
+  const showVersionPublishDialog = ref(false);
   const showEvaluationDialog = ref(false);
   const showMemoryCreateDialog = ref(false);
   const skillTesting = ref(false);
@@ -489,6 +498,7 @@ export function useAppController() {
     toolPermissions: {} as Record<string, string>,
     knowledgeBaseIds: [] as string[],
     skillIds: [] as string[],
+    workflowIds: [] as string[],
     published: false,
     apiEnabled: false,
     publicSlug: '',
@@ -497,6 +507,10 @@ export function useAppController() {
   const knowledgeForm = ref({
     name: '',
     description: '',
+    provider: 'native' as 'native' | 'ragflow',
+    ragflowBaseUrl: '',
+    ragflowApiKey: '',
+    ragflowDatasetId: '',
   });
   const knowledgeDocForm = ref({
     kbId: '',
@@ -543,6 +557,12 @@ export function useAppController() {
   ];
   const versionForm = ref({
     label: '',
+    notes: '',
+    releaseMode: 'stable' as 'stable' | 'canary',
+    trafficPercent: 10,
+    targetVersionId: '',
+    compareLeftId: '',
+    compareRightId: '',
   });
   const testSuiteForm = ref({
     name: '',
@@ -735,15 +755,17 @@ export function useAppController() {
         .map((nextId) => {
           const target = byId.get(nextId);
           if (!target) return null;
+          const x1 = node.x + 190;
+          const y1 = node.y + 38;
+          const x2 = target.x;
+          const y2 = target.y + 38;
+          const curve = Math.max(80, Math.min(260, Math.abs(x2 - x1) * 0.55));
           return {
             id: `${node.id}-${nextId}`,
-            x1: node.x + 190,
-            y1: node.y + 38,
-            x2: target.x,
-            y2: target.y + 38,
+            path: `M ${x1} ${y1} C ${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`,
           };
         })
-        .filter(Boolean) as Array<{ id: string; x1: number; y1: number; x2: number; y2: number }>;
+        .filter(Boolean) as Array<{ id: string; path: string }>;
     });
   });
 
@@ -780,13 +802,13 @@ export function useAppController() {
     {
       step: '2',
       title: '挂载能力',
-      detail: `${agentForm.value.toolIds.length} 工具 · ${agentForm.value.knowledgeBaseIds.length} 知识库 · ${agentForm.value.skillIds.length} Skills`,
+      detail: `${agentForm.value.toolIds.length} 工具 · ${agentForm.value.knowledgeBaseIds.length} 知识库 · ${agentForm.value.skillIds.length} 技能`,
       status: agentForm.value.toolIds.length || agentForm.value.knowledgeBaseIds.length || agentForm.value.skillIds.length ? 'done' : 'current',
     },
     {
       step: '3',
       title: '运行调试',
-      detail: activeAgentRun.value ? `最近 ${activeAgentRun.value.status}` : '输入任务，查看输出和 Trace',
+      detail: activeAgentRun.value ? `最近 ${agentRunStatusLabel(activeAgentRun.value.status)}` : '输入任务，查看输出和追踪',
       status: activeAgentRun.value ? 'done' : 'current',
     },
     {
@@ -1161,6 +1183,7 @@ export function useAppController() {
 
   watch(backendBaseUrl, (val) => setStoredValue(BASE_URL_KEY, val));
   watch(chatThinkingMode, (value) => setStoredValue(CHAT_THINKING_KEY, value ? 'on' : 'off'));
+  watch(chatAgentMode, (value) => setStoredValue(CHAT_AGENT_MODE_KEY, value ? 'on' : 'off'));
 
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash;
@@ -1308,6 +1331,7 @@ export function useAppController() {
       toolPermissions: {},
       knowledgeBaseIds: [],
       skillIds: [],
+      workflowIds: [],
       published: false,
       apiEnabled: false,
       publicSlug: '',
@@ -1336,11 +1360,13 @@ export function useAppController() {
       toolPermissions: {},
       knowledgeBaseIds: [...(agent.knowledgeBaseIds ?? [])],
       skillIds: [...(agent.skillIds ?? [])],
+      workflowIds: [...(agent.workflowIds ?? [])],
       published: agent.published === true,
       apiEnabled: agent.apiEnabled === true,
       publicSlug: agent.publicSlug ?? '',
       status: agent.status,
     };
+    activeWorkflowId.value = agentForm.value.workflowIds[0] ?? '';
   }
 
   async function refreshAgentStudio() {
@@ -1864,6 +1890,7 @@ export function useAppController() {
         toolPermissions: { ...agentForm.value.toolPermissions },
         knowledgeBaseIds: [...agentForm.value.knowledgeBaseIds],
         skillIds: [...agentForm.value.skillIds],
+        workflowIds: [...agentForm.value.workflowIds],
       };
       const updatePayload = {
         ...basePayload,
@@ -2001,7 +2028,7 @@ export function useAppController() {
       marketplaceTemplates.value = [template, ...marketplaceTemplates.value.filter((item) => item.id !== template.id)];
       marketplaceForm.value = { name: '', description: '', category: '' };
       showMarketplacePublishDialog.value = false;
-      status.value = `已发布到 Agent Marketplace：${template.name}`;
+      status.value = `已发布到 Agent 市场：${template.name}`;
     } catch (error) {
       status.value = error instanceof Error ? error.message : '发布模板失败';
     } finally {
@@ -2176,7 +2203,7 @@ export function useAppController() {
     if (event.type === 'run_created') {
       activeAgentRun.value = event.run;
       agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
-      status.value = 'Agent Trace 已开始';
+      status.value = 'Agent 追踪已开始';
       return;
     }
     if (!activeAgentRun.value && event.runId) return;
@@ -2246,9 +2273,9 @@ export function useAppController() {
       selectAgentRun(run);
       agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id && item.agentId === run.agentId)].slice(0, 20);
       agentWorkspaceMode.value = 'invoke';
-      status.value = '已打开运行 Trace';
+      status.value = '已打开运行追踪';
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '加载运行 Trace 失败';
+      status.value = error instanceof Error ? error.message : '加载运行追踪失败';
     }
   }
 
@@ -2256,6 +2283,115 @@ export function useAppController() {
     if (statusValue === 'succeeded') return 'success';
     if (statusValue === 'failed') return 'danger';
     return 'warning';
+  }
+
+  function agentRunStatusLabel(statusValue?: string) {
+    const labels: Record<string, string> = {
+      succeeded: '成功',
+      failed: '失败',
+      running: '运行中',
+      pending: '等待中',
+      idle: '空闲',
+      skipped: '已跳过',
+      cancelled: '已取消',
+    };
+    return statusValue ? (labels[statusValue] ?? statusValue) : '空闲';
+  }
+
+  function agentStepTypeLabel(typeValue?: string) {
+    const labels: Record<string, string> = {
+      input: '输入',
+      context_pack: '上下文',
+      plan: '规划',
+      reflection: '反思',
+      llm: 'LLM',
+      llm_completion: '模型生成',
+      completion: '生成',
+      tool: '工具',
+      tool_call: '工具调用',
+      observation: '观察结果',
+      skill: '技能',
+      skill_context: '技能上下文',
+      rag: 'RAG',
+      rag_retrieval: '知识检索',
+      knowledge: '知识',
+      memory: '记忆',
+      memory_read: '记忆读取',
+      memory_retrieval: '记忆读取',
+      memory_extract: '记忆提取',
+      memory_update: '记忆更新',
+      memory_write: '记忆写入',
+      delegate_agent: 'Agent 委派',
+      delegate_observation: '委派结果',
+      final: '最终输出',
+    };
+    return typeValue ? (labels[typeValue] ?? typeValue) : '未知';
+  }
+
+  function agentLifecycleStatusLabel(statusValue?: string) {
+    if (statusValue === 'active') return '启用';
+    if (statusValue === 'archived') return '归档';
+    return statusValue || '未知';
+  }
+
+  function riskLevelLabel(risk?: string) {
+    if (risk === 'high') return '高风险';
+    if (risk === 'medium') return '中风险';
+    if (risk === 'low') return '低风险';
+    return risk || '未知';
+  }
+
+  function agentInvokeModeLabel(mode?: string) {
+    const labels: Record<string, string> = {
+      standard: '标准',
+      reflective: '反思',
+      fast: '快速',
+    };
+    return mode ? (labels[mode] ?? mode) : '标准';
+  }
+
+  function agentContextStrategyLabel(strategy?: string) {
+    const labels: Record<string, string> = {
+      balanced: '均衡',
+      knowledge_first: '知识优先',
+      memory_first: '记忆优先',
+      minimal: '最小上下文',
+    };
+    return strategy ? (labels[strategy] ?? strategy) : '均衡';
+  }
+
+  function teamStrategyLabel(strategy?: string) {
+    const labels: Record<string, string> = {
+      sequential: '顺序',
+      review: '评审',
+      debate: '辩论',
+      parallel: '并行',
+      consensus: '共识',
+      router: '路由',
+    };
+    return strategy ? (labels[strategy] ?? strategy) : '顺序';
+  }
+
+  function agentVersionStatusLabel(statusValue?: string) {
+    const labels: Record<string, string> = {
+      draft: '草稿',
+      released: '稳定发布',
+      canary: '灰度发布',
+      superseded: '已被替代',
+      rolled_back: '已回滚',
+    };
+    return statusValue ? (labels[statusValue] ?? statusValue) : '草稿';
+  }
+
+  function agentVersionStatusType(statusValue?: string) {
+    const types: Record<string, string> = {
+      draft: 'info',
+      released: 'success',
+      canary: 'warning',
+      superseded: 'info',
+      rolled_back: 'danger',
+    };
+    return types[statusValue || 'draft'] || 'info';
   }
 
   function agentEvalTagType(grade: AgentEvaluation['grade']) {
@@ -2346,13 +2482,13 @@ export function useAppController() {
 
   const agentTraceStageGroups = computed(() => {
     const stages = [
-      { id: 'context', label: 'Context', types: ['context', 'memory_read', 'memory_retrieval', 'rag', 'rag_retrieval', 'knowledge', 'input'] },
-      { id: 'plan', label: 'Plan', types: ['plan', 'reflection'] },
-      { id: 'capability', label: 'Skill / Tool / RAG', types: ['skill', 'skill_context', 'tool', 'tool_call', 'tool_calling', 'rag', 'knowledge_search'] },
-      { id: 'delegate', label: 'Delegate', types: ['delegate_agent', 'delegate_observation'] },
+      { id: 'context', label: '上下文', types: ['context', 'memory_read', 'memory_retrieval', 'rag', 'rag_retrieval', 'knowledge', 'input'] },
+      { id: 'plan', label: '规划', types: ['plan', 'reflection'] },
+      { id: 'capability', label: '技能 / 工具 / RAG', types: ['skill', 'skill_context', 'tool', 'tool_call', 'tool_calling', 'rag', 'knowledge_search'] },
+      { id: 'delegate', label: '委派', types: ['delegate_agent', 'delegate_observation'] },
       { id: 'llm', label: 'LLM', types: ['llm', 'llm_completion', 'completion'] },
-      { id: 'memory', label: 'Memory', types: ['memory_write', 'memory_extract', 'memory_update', 'memory'] },
-      { id: 'other', label: 'Other', types: [] },
+      { id: 'memory', label: '记忆', types: ['memory_write', 'memory_extract', 'memory_update', 'memory'] },
+      { id: 'other', label: '其他', types: [] },
     ];
     const nodes = agentTraceNodes.value;
     return stages
@@ -2387,11 +2523,11 @@ export function useAppController() {
     .slice(0, 6));
 
   const traceStageDefinitions = [
-    { id: 'input', label: 'User Input', types: ['input', 'context_pack'], accent: 'info' },
+    { id: 'input', label: '用户输入', types: ['input', 'context_pack'], accent: 'info' },
     { id: 'llm', label: 'LLM', types: ['llm_completion', 'plan', 'reflection'], accent: 'primary' },
-    { id: 'tool', label: 'Tool', types: ['tool_call', 'observation', 'delegate_agent', 'delegate_observation'], accent: 'warning' },
-    { id: 'memory', label: 'Memory', types: ['memory_retrieval', 'memory_extract', 'memory_update', 'skill_context', 'rag_retrieval'], accent: 'success' },
-    { id: 'final', label: 'Final Output', types: ['final', 'llm_completion'], accent: 'danger' },
+    { id: 'tool', label: '工具', types: ['tool_call', 'observation', 'delegate_agent', 'delegate_observation'], accent: 'warning' },
+    { id: 'memory', label: '记忆', types: ['memory_retrieval', 'memory_extract', 'memory_update', 'skill_context', 'rag_retrieval'], accent: 'success' },
+    { id: 'final', label: '最终输出', types: ['final', 'llm_completion'], accent: 'danger' },
   ];
 
   function stepMatchesTypes(step: AgentRun['steps'][number], types: string[]) {
@@ -2411,7 +2547,7 @@ export function useAppController() {
         ...stage,
         step: matched,
         status: matched?.status ?? (stage.id === 'input' && run ? 'succeeded' : 'pending'),
-        title: matched?.name || (stage.id === 'input' ? 'User Input' : stage.label),
+        title: matched?.name || (stage.id === 'input' ? '用户输入' : stage.label),
         detail: stage.id === 'input'
           ? (run?.input || agentPrompt.value || '等待输入')
           : matched?.output || matched?.error || matched?.input || '等待上游节点完成',
@@ -2451,7 +2587,7 @@ export function useAppController() {
     canStepInto: Boolean(activeAgentTraceStep.value),
     canStepOver: agentTraceReplayIndex.value < agentTraceReplayMax.value,
     canRestartFromNode: Boolean(activeAgentTraceStep.value),
-    currentNode: activeAgentTraceStep.value?.name || 'None',
+    currentNode: activeAgentTraceStep.value?.name || '无',
   }));
 
   const agentComparativeReplay = computed(() => {
@@ -2474,8 +2610,8 @@ export function useAppController() {
         after: currentSkills,
       },
       workflowDiff: {
-        before: baseline ? `${baseline.steps.length} steps` : '',
-        after: current ? `${current.steps.length} steps` : '',
+        before: baseline ? `${baseline.steps.length} 步` : '',
+        after: current ? `${current.steps.length} 步` : '',
       },
     };
   });
@@ -2499,14 +2635,22 @@ export function useAppController() {
   });
 
   const agentHarnessDatasetTypes = computed(() => [
-    { id: 'manual', label: 'Manual Dataset', count: agentTestCases.value.length },
-    { id: 'production', label: 'Production Dataset', count: agentRuns.value.length },
-    { id: 'synthetic', label: 'Synthetic Dataset', count: agentImprovementSuggestions.value?.testSuggestions?.length ?? 0 },
+    { id: 'manual', label: '手动数据集', count: agentTestCases.value.length },
+    { id: 'production', label: '生产数据集', count: agentRuns.value.length },
+    { id: 'synthetic', label: '合成数据集', count: agentImprovementSuggestions.value?.testSuggestions?.length ?? 0 },
   ]);
 
   const agentHarnessScenarios = computed(() => {
-    const scenarios = ['RAG', 'Tool Use', 'Coding', 'Browser Use', 'Multi-Agent', 'Customer Support'];
-    return scenarios.map((scenario) => {
+    const scenarios = [
+      { label: 'RAG', keyword: 'RAG' },
+      { label: '工具调用', keyword: 'Tool Use' },
+      { label: '代码任务', keyword: 'Coding' },
+      { label: '浏览器任务', keyword: 'Browser Use' },
+      { label: '多 Agent', keyword: 'Multi-Agent' },
+      { label: '客户支持', keyword: 'Customer Support' },
+    ];
+    return scenarios.map((scenarioItem) => {
+      const scenario = scenarioItem.keyword;
       const q = scenario.toLowerCase().replace(/\s+/g, '');
       const count = agentTestCases.value.filter((testCase) => {
         const blob = `${testCase.name} ${testCase.input} ${testCase.expectedOutput} ${testCase.rubric}`.toLowerCase();
@@ -2518,7 +2662,7 @@ export function useAppController() {
         if (scenario === 'Customer Support') return /support|客服|客户|退款|订单/.test(blob);
         return blob.includes(q);
       }).length;
-      return { id: q, label: scenario, count };
+      return { id: q, label: scenarioItem.label, count };
     });
   });
 
@@ -2616,13 +2760,13 @@ export function useAppController() {
     pauseAgentTraceReplay();
     if (!activeAgentTraceStep.value) return;
     activeAgentTraceStepId.value = activeAgentTraceStep.value.id;
-    status.value = `Step Into: ${activeAgentTraceStep.value.name}`;
+    status.value = `进入步骤：${activeAgentTraceStep.value.name}`;
   }
 
   function stepOverAgentTrace() {
     pauseAgentTraceReplay();
     setAgentTraceReplayIndex(Math.min(agentTraceReplayIndex.value + 1, agentTraceReplayMax.value));
-    status.value = `Step Over: ${activeAgentTraceStep.value?.name || 'Trace end'}`;
+    status.value = `跳过步骤：${activeAgentTraceStep.value?.name || '追踪结束'}`;
   }
 
   function restartAgentFromTraceNode() {
@@ -2658,10 +2802,14 @@ export function useAppController() {
       const kb = await apiCreateKnowledgeBase({
         name,
         description: knowledgeForm.value.description.trim(),
+        provider: knowledgeForm.value.provider,
+        ragflowBaseUrl: knowledgeForm.value.ragflowBaseUrl.trim(),
+        ragflowApiKey: knowledgeForm.value.ragflowApiKey.trim(),
+        ragflowDatasetId: knowledgeForm.value.ragflowDatasetId.trim(),
       }, backendBaseUrl.value);
       knowledgeBases.value = [kb, ...knowledgeBases.value.filter((item) => item.id !== kb.id)];
       knowledgeDocForm.value.kbId = kb.id;
-      knowledgeForm.value = { name: '', description: '' };
+      knowledgeForm.value = { name: '', description: '', provider: 'native', ragflowBaseUrl: '', ragflowApiKey: '', ragflowDatasetId: '' };
       status.value = '知识库已创建';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '创建知识库失败';
@@ -3243,7 +3391,7 @@ export function useAppController() {
           documentCount: kb.documentCount,
           chunkCount: kb.chunkCount,
           portable: false,
-          note: '知识库原文未包含在 Agent Bundle 中；请在目标平台重新导入同名知识库或单独迁移文档。',
+          note: '知识库原文未包含在 Agent 包中；请在目标平台重新导入同名知识库或单独迁移文档。',
         })),
       excluded: {
         runHistory: true,
@@ -3291,7 +3439,7 @@ export function useAppController() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     showAgentExportDialog.value = false;
-    status.value = `Agent "${agentForm.value.name}" 已导出为 JSON Bundle`;
+    status.value = `Agent "${agentForm.value.name}" 已导出为 JSON 包`;
   }
 
   function exportAgentAsMarkdown() {
@@ -3318,11 +3466,11 @@ export function useAppController() {
   ## 工具 (${boundTools.length})
   ${boundTools.map(t => `- ${t.displayName} (${t.name})`).join('\n') || '暂无工具'}
 
-  ## Skills (${boundSkills.length})
-  ${boundSkills.map(s => `- ${s.name} [${s.category}]`).join('\n') || '暂无 Skills'}
+  ## 技能 (${boundSkills.length})
+  ${boundSkills.map(s => `- ${s.name} [${s.category}]`).join('\n') || '暂无技能'}
 
   ## 知识库 (${boundKBs.length})
-  ${boundKBs.map(kb => `- ${kb.name} (${kb.chunkCount} chunks)`).join('\n') || '暂无知识库'}
+  ${boundKBs.map(kb => `- ${kb.name} (${kb.chunkCount} 个分块)`).join('\n') || '暂无知识库'}
 
   ## 配置参数
   - **Temperature**: ${agentForm.value.temperature}
@@ -3724,9 +3872,10 @@ export function useAppController() {
     }
     versionSaving.value = true;
     try {
-      const version = await apiCreateAgentVersion(agentForm.value.id, versionForm.value.label.trim(), backendBaseUrl.value);
+      const version = await apiCreateAgentVersion(agentForm.value.id, versionForm.value.label.trim(), versionForm.value.notes.trim(), backendBaseUrl.value);
       agentVersions.value = [version, ...agentVersions.value.filter((item) => item.id !== version.id)];
       versionForm.value.label = '';
+      versionForm.value.notes = '';
       showVersionCreateDialog.value = false;
       status.value = `已创建 Agent 版本 v${version.versionNumber}`;
     } catch (error) {
@@ -3734,6 +3883,45 @@ export function useAppController() {
     } finally {
       versionSaving.value = false;
     }
+  }
+
+  async function publishVersionFromForm(versionId = versionForm.value.targetVersionId) {
+    if (!agentForm.value.id || versionSaving.value) return;
+    versionSaving.value = true;
+    try {
+      const result = await apiPublishAgentVersion(agentForm.value.id, {
+        versionId: versionId || undefined,
+        label: versionForm.value.label.trim() || '发布版本',
+        releaseMode: versionForm.value.releaseMode,
+        trafficPercent: versionForm.value.trafficPercent,
+        notes: versionForm.value.notes.trim(),
+        published: true,
+        apiEnabled: agentForm.value.apiEnabled || true,
+        publicSlug: agentForm.value.publicSlug || agentForm.value.name,
+      }, backendBaseUrl.value);
+      const idx = agents.value.findIndex((agent) => agent.id === result.agent.id);
+      if (idx >= 0) agents.value.splice(idx, 1, result.agent);
+      fillAgentForm(result.agent);
+      await loadAgentVersions(result.agent.id);
+      showVersionPublishDialog.value = false;
+      versionForm.value.targetVersionId = '';
+      versionForm.value.notes = '';
+      versionForm.value.label = '';
+      status.value = versionForm.value.releaseMode === 'canary' ? 'Agent 灰度发布已生效' : 'Agent 稳定版本已发布';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '发布版本失败';
+    } finally {
+      versionSaving.value = false;
+    }
+  }
+
+  function openVersionPublishDialog(version?: AgentVersion | null, mode: 'stable' | 'canary' = 'stable') {
+    versionForm.value.targetVersionId = version?.id || '';
+    versionForm.value.releaseMode = mode;
+    versionForm.value.trafficPercent = mode === 'canary' ? Math.max(1, version?.trafficPercent || 10) : 100;
+    versionForm.value.label = version ? version.label : '';
+    versionForm.value.notes = version?.notes || '';
+    showVersionPublishDialog.value = true;
   }
 
   async function restoreVersion(versionId: string) {
@@ -3745,6 +3933,40 @@ export function useAppController() {
       status.value = 'Agent 版本已恢复';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '恢复版本失败';
+    } finally {
+      versionSaving.value = false;
+    }
+  }
+
+  async function rollbackVersion(versionId: string) {
+    if (!agentForm.value.id || versionSaving.value) return;
+    if (!window.confirm('确认回滚到这个版本？当前发布流量会切回该版本。')) return;
+    versionSaving.value = true;
+    try {
+      const result = await apiRollbackAgentVersion(agentForm.value.id, versionId, backendBaseUrl.value);
+      const idx = agents.value.findIndex((agent) => agent.id === result.agent.id);
+      if (idx >= 0) agents.value.splice(idx, 1, result.agent);
+      fillAgentForm(result.agent);
+      await loadAgentVersions(result.agent.id);
+      status.value = `已回滚到 v${result.version.versionNumber}`;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '回滚版本失败';
+    } finally {
+      versionSaving.value = false;
+    }
+  }
+
+  async function compareVersions(leftId = versionForm.value.compareLeftId, rightId = versionForm.value.compareRightId) {
+    if (!agentForm.value.id || !leftId || !rightId) {
+      status.value = '请选择两个版本进行对比';
+      return;
+    }
+    versionSaving.value = true;
+    try {
+      agentVersionCompare.value = await apiCompareAgentVersions(agentForm.value.id, leftId, rightId, backendBaseUrl.value);
+      agentVersionCompareVisible.value = true;
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '版本对比失败';
     } finally {
       versionSaving.value = false;
     }
@@ -3877,8 +4099,10 @@ export function useAppController() {
     }
     workflowCanvasNodes.value = workflow.nodes.map((node, index) => {
       const position = (node.config.position ?? {}) as { x?: unknown; y?: unknown };
+      const dagType = typeof node.config.dagType === 'string' ? node.config.dagType : node.type;
       return {
         ...node,
+        type: dagType as any,
         config: { ...node.config },
         x: typeof position.x === 'number' ? position.x : 40 + index * 210,
         y: typeof position.y === 'number' ? position.y : 80 + (index % 2) * 110,
@@ -3899,6 +4123,33 @@ export function useAppController() {
     }
     if (type === 'memory') return { agentId: agentForm.value.id, nextIds: [] };
     return { agentId: agentForm.value.id, input: '{{input}}', nextIds: [] };
+  }
+
+  function normalizeDagNodeType(type: string): WorkflowNode['type'] {
+    if (type === 'knowledge_search' || type === 'context_read' || type === 'doc_parse') return 'knowledge';
+    if (type === 'memory_read' || type === 'memory_write') return 'memory';
+    if (type === 'tool_call' || type === 'http_request' || type === 'db_query' || type === 'webhook' || type === 'code执行') return 'tool';
+    if (type === 'skill_call') return 'skill';
+    if (type === 'agent_call') return 'agent';
+    return 'prompt';
+  }
+
+  function createDagWorkflowNodeConfig(dagType: string): Record<string, unknown> {
+    const runtimeType = normalizeDagNodeType(dagType);
+    const base = createWorkflowNodeConfig(runtimeType);
+    if (dagType === 'start' || dagType === 'user_input' || dagType === 'file_input' || dagType === 'output' || dagType === 'end') {
+      return { ...base, template: '{{input}}', dagType };
+    }
+    if (dagType === 'intent_detection') {
+      return { ...base, template: '请识别以下输入的意图，并输出简洁结果:\n{{input}}', dagType };
+    }
+    if (dagType === 'parameter_extract') {
+      return { ...base, template: '请从以下输入中提取关键参数，并输出 JSON:\n{{input}}', dagType };
+    }
+    if (dagType === 'condition' || dagType === 'multi_branch' || dagType === 'llm_generate' || dagType === 'result_summary') {
+      return { ...base, template: '{{input}}', dagType };
+    }
+    return { ...base, dagType };
   }
 
   // DAG节点拖拽
@@ -3923,7 +4174,7 @@ export function useAppController() {
       id: createId(`dag-${draggedNode.type}`),
       type: draggedNode.type as any,
       name: draggedNode.label,
-      config: {},
+      config: createDagWorkflowNodeConfig(draggedNode.type),
       x: Math.max(8, Math.min(maxX, x || 48 + (count % 4) * 230)),
       y: Math.max(8, Math.min(maxY, y || 72 + Math.floor(count / 4) * 136)),
     });
@@ -4003,24 +4254,36 @@ export function useAppController() {
     try {
       const nodes: WorkflowNode[] = workflowCanvasNodes.value.map((node) => ({
         id: node.id,
-        type: node.type,
+        type: normalizeDagNodeType(String(node.type)),
         name: node.name,
         config: {
+          ...createWorkflowNodeConfig(normalizeDagNodeType(String(node.type))),
           ...node.config,
+          dagType: String(node.type),
           position: { x: node.x, y: node.y },
           nextIds: Array.isArray(node.config.nextIds) ? node.config.nextIds.map(String) : [],
         },
       }));
       const workflow = await apiCreateWorkflow({
-        name: `${agentForm.value.name || '可视化'} DAG Workflow`,
+        name: `${agentForm.value.name || '可视化'} DAG 工作流`,
         description: '通过可拖拽 DAG 编辑器创建，连线会决定执行顺序。',
         nodes,
       }, backendBaseUrl.value);
       workflows.value = [workflow, ...workflows.value.filter((item) => item.id !== workflow.id)];
       activeWorkflowId.value = workflow.id;
-      status.value = 'Workflow DAG 已保存';
+      if (agentForm.value.id) {
+        agentForm.value.workflowIds = [workflow.id];
+        const saved = await apiUpdateAgent(agentForm.value.id, { workflowIds: [workflow.id] }, backendBaseUrl.value);
+        const idx = agents.value.findIndex((agent) => agent.id === saved.id);
+        if (idx >= 0) agents.value.splice(idx, 1, saved);
+        fillAgentForm(saved);
+      status.value = '工作流 DAG 已保存并绑定到当前 Agent';
+      } else {
+        agentForm.value.workflowIds = [workflow.id];
+        status.value = '工作流 DAG 已保存，创建 Agent 后会自动绑定';
+      }
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '保存 Workflow DAG 失败';
+      status.value = error instanceof Error ? error.message : '保存工作流 DAG 失败';
     } finally {
       workflowCanvasSaving.value = false;
     }
@@ -4032,11 +4295,11 @@ export function useAppController() {
     workflowRunning.value = true;
     activeWorkflowRun.value = null;
     try {
-      activeWorkflowRun.value = await apiRunWorkflow(activeWorkflowId.value, input, backendBaseUrl.value);
+      activeWorkflowRun.value = await apiRunWorkflow(activeWorkflowId.value, input, agentForm.value.id || undefined, backendBaseUrl.value);
       workflowInput.value = '';
-      status.value = activeWorkflowRun.value.status === 'succeeded' ? 'Workflow 执行完成' : 'Workflow 执行失败';
+      status.value = activeWorkflowRun.value.status === 'succeeded' ? '工作流执行完成' : '工作流执行失败';
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '运行 Workflow 失败';
+      status.value = error instanceof Error ? error.message : '运行工作流失败';
     } finally {
       workflowRunning.value = false;
     }
@@ -4393,7 +4656,11 @@ export function useAppController() {
     upsertActiveSession([...requestMessages, { id: assistantMsgId, role: 'assistant', content: '', reasoning: '', model: currentModel }], content);
     draft.value = '';
     isSubmitting.value = true;
-    status.value = currentModel === 'auto' ? '智能路由分析中...' : '正在连接模型';
+    status.value = chatAgentMode.value
+      ? 'Agent 模式：分析是否需要调用 Agent...'
+      : currentModel === 'auto'
+        ? '智能路由分析中...'
+        : '正在连接模型';
     requestId.value = '';
 
     chatAbortController = new AbortController();
@@ -4403,18 +4670,19 @@ export function useAppController() {
     let routedModel = currentModel;
     let keyRotationNotice = '';
     const thinkingEnabledForRequest = chatThinkingMode.value;
+    const agentModeEnabledForRequest = chatAgentMode.value;
 
-    if (currentModel === 'auto') {
+    if (currentModel === 'auto' || agentModeEnabledForRequest) {
       // ── Auto routing: direct fetch with SSE parsing ──
       try {
-        const res = await fetch(`${backendBaseUrl.value}/chat/completions`, {
+        const res = await fetch(`${backendBaseUrl.value}${agentModeEnabledForRequest ? '/router' : ''}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(getStoredToken() ? { Authorization: `Bearer ${getStoredToken()}` } : {}) },
           body: JSON.stringify({
-            model: 'auto',
+            model: currentModel === 'auto' ? 'auto' : currentModel,
             messages: requestMessages.map((m) => ({ role: m.role, content: m.content })),
             temperature: 0.7,
-            extra_body: { enable_thinking: thinkingEnabledForRequest },
+            extra_body: { enable_thinking: thinkingEnabledForRequest, agentMode: agentModeEnabledForRequest },
             stream: true,
           }),
           signal: chatAbortController.signal,
@@ -4497,7 +4765,7 @@ export function useAppController() {
             { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routedModel, routerInfo: routeInfo },
           ], content);
         }
-        status.value = keyRotationNotice || '路由回复完成';
+        status.value = keyRotationNotice || (agentModeEnabledForRequest ? 'Agent 模式回复完成' : '路由回复完成');
         triggerSync();
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
@@ -8060,6 +8328,7 @@ export function useAppController() {
     backendBaseUrl,
     isSettingsOpen,
     chatThinkingMode,
+    chatAgentMode,
     isAuthDialogOpen,
     authUser,
     authMode,
@@ -8152,6 +8421,8 @@ export function useAppController() {
     agentTeams,
     mcpServers,
     agentVersions,
+    agentVersionCompare,
+    agentVersionCompareVisible,
     agentTestSuites,
     agentTestCases,
     agentTestRuns,
@@ -8192,6 +8463,7 @@ export function useAppController() {
     showTestCaseCreateDialog,
     showMarketplacePublishDialog,
     showVersionCreateDialog,
+    showVersionPublishDialog,
     showEvaluationDialog,
     showMemoryCreateDialog,
     skillTesting,
@@ -8480,6 +8752,15 @@ export function useAppController() {
     stepOverAgentTrace,
     restartAgentFromTraceNode,
     agentRunTagType,
+    agentRunStatusLabel,
+    agentStepTypeLabel,
+    agentLifecycleStatusLabel,
+    riskLevelLabel,
+    agentInvokeModeLabel,
+    agentContextStrategyLabel,
+    teamStrategyLabel,
+    agentVersionStatusLabel,
+    agentVersionStatusType,
     agentEvalTagType,
     evaluateActiveAgentRun,
     generateCurrentAgentImprovementSuggestions,
@@ -8540,7 +8821,11 @@ export function useAppController() {
     createTeamFromForm,
     runSelectedTeam,
     createVersionFromForm,
+    publishVersionFromForm,
+    openVersionPublishDialog,
     restoreVersion,
+    rollbackVersion,
+    compareVersions,
     createTestSuiteFromForm,
     createTestCaseFromForm,
     loadSelectedTestCases,

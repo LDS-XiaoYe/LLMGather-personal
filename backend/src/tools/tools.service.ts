@@ -383,7 +383,594 @@ export class ToolsService {
       return this.fetchWebPage(args);
     }
 
+    if (name === 'weather_query') {
+      return this.queryWeather(args);
+    }
+
+    if (name === 'platform_agent_api') {
+      return this.runPlatformAgentApi(userId, args);
+    }
+
     throw new BadRequestException(`暂不支持的内置工具: ${name}`);
+  }
+
+  private async runPlatformAgentApi(userId: string, args: Record<string, unknown>): Promise<string> {
+    const operation = typeof args.operation === 'string' ? args.operation : '';
+    switch (operation) {
+      case 'list_agents':
+        return JSON.stringify(await this.platformListAgents(userId, this.numberArg(args.limit, 20, 1, 50)), null, 2);
+      case 'get_agent':
+        return JSON.stringify(await this.platformGetAgent(userId, this.stringArg(args.agentId, 'agentId')), null, 2);
+      case 'create_agent':
+        return JSON.stringify(await this.platformCreateAgent(userId, this.recordArg(args.agent, 'agent')), null, 2);
+      case 'update_agent':
+        return JSON.stringify(await this.platformUpdateAgent(userId, this.stringArg(args.agentId, 'agentId'), this.recordArg(args.agent, 'agent')), null, 2);
+      case 'list_workflows':
+        return JSON.stringify(await this.platformListWorkflows(userId, this.numberArg(args.limit, 20, 1, 50)), null, 2);
+      case 'create_workflow':
+        return JSON.stringify(await this.platformCreateWorkflow(userId, this.recordArg(args.workflow, 'workflow')), null, 2);
+      case 'bind_workflow_to_agent':
+        return JSON.stringify(await this.platformBindWorkflow(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.workflowId, 'workflowId')), null, 2);
+      case 'create_skill':
+        return JSON.stringify(await this.platformCreateSkill(userId, this.recordArg(args.skill, 'skill')), null, 2);
+      case 'update_skill':
+        return JSON.stringify(await this.platformUpdateSkill(userId, this.stringArg(args.skillId, 'skillId'), this.recordArg(args.skill, 'skill')), null, 2);
+      case 'bind_skill_to_agent':
+        return JSON.stringify(await this.platformBindSkill(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.skillId, 'skillId')), null, 2);
+      case 'create_tool':
+        return JSON.stringify(await this.platformCreateTool(userId, this.recordArg(args.tool, 'tool')), null, 2);
+      case 'update_tool':
+        return JSON.stringify(await this.platformUpdateTool(userId, this.stringArg(args.toolId, 'toolId'), this.recordArg(args.tool, 'tool')), null, 2);
+      case 'bind_tool_to_agent':
+        return JSON.stringify(await this.platformBindTool(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.toolId, 'toolId')), null, 2);
+      case 'list_tools':
+        return JSON.stringify((await this.listForUser(userId)).map((tool) => ({
+          id: tool.id,
+          name: tool.name,
+          displayName: tool.displayName,
+          description: tool.description,
+          source: tool.source,
+          category: tool.category,
+          riskLevel: tool.riskLevel,
+        })).slice(0, this.numberArg(args.limit, 50, 1, 100)), null, 2);
+      case 'list_skills':
+        return JSON.stringify(await this.platformListSkills(userId, this.numberArg(args.limit, 50, 1, 100)), null, 2);
+      case 'list_knowledge_bases':
+        return JSON.stringify(await this.platformListKnowledgeBases(userId, this.numberArg(args.limit, 50, 1, 100)), null, 2);
+      default:
+        throw new BadRequestException('platform_agent_api operation 不支持或为空');
+    }
+  }
+
+  private async queryWeather(args: Record<string, unknown>): Promise<string> {
+    const forecastDays = this.numberArg(args.forecastDays, 3, 1, 7);
+    const language = typeof args.language === 'string' && args.language.trim() ? args.language.trim().slice(0, 8) : 'zh';
+    const locationText = typeof args.location === 'string' ? args.location.trim() : '';
+    let latitude = Number(args.latitude);
+    let longitude = Number(args.longitude);
+    let location: Record<string, unknown> = {};
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      if (!locationText) throw new BadRequestException('请提供 location 或 latitude/longitude');
+      const geoUrl = new URL('https://geocoding-api.open-meteo.com/v1/search');
+      geoUrl.searchParams.set('name', locationText);
+      geoUrl.searchParams.set('count', '1');
+      geoUrl.searchParams.set('language', language);
+      geoUrl.searchParams.set('format', 'json');
+      const geo = await this.fetchJson(geoUrl);
+      const first = Array.isArray((geo as { results?: unknown[] }).results) ? (geo as { results: Array<Record<string, unknown>> }).results[0] : undefined;
+      if (!first) throw new BadRequestException(`未找到地点: ${locationText}`);
+      latitude = Number(first.latitude);
+      longitude = Number(first.longitude);
+      location = {
+        name: first.name,
+        country: first.country,
+        admin1: first.admin1,
+        latitude,
+        longitude,
+        timezone: first.timezone,
+      };
+    } else {
+      location = { name: locationText || `${latitude},${longitude}`, latitude, longitude };
+    }
+
+    const forecastUrl = new URL('https://api.open-meteo.com/v1/forecast');
+    forecastUrl.searchParams.set('latitude', String(latitude));
+    forecastUrl.searchParams.set('longitude', String(longitude));
+    forecastUrl.searchParams.set('current', [
+      'temperature_2m',
+      'relative_humidity_2m',
+      'apparent_temperature',
+      'is_day',
+      'precipitation',
+      'rain',
+      'showers',
+      'snowfall',
+      'weather_code',
+      'cloud_cover',
+      'wind_speed_10m',
+      'wind_direction_10m',
+      'wind_gusts_10m',
+    ].join(','));
+    forecastUrl.searchParams.set('daily', [
+      'weather_code',
+      'temperature_2m_max',
+      'temperature_2m_min',
+      'precipitation_probability_max',
+    ].join(','));
+    forecastUrl.searchParams.set('forecast_days', String(forecastDays));
+    forecastUrl.searchParams.set('timezone', 'auto');
+    const forecast = await this.fetchJson(forecastUrl) as Record<string, unknown>;
+    const current = (forecast.current && typeof forecast.current === 'object') ? forecast.current as Record<string, unknown> : {};
+    const daily = (forecast.daily && typeof forecast.daily === 'object') ? forecast.daily as Record<string, unknown[]> : {};
+    const dailyForecast = Array.isArray(daily.time) ? daily.time.map((time, index) => ({
+      date: time,
+      weatherCode: Array.isArray(daily.weather_code) ? daily.weather_code[index] : undefined,
+      condition: this.weatherCodeText(Number(Array.isArray(daily.weather_code) ? daily.weather_code[index] : NaN)),
+      temperatureMax: Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max[index] : undefined,
+      temperatureMin: Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min[index] : undefined,
+      precipitationProbabilityMax: Array.isArray(daily.precipitation_probability_max) ? daily.precipitation_probability_max[index] : undefined,
+    })) : [];
+
+    return JSON.stringify({
+      provider: 'Open-Meteo',
+      location,
+      timezone: forecast.timezone,
+      current: {
+        ...current,
+        condition: this.weatherCodeText(Number(current.weather_code)),
+      },
+      daily: dailyForecast,
+      sourceUrls: {
+        geocoding: locationText ? 'https://geocoding-api.open-meteo.com/v1/search' : undefined,
+        forecast: 'https://api.open-meteo.com/v1/forecast',
+      },
+    }, null, 2);
+  }
+
+  private async fetchJson(url: URL): Promise<unknown> {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'LLMGather-WeatherTool/1.0' },
+      signal: AbortSignal.timeout(8000),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new BadRequestException(`天气接口请求失败: ${response.status} ${text.slice(0, 300)}`);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new BadRequestException('天气接口返回了无效 JSON');
+    }
+  }
+
+  private weatherCodeText(code: number): string {
+    const map: Record<number, string> = {
+      0: '晴朗',
+      1: '大部晴朗',
+      2: '局部多云',
+      3: '阴天',
+      45: '雾',
+      48: '雾凇',
+      51: '小毛毛雨',
+      53: '中等毛毛雨',
+      55: '强毛毛雨',
+      56: '冻毛毛雨',
+      57: '强冻毛毛雨',
+      61: '小雨',
+      63: '中雨',
+      65: '大雨',
+      66: '冻雨',
+      67: '强冻雨',
+      71: '小雪',
+      73: '中雪',
+      75: '大雪',
+      77: '雪粒',
+      80: '小阵雨',
+      81: '中等阵雨',
+      82: '强阵雨',
+      85: '小阵雪',
+      86: '强阵雪',
+      95: '雷暴',
+      96: '雷暴伴小冰雹',
+      99: '雷暴伴强冰雹',
+    };
+    return map[code] ?? '未知天气';
+  }
+
+  private async platformListAgents(userId: string, limit: number): Promise<Array<Record<string, unknown>>> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, name, description, model, status, created_at as createdAt, updated_at as updatedAt
+       FROM agents
+       WHERE user_id = ? AND deleted_at IS NULL
+       ORDER BY updated_at DESC
+       LIMIT ?`,
+    ).all(userId, limit) as Array<Record<string, unknown>>;
+    return rows;
+  }
+
+  private async platformGetAgent(userId: string, agentId: string): Promise<Record<string, unknown>> {
+    const agent = await this.databaseService.connection.prepare(
+      `SELECT id, name, description, model, system_prompt as systemPrompt, temperature, max_tokens as maxTokens,
+              memory_enabled as memoryEnabled, status, created_at as createdAt, updated_at as updatedAt
+       FROM agents
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).get(agentId, userId) as Record<string, unknown> | undefined;
+    if (!agent) throw new NotFoundException('Agent 不存在');
+    const [toolIds, skillIds, knowledgeBaseIds, workflowIds] = await Promise.all([
+      this.platformBindingIds('agent_tools', 'tool_id', userId, agentId),
+      this.platformBindingIds('agent_skill_bindings', 'skill_id', userId, agentId),
+      this.platformBindingIds('agent_knowledge_bases', 'kb_id', userId, agentId),
+      this.platformBindingIds('agent_workflows', 'workflow_id', userId, agentId),
+    ]);
+    return { ...agent, toolIds, skillIds, knowledgeBaseIds, workflowIds };
+  }
+
+  private async platformCreateAgent(userId: string, agent: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const name = this.trimmed(agent.name, '新建 Agent').slice(0, 80);
+    const model = this.trimmed(agent.model, '');
+    if (!model) throw new BadRequestException('agent.model 不能为空');
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agents
+        (id, user_id, name, description, model, system_prompt, temperature, max_tokens, memory_enabled, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      userId,
+      name,
+      this.trimmed(agent.description, '').slice(0, 500),
+      model.slice(0, 128),
+      this.trimmed(agent.systemPrompt, '').slice(0, 12000),
+      this.numberArg(agent.temperature, 0.7, 0, 2),
+      this.numberArg(agent.maxTokens, 1024, 1, 32000),
+      agent.memoryEnabled === false ? 0 : 1,
+      agent.status === 'archived' ? 'archived' : 'active',
+      now,
+      now,
+    );
+    await this.platformSetAgentBindings(userId, id, agent);
+    return this.platformGetAgent(userId, id);
+  }
+
+  private async platformUpdateAgent(userId: string, agentId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const current = await this.platformGetAgent(userId, agentId);
+    const next = {
+      name: typeof patch.name === 'string' ? patch.name.trim().slice(0, 80) : String(current.name ?? ''),
+      description: typeof patch.description === 'string' ? patch.description.trim().slice(0, 500) : String(current.description ?? ''),
+      model: typeof patch.model === 'string' ? patch.model.trim().slice(0, 128) : String(current.model ?? ''),
+      systemPrompt: typeof patch.systemPrompt === 'string' ? patch.systemPrompt.trim().slice(0, 12000) : String(current.systemPrompt ?? ''),
+      temperature: patch.temperature === undefined ? Number(current.temperature ?? 0.7) : this.numberArg(patch.temperature, 0.7, 0, 2),
+      maxTokens: patch.maxTokens === undefined ? Number(current.maxTokens ?? 1024) : this.numberArg(patch.maxTokens, 1024, 1, 32000),
+      memoryEnabled: patch.memoryEnabled === undefined ? Number(current.memoryEnabled ?? 1) === 1 : patch.memoryEnabled !== false,
+      status: patch.status === undefined ? String(current.status || 'active') : (patch.status === 'archived' ? 'archived' : 'active'),
+    };
+    if (!next.name || !next.model) throw new BadRequestException('Agent name/model 不能为空');
+    await this.databaseService.connection.prepare(
+      `UPDATE agents
+       SET name = ?, description = ?, model = ?, system_prompt = ?, temperature = ?, max_tokens = ?, memory_enabled = ?, status = ?, updated_at = ?
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(next.name, next.description, next.model, next.systemPrompt, next.temperature, next.maxTokens, next.memoryEnabled ? 1 : 0, next.status, this.databaseService.now(), agentId, userId);
+    await this.platformSetAgentBindings(userId, agentId, patch);
+    return this.platformGetAgent(userId, agentId);
+  }
+
+  private async platformListWorkflows(userId: string, limit: number): Promise<Array<Record<string, unknown>>> {
+    return await this.databaseService.connection.prepare(
+      `SELECT id, name, description, status, created_at as createdAt, updated_at as updatedAt
+       FROM workflows
+       WHERE user_id = ? AND deleted_at IS NULL
+       ORDER BY updated_at DESC
+       LIMIT ?`,
+    ).all(userId, limit) as Array<Record<string, unknown>>;
+  }
+
+  private async platformCreateWorkflow(userId: string, workflow: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const nodes = Array.isArray(workflow.nodes) ? workflow.nodes.slice(0, 50) : [];
+    if (nodes.length === 0) throw new BadRequestException('workflow.nodes 不能为空');
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `INSERT INTO workflows (id, user_id, name, description, definition_json, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
+    ).run(
+      id,
+      userId,
+      this.trimmed(workflow.name, 'Agent 生成 Workflow').slice(0, 128),
+      this.trimmed(workflow.description, '').slice(0, 1000),
+      JSON.stringify({ nodes }),
+      now,
+      now,
+    );
+    const created = await this.databaseService.connection.prepare(
+      `SELECT id, name, description, definition_json as definitionJson, status, created_at as createdAt, updated_at as updatedAt
+       FROM workflows WHERE id = ? AND user_id = ?`,
+    ).get(id, userId) as Record<string, unknown>;
+    return { ...created, nodes };
+  }
+
+  private async platformBindWorkflow(userId: string, agentId: string, workflowId: string): Promise<Record<string, unknown>> {
+    await this.platformGetAgent(userId, agentId);
+    const workflow = await this.databaseService.connection.prepare(
+      `SELECT id FROM workflows WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = 'active'`,
+    ).get(workflowId, userId);
+    if (!workflow) throw new NotFoundException('Workflow 不存在');
+    await this.databaseService.connection.prepare(
+      'DELETE FROM agent_workflows WHERE agent_id = ? AND user_id = ?',
+    ).run(agentId, userId);
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_workflows (agent_id, workflow_id, user_id, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(agentId, workflowId, userId, this.databaseService.now());
+    return { agentId, workflowId, bound: true };
+  }
+
+  private async platformCreateSkill(userId: string, skill: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const name = this.trimmed(skill.name, '').slice(0, 80);
+    const content = this.trimmed(skill.content, '').slice(0, 12000);
+    if (!name || !content) throw new BadRequestException('skill.name 和 skill.content 不能为空');
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    const riskLevel = this.riskArg(skill.riskLevel, 'low');
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_skills
+        (id, user_id, name, description, content, category, icon, input_schema_json, output_schema_json,
+         permissions_json, example_input, example_output, risk_level, version, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    ).run(
+      id,
+      userId,
+      name,
+      this.trimmed(skill.description, '').slice(0, 500),
+      content,
+      this.trimmed(skill.category, 'custom').slice(0, 64),
+      this.trimmed(skill.icon, 'Star').slice(0, 16),
+      JSON.stringify(this.objectOrDefault(skill.inputSchema, { type: 'object', properties: { input: { type: 'string' } } })),
+      JSON.stringify(this.objectOrDefault(skill.outputSchema, { type: 'object', properties: { output: { type: 'string' } } })),
+      JSON.stringify(this.objectOrDefault(skill.permissions, this.defaultSkillPermissions(riskLevel))),
+      this.trimmed(skill.exampleInput, '').slice(0, 4000),
+      this.trimmed(skill.exampleOutput, '').slice(0, 4000),
+      riskLevel,
+      skill.enabled === false ? 0 : 1,
+      now,
+      now,
+    );
+    return this.platformGetSkill(userId, id);
+  }
+
+  private async platformUpdateSkill(userId: string, skillId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const current = await this.platformGetSkill(userId, skillId);
+    if (!current.userId) throw new ForbiddenException('平台内置 Skill 不允许直接编辑');
+    const riskLevel = this.riskArg(patch.riskLevel, String(current.riskLevel || 'low'));
+    await this.databaseService.connection.prepare(
+      `UPDATE agent_skills
+       SET name = ?, description = ?, content = ?, category = ?, icon = ?, input_schema_json = ?,
+           output_schema_json = ?, permissions_json = ?, example_input = ?, example_output = ?,
+           risk_level = ?, enabled = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND user_id = ?`,
+    ).run(
+      typeof patch.name === 'string' ? patch.name.trim().slice(0, 80) : String(current.name),
+      typeof patch.description === 'string' ? patch.description.trim().slice(0, 500) : String(current.description ?? ''),
+      typeof patch.content === 'string' ? patch.content.trim().slice(0, 12000) : String(current.content),
+      typeof patch.category === 'string' ? patch.category.trim().slice(0, 64) : String(current.category || 'custom'),
+      typeof patch.icon === 'string' ? patch.icon.trim().slice(0, 16) : String(current.icon || 'Star'),
+      JSON.stringify(this.objectOrDefault(patch.inputSchema, current.inputSchema as Record<string, unknown>)),
+      JSON.stringify(this.objectOrDefault(patch.outputSchema, current.outputSchema as Record<string, unknown>)),
+      JSON.stringify(this.objectOrDefault(patch.permissions, current.permissions as Record<string, unknown>)),
+      typeof patch.exampleInput === 'string' ? patch.exampleInput.trim().slice(0, 4000) : String(current.exampleInput ?? ''),
+      typeof patch.exampleOutput === 'string' ? patch.exampleOutput.trim().slice(0, 4000) : String(current.exampleOutput ?? ''),
+      riskLevel,
+      patch.enabled === undefined ? (current.enabled === false ? 0 : 1) : (patch.enabled === false ? 0 : 1),
+      this.databaseService.now(),
+      skillId,
+      userId,
+    );
+    return this.platformGetSkill(userId, skillId);
+  }
+
+  private async platformBindSkill(userId: string, agentId: string, skillId: string): Promise<Record<string, unknown>> {
+    await this.platformGetAgent(userId, agentId);
+    await this.platformGetSkill(userId, skillId);
+    await this.databaseService.connection.prepare(
+      `INSERT IGNORE INTO agent_skill_bindings (agent_id, skill_id, user_id, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(agentId, skillId, userId, this.databaseService.now());
+    return { agentId, skillId, bound: true };
+  }
+
+  private async platformCreateTool(userId: string, tool: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const created = await this.create(userId, {
+      name: this.trimmed(tool.name, ''),
+      displayName: this.trimmed(tool.displayName, this.trimmed(tool.name, '自定义工具')),
+      description: this.trimmed(tool.description, ''),
+      category: this.trimmed(tool.category, 'custom'),
+      runtime: this.runtimeArg(tool.runtime),
+      riskLevel: this.riskArg(tool.riskLevel, 'medium'),
+      inputSchema: this.objectOrDefault(tool.inputSchema, { type: 'object', properties: {} }),
+      outputSchema: this.objectOrDefault(tool.outputSchema, { type: 'object', properties: {} }),
+      code: this.trimmed(tool.code, ''),
+      permissions: this.objectOrDefault(tool.permissions, {}),
+      timeout: this.numberArg(tool.timeout, 30, 1, 300),
+      retries: this.numberArg(tool.retries, 0, 0, 3),
+      enabled: tool.enabled === false ? false : true,
+    });
+    return { ...created };
+  }
+
+  private async platformUpdateTool(userId: string, toolId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const updated = await this.update(userId, toolId, {
+      name: typeof patch.name === 'string' ? patch.name : undefined,
+      displayName: typeof patch.displayName === 'string' ? patch.displayName : undefined,
+      description: typeof patch.description === 'string' ? patch.description : undefined,
+      category: typeof patch.category === 'string' ? patch.category : undefined,
+      runtime: patch.runtime === undefined ? undefined : this.runtimeArg(patch.runtime),
+      riskLevel: patch.riskLevel === undefined ? undefined : this.riskArg(patch.riskLevel, 'medium'),
+      inputSchema: this.optionalRecord(patch.inputSchema),
+      outputSchema: this.optionalRecord(patch.outputSchema),
+      code: typeof patch.code === 'string' ? patch.code : undefined,
+      permissions: this.optionalRecord(patch.permissions),
+      timeout: patch.timeout === undefined ? undefined : this.numberArg(patch.timeout, 30, 1, 300),
+      retries: patch.retries === undefined ? undefined : this.numberArg(patch.retries, 0, 0, 3),
+      enabled: patch.enabled === undefined ? undefined : patch.enabled !== false,
+    });
+    return { ...updated };
+  }
+
+  private async platformBindTool(userId: string, agentId: string, toolId: string): Promise<Record<string, unknown>> {
+    await this.platformGetAgent(userId, agentId);
+    await this.getById(userId, toolId);
+    await this.databaseService.connection.prepare(
+      `INSERT IGNORE INTO agent_tools (agent_id, tool_id, user_id, permission_level, created_at)
+       VALUES (?, ?, ?, 'confirm', ?)`,
+    ).run(agentId, toolId, userId, this.databaseService.now());
+    return { agentId, toolId, bound: true, permissionLevel: 'confirm' };
+  }
+
+  private async platformGetSkill(userId: string, skillId: string): Promise<Record<string, unknown>> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, user_id as userId, name, description, content, category, icon,
+              input_schema_json as inputSchemaJson, output_schema_json as outputSchemaJson,
+              permissions_json as permissionsJson, example_input as exampleInput,
+              example_output as exampleOutput, risk_level as riskLevel, version, enabled,
+              created_at as createdAt, updated_at as updatedAt
+       FROM agent_skills
+       WHERE id = ? AND enabled = 1 AND (user_id IS NULL OR user_id = ?)
+       LIMIT 1`,
+    ).get(skillId, userId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundException('Skill 不存在');
+    return {
+      id: row.id,
+      userId: row.userId || null,
+      name: row.name,
+      description: row.description,
+      content: row.content,
+      category: row.category,
+      icon: row.icon,
+      inputSchema: this.parseRecord(row.inputSchemaJson),
+      outputSchema: this.parseRecord(row.outputSchemaJson),
+      permissions: this.parseRecord(row.permissionsJson),
+      exampleInput: row.exampleInput,
+      exampleOutput: row.exampleOutput,
+      riskLevel: row.riskLevel,
+      version: Number(row.version ?? 1),
+      enabled: Number(row.enabled ?? 1) === 1,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private async platformListSkills(userId: string, limit: number): Promise<Array<Record<string, unknown>>> {
+    return await this.databaseService.connection.prepare(
+      `SELECT id, name, description, category, risk_level as riskLevel, user_id as userId
+       FROM agent_skills
+       WHERE enabled = 1 AND (user_id IS NULL OR user_id = ?)
+       ORDER BY user_id IS NULL DESC, name ASC
+       LIMIT ?`,
+    ).all(userId, limit) as Array<Record<string, unknown>>;
+  }
+
+  private async platformListKnowledgeBases(userId: string, limit: number): Promise<Array<Record<string, unknown>>> {
+    return await this.databaseService.connection.prepare(
+      `SELECT id, name, description, COALESCE(provider, 'native') as provider, external_id as externalId, created_at as createdAt, updated_at as updatedAt
+       FROM knowledge_bases
+       WHERE user_id = ? AND deleted_at IS NULL
+       ORDER BY updated_at DESC
+       LIMIT ?`,
+    ).all(userId, limit) as Array<Record<string, unknown>>;
+  }
+
+  private async platformSetAgentBindings(userId: string, agentId: string, source: Record<string, unknown>): Promise<void> {
+    if (Array.isArray(source.toolIds)) {
+      await this.setAgentTools(userId, agentId, source.toolIds.map(String), {});
+    }
+    if (Array.isArray(source.skillIds)) {
+      await this.replaceSimpleBindings(userId, agentId, 'agent_skill_bindings', 'skill_id', source.skillIds.map(String));
+    }
+    if (Array.isArray(source.knowledgeBaseIds)) {
+      await this.replaceSimpleBindings(userId, agentId, 'agent_knowledge_bases', 'kb_id', source.knowledgeBaseIds.map(String));
+    }
+    if (Array.isArray(source.workflowIds)) {
+      await this.replaceSimpleBindings(userId, agentId, 'agent_workflows', 'workflow_id', source.workflowIds.map(String));
+    }
+  }
+
+  private async replaceSimpleBindings(userId: string, agentId: string, table: string, column: string, ids: string[]): Promise<void> {
+    await this.databaseService.connection.prepare(
+      `DELETE FROM ${table} WHERE user_id = ? AND agent_id = ?`,
+    ).run(userId, agentId);
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean))).slice(0, 30);
+    for (const id of uniqueIds) {
+      await this.databaseService.connection.prepare(
+        `INSERT INTO ${table} (agent_id, ${column}, user_id, created_at) VALUES (?, ?, ?, ?)`,
+      ).run(agentId, id, userId, this.databaseService.now());
+    }
+  }
+
+  private async platformBindingIds(table: string, column: string, userId: string, agentId: string): Promise<string[]> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT ${column} as id FROM ${table} WHERE user_id = ? AND agent_id = ?`,
+    ).all(userId, agentId) as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
+  private recordArg(value: unknown, name: string): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new BadRequestException(`${name} 必须是对象`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private stringArg(value: unknown, name: string): string {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) throw new BadRequestException(`${name} 不能为空`);
+    return text;
+  }
+
+  private numberArg(value: unknown, fallback: number, min: number, max: number): number {
+    const parsed = Number(value ?? fallback);
+    return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
+  }
+
+  private trimmed(value: unknown, fallback: string): string {
+    return typeof value === 'string' ? value.trim() : fallback;
+  }
+
+  private optionalRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  }
+
+  private objectOrDefault(value: unknown, fallback: Record<string, unknown>): Record<string, unknown> {
+    return this.optionalRecord(value) ?? fallback;
+  }
+
+  private parseRecord(value: unknown): Record<string, unknown> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(String(value || '{}')) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private riskArg(value: unknown, fallback: string): 'low' | 'medium' | 'high' {
+    const risk = typeof value === 'string' ? value : fallback;
+    return ['low', 'medium', 'high'].includes(risk) ? risk as 'low' | 'medium' | 'high' : 'medium';
+  }
+
+  private runtimeArg(value: unknown): 'javascript' | 'typescript' | 'python' {
+    return ['javascript', 'typescript', 'python'].includes(String(value)) ? String(value) as 'javascript' | 'typescript' | 'python' : 'javascript';
+  }
+
+  private defaultSkillPermissions(riskLevel: 'low' | 'medium' | 'high'): Record<string, unknown> {
+    return {
+      network: riskLevel !== 'low',
+      knowledge: true,
+      tools: riskLevel !== 'low',
+      fileRead: false,
+      writeData: riskLevel === 'high',
+      externalRequest: riskLevel === 'high',
+      userConfirm: riskLevel === 'high',
+    };
   }
 
   private async getOwnedCustomTool(userId: string, toolId: string): Promise<ToolDefinition> {
@@ -520,7 +1107,7 @@ export class ToolsService {
     const safeUrl = await this.assertSafeFetchUrl(url);
     const maxChars = typeof args.maxChars === 'number' ? Math.max(500, Math.min(12000, args.maxChars)) : 6000;
     const response = await fetch(safeUrl.toString(), {
-      headers: { 'User-Agent': 'LLMGather-AgentBrowser/1.0' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.7151.120 Safari/537.36' },
       redirect: 'manual',
       signal: AbortSignal.timeout(5000),
     });

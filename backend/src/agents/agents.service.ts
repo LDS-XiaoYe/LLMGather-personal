@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
 import { BillingAuditInfo, BillingService } from '../billing/billing.service';
@@ -9,6 +9,7 @@ import { MemoryService } from '../memory/memory.service';
 import { ChatCompletionRequest, ChatCompletionResponse, ChatCompletionUsage, ChatMessage, ChatToolDefinition, ProviderKeyAuditInfo } from '../providers/provider.types';
 import { SkillsService } from '../skills/skills.service';
 import { ToolDefinition, ToolsService } from '../tools/tools.service';
+import { WorkflowsService } from '../workflows/workflows.service';
 import { BUILTIN_AGENT_SPECS, BuiltinAgentKey, BuiltinAgentSpec, getBuiltinAgentSpec } from './builtin-agents';
 import {
   CreateAgentDto,
@@ -21,6 +22,7 @@ import {
   GenerateAgentDto,
   InstallBuiltinAgentDto,
   InstallAgentTemplateDto,
+  PublishAgentVersionDto,
   RunAgentDto,
   RunAgentTestSuiteDto,
   UpdateAgentDto,
@@ -40,6 +42,7 @@ export interface AgentDefinition {
   toolIds: string[];
   knowledgeBaseIds: string[];
   skillIds: string[];
+  workflowIds: string[];
   published: boolean;
   apiEnabled: boolean;
   publicSlug: string;
@@ -127,6 +130,7 @@ type AgentExecutionOptions = {
   emitRunCreated?: boolean;
   delegationDepth?: number;
   inheritedKnowledgeBaseIds?: string[];
+  skipWorkflowAgentIds?: string[];
 };
 
 type AgentPlannerAction =
@@ -201,6 +205,21 @@ type AgentRow = {
   runCount?: string | number;
 };
 
+type AgentVersionRow = {
+  id: string;
+  agentId: string;
+  userId: string;
+  versionNumber: number | string;
+  label: string;
+  status?: string;
+  trafficPercent?: number | string;
+  notes?: string | null;
+  snapshotJson: string;
+  publishedAt?: string | null;
+  rolledBackAt?: string | null;
+  createdAt: string;
+};
+
 @Injectable()
 export class AgentsService {
   constructor(
@@ -211,6 +230,8 @@ export class AgentsService {
     private readonly knowledgeService: KnowledgeService,
     private readonly memoryService: MemoryService,
     private readonly skillsService: SkillsService,
+    @Inject(forwardRef(() => WorkflowsService))
+    private readonly workflowsService: WorkflowsService,
   ) {}
 
   async listByUser(userId: string): Promise<AgentDefinition[]> {
@@ -302,6 +323,7 @@ export class AgentsService {
     await this.toolsService.setAgentTools(userId, id, dto.toolIds ?? [], dto.toolPermissions ?? {});
     await this.knowledgeService.setAgentKnowledgeBases(userId, id, dto.knowledgeBaseIds ?? []);
     await this.skillsService.setAgentSkills(userId, id, dto.skillIds ?? []);
+    await this.setAgentWorkflows(userId, id, dto.workflowIds ?? []);
     return this.getById(userId, id);
   }
 
@@ -383,6 +405,7 @@ export class AgentsService {
     if (dto.toolIds) await this.toolsService.setAgentTools(userId, agentId, dto.toolIds, dto.toolPermissions ?? {});
     if (dto.knowledgeBaseIds) await this.knowledgeService.setAgentKnowledgeBases(userId, agentId, dto.knowledgeBaseIds);
     if (dto.skillIds) await this.skillsService.setAgentSkills(userId, agentId, dto.skillIds);
+    if (dto.workflowIds) await this.setAgentWorkflows(userId, agentId, dto.workflowIds);
     return this.getById(userId, agentId);
   }
 
@@ -581,7 +604,8 @@ export class AgentsService {
   async runApi(userId: string, agentId: string, dto: RunAgentDto): Promise<AgentRun> {
     const agent = await this.getById(userId, agentId);
     if (!agent.apiEnabled) throw new BadRequestException('Agent 尚未开启 API 接入');
-    return this.run(userId, agentId, dto);
+    const runnable = await this.resolvePublishedRunnableAgent(userId, agent, dto.input);
+    return this.executeAgentRun(userId, runnable, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
   }
 
   async runPublished(publicSlug: string, dto: RunAgentDto): Promise<AgentRun> {
@@ -593,13 +617,25 @@ export class AgentsService {
        LIMIT 1`,
     ).get(slug) as unknown as { id: string; userId: string } | undefined;
     if (!row) throw new NotFoundException('公开 Agent 不存在或未发布');
-    return this.run(row.userId, row.id, dto);
+    const agent = await this.getById(row.userId, row.id);
+    const runnable = await this.resolvePublishedRunnableAgent(row.userId, agent, dto.input);
+    return this.executeAgentRun(row.userId, runnable, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
   }
 
   async run(userId: string, agentId: string, dto: RunAgentDto): Promise<AgentRun> {
     const agent = await this.getById(userId, agentId);
     if (agent.status !== 'active') throw new BadRequestException('Agent 已归档，无法运行');
     return this.executeAgentRun(userId, agent, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
+  }
+
+  async runFromWorkflow(userId: string, agentId: string, dto: RunAgentDto, skipWorkflowAgentIds: string[]): Promise<AgentRun> {
+    const agent = await this.getById(userId, agentId);
+    if (agent.status !== 'active') throw new BadRequestException('Agent 已归档，无法运行');
+    return this.executeAgentRun(userId, agent, dto, () => undefined, {
+      emitRunCreated: false,
+      delegationDepth: 0,
+      skipWorkflowAgentIds,
+    });
   }
 
   async runStream(
@@ -660,6 +696,32 @@ export class AgentsService {
 
     try {
       const maxSteps = Math.max(1, Math.min(10, dto.maxSteps ?? 6));
+      const workflowRun = await this.runBoundWorkflowIfNeeded(userId, agent, dto, runId, options, insertAndEmit);
+      if (workflowRun) {
+        const finalOutput = workflowRun.output || '';
+        const completedAt = this.databaseService.now();
+        const latencyMs = Date.now() - startedAt;
+        await this.applySmartMemory(userId, agent, dto, finalOutput, runId, insertAndEmit, usageTotal);
+        await this.databaseService.connection.prepare(
+          `UPDATE agent_runs
+           SET status = ?, output = ?, error = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, latency_ms = ?, completed_at = ?
+           WHERE id = ? AND user_id = ?`,
+        ).run(
+          workflowRun.status === 'failed' ? 'failed' : 'succeeded',
+          finalOutput,
+          workflowRun.error || '',
+          usageTotal.prompt_tokens,
+          usageTotal.completion_tokens,
+          usageTotal.total_tokens,
+          latencyMs,
+          completedAt,
+          runId,
+          userId,
+        );
+        const run = await this.getRun(userId, runId);
+        emit({ type: 'run_completed', run });
+        return run;
+      }
       const graph = this.buildAgentExecutionGraph(userId, agent, dto, runId, options, emit, insertAndEmit, completeAndEmit, usageTotal);
       const graphState = await graph.invoke({
         contextBlocks: [],
@@ -1157,6 +1219,71 @@ export class AgentsService {
     return contextBlocks;
   }
 
+  private async runBoundWorkflowIfNeeded(
+    userId: string,
+    agent: AgentDefinition,
+    dto: RunAgentDto,
+    runId: string,
+    options: AgentExecutionOptions,
+    insertAndEmit: (step: AgentRunStepInput) => Promise<AgentRunStep>,
+  ): Promise<import('../workflows/workflows.service').WorkflowRun | null> {
+    if (agent.source === 'builtin' || agent.workflowIds.length === 0) return null;
+    if ((options.skipWorkflowAgentIds ?? []).includes(agent.id)) return null;
+
+    const workflowId = agent.workflowIds[0];
+    const started = Date.now();
+    const step = await insertAndEmit({
+      stepType: 'workflow',
+      name: 'Workflow 编排',
+      status: 'running',
+      input: dto.input,
+      output: '',
+      startedAt: this.databaseService.now(),
+      endedAt: null,
+      latencyMs: 0,
+      metadata: JSON.stringify({ runId, workflowId, graphNode: 'workflow' }),
+    });
+
+    const workflowRun = await this.workflowsService.run(userId, workflowId, dto.input, {
+      skipWorkflowAgentIds: Array.from(new Set([...(options.skipWorkflowAgentIds ?? []), agent.id])),
+      runtimeAgentId: agent.id,
+    });
+
+    await this.databaseService.connection.prepare(
+      `UPDATE agent_run_steps
+       SET status = ?, output = ?, error = ?, ended_at = ?, latency_ms = ?, metadata = ?
+       WHERE id = ? AND run_id = ? AND user_id = ?`,
+    ).run(
+      workflowRun.status === 'failed' ? 'failed' : 'succeeded',
+      workflowRun.output,
+      workflowRun.error,
+      this.databaseService.now(),
+      Date.now() - started,
+      JSON.stringify({ workflowId, workflowRunId: workflowRun.id, graphNode: 'workflow' }),
+      step.id,
+      runId,
+      userId,
+    );
+
+    for (const workflowStep of workflowRun.steps) {
+      const stepCreatedAt = this.toDatabaseDateTime(workflowStep.createdAt);
+      await insertAndEmit({
+        stepType: `workflow_${workflowStep.nodeType}`,
+        name: `Workflow 节点：${workflowStep.nodeId}`,
+        status: workflowStep.status === 'failed' ? 'failed' : 'succeeded',
+        input: workflowStep.input,
+        output: workflowStep.output,
+        error: workflowStep.error,
+        startedAt: stepCreatedAt,
+        endedAt: stepCreatedAt,
+        latencyMs: 0,
+        metadata: JSON.stringify({ workflowId, workflowRunId: workflowRun.id, nodeId: workflowStep.nodeId, nodeType: workflowStep.nodeType }),
+      });
+    }
+
+    return workflowRun;
+  }
+
   private async resolveAgentSkills(userId: string, agent: AgentDefinition) {
     if (agent.source !== 'builtin') return this.skillsService.getAgentSkills(userId, agent.id);
     const skills = await this.skillsService.listForUser(userId);
@@ -1225,7 +1352,7 @@ export class AgentsService {
             '你是 Agent 执行规划器。只输出 JSON，不要 Markdown，不要解释。',
             'JSON 格式只能是以下之一:',
             '{"action":"tool","toolId":"...","args":{},"reason":"..."}',
-            '{"action":"delegate","agentKey":"research|code|data|support|writer|document|knowledge|orchestrator","input":"...","reason":"..."}',
+            '{"action":"delegate","agentKey":"research|code|data|support|writer|document|knowledge|orchestrator|platform_builder|weather|translator|meeting|travel|product_manager|finance","input":"...","reason":"..."}',
             '{"action":"delegate","agentId":"用户自定义 Agent ID","input":"...","reason":"..."}',
             '{"action":"final","answer":"...","reason":"..."}',
             '当已有观察足够回答时选择 final。不要调用不可用工具。',
@@ -2297,46 +2424,97 @@ export class AgentsService {
     const id = randomUUID();
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
-      `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, snapshot_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, status, traffic_percent, notes, snapshot_json, created_at)
+       VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)`,
     ).run(
       id,
       agentId,
       userId,
       versionNumber,
       dto.label?.trim() || `v${versionNumber}`,
+      dto.notes?.trim() || '',
       JSON.stringify(agent),
       now,
     );
-    return { id, agentId, userId, versionNumber, label: dto.label?.trim() || `v${versionNumber}`, snapshot: agent, createdAt: now };
+    return {
+      id,
+      agentId,
+      userId,
+      versionNumber,
+      label: dto.label?.trim() || `v${versionNumber}`,
+      status: 'draft',
+      trafficPercent: 0,
+      notes: dto.notes?.trim() || '',
+      snapshot: agent,
+      publishedAt: null,
+      rolledBackAt: null,
+      createdAt: now,
+    };
   }
 
   async listVersions(userId: string, agentId: string): Promise<Array<Record<string, unknown>>> {
     await this.getById(userId, agentId);
     const rows = await this.databaseService.connection.prepare(
       `SELECT id, agent_id as agentId, user_id as userId, version_number as versionNumber,
-              label, snapshot_json as snapshotJson, created_at as createdAt
+              label, status, traffic_percent as trafficPercent, notes, snapshot_json as snapshotJson,
+              published_at as publishedAt, rolled_back_at as rolledBackAt, created_at as createdAt
        FROM agent_versions
        WHERE agent_id = ? AND user_id = ?
        ORDER BY version_number DESC`,
-    ).all(agentId, userId) as Array<{ id: string; agentId: string; userId: string; versionNumber: number | string; label: string; snapshotJson: string; createdAt: string }>;
-    return rows.map((row) => ({
-      id: row.id,
-      agentId: row.agentId,
-      userId: row.userId,
-      versionNumber: Number(row.versionNumber),
-      label: row.label,
-      snapshot: this.parseJsonRecord(row.snapshotJson),
-      createdAt: row.createdAt,
-    }));
+    ).all(agentId, userId) as AgentVersionRow[];
+    return rows.map((row) => this.mapAgentVersion(row));
+  }
+
+  async publishVersion(userId: string, agentId: string, dto: PublishAgentVersionDto): Promise<Record<string, unknown>> {
+    const agent = await this.getById(userId, agentId);
+    if (!dto.versionId) {
+      await this.createVersion(userId, agentId, { label: dto.label || '发布版本', notes: dto.notes });
+    }
+    const versionId = dto.versionId || String((await this.getLatestVersionRow(userId, agentId)).id);
+    const releaseMode = dto.releaseMode ?? 'stable';
+    const trafficPercent = releaseMode === 'canary' ? Math.max(1, Math.min(99, Math.round(dto.trafficPercent ?? 10))) : 100;
+    const now = this.databaseService.now();
+    if (releaseMode === 'stable') {
+      await this.databaseService.connection.prepare(
+        `UPDATE agent_versions
+         SET status = CASE WHEN status IN ('released', 'canary') THEN 'superseded' ELSE status END,
+             traffic_percent = CASE WHEN status = 'canary' THEN 0 ELSE traffic_percent END
+         WHERE agent_id = ? AND user_id = ? AND id <> ?`,
+      ).run(agentId, userId, versionId);
+    }
+    await this.databaseService.connection.prepare(
+      `UPDATE agent_versions
+       SET status = ?, traffic_percent = ?, notes = COALESCE(NULLIF(?, ''), notes), published_at = ?, rolled_back_at = NULL
+       WHERE id = ? AND agent_id = ? AND user_id = ?`,
+    ).run(releaseMode === 'canary' ? 'canary' : 'released', trafficPercent, dto.notes?.trim() || '', now, versionId, agentId, userId);
+    const publicSlug = this.normalizeSlug(dto.publicSlug ?? (agent.publicSlug || agent.name));
+    await this.assertSlugAvailable(userId, agentId, publicSlug);
+    await this.databaseService.connection.prepare(
+      `UPDATE agents
+       SET published = ?, api_enabled = ?, public_slug = ?, updated_at = ?
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(dto.published === false ? 0 : 1, dto.apiEnabled === false ? 0 : 1, publicSlug, now, agentId, userId);
+    return {
+      agent: await this.getById(userId, agentId),
+      version: this.mapAgentVersion(await this.getVersionRow(userId, agentId, versionId)),
+    };
+  }
+
+  async compareVersions(userId: string, agentId: string, leftId: string, rightId: string): Promise<Record<string, unknown>> {
+    if (!leftId || !rightId) throw new BadRequestException('请选择两个版本进行对比');
+    const left = this.mapAgentVersion(await this.getVersionRow(userId, agentId, leftId));
+    const right = this.mapAgentVersion(await this.getVersionRow(userId, agentId, rightId));
+    const leftSnapshot = left.snapshot as Record<string, unknown>;
+    const rightSnapshot = right.snapshot as Record<string, unknown>;
+    const fields = ['name', 'description', 'model', 'systemPrompt', 'temperature', 'maxTokens', 'memoryEnabled', 'toolIds', 'knowledgeBaseIds', 'skillIds', 'workflowIds', 'status'];
+    const changes = fields
+      .map((field) => ({ field, left: leftSnapshot[field], right: rightSnapshot[field], changed: JSON.stringify(leftSnapshot[field] ?? null) !== JSON.stringify(rightSnapshot[field] ?? null) }))
+      .filter((item) => item.changed);
+    return { left, right, changes };
   }
 
   async restoreVersion(userId: string, agentId: string, versionId: string): Promise<AgentDefinition> {
-    const row = await this.databaseService.connection.prepare(
-      `SELECT snapshot_json as snapshotJson FROM agent_versions
-       WHERE id = ? AND agent_id = ? AND user_id = ?`,
-    ).get(versionId, agentId, userId) as { snapshotJson: string } | undefined;
-    if (!row) throw new NotFoundException('Agent 版本不存在');
+    const row = await this.getVersionRow(userId, agentId, versionId);
     const snapshot = this.parseJsonRecord(row.snapshotJson) as Partial<AgentDefinition>;
     const restored = await this.update(userId, agentId, {
       name: snapshot.name,
@@ -2350,8 +2528,29 @@ export class AgentsService {
       toolIds: snapshot.toolIds,
       knowledgeBaseIds: snapshot.knowledgeBaseIds,
       skillIds: snapshot.skillIds,
+      workflowIds: snapshot.workflowIds,
     });
     return restored;
+  }
+
+  async rollbackToVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
+    const restored = await this.restoreVersion(userId, agentId, versionId);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE agent_versions
+       SET status = CASE WHEN id = ? THEN 'released' WHEN status IN ('released', 'canary') THEN 'rolled_back' ELSE status END,
+           traffic_percent = CASE WHEN id = ? THEN 100 ELSE 0 END,
+           published_at = CASE WHEN id = ? THEN ? ELSE published_at END,
+           rolled_back_at = CASE WHEN id = ? THEN NULL WHEN status IN ('released', 'canary') THEN ? ELSE rolled_back_at END
+       WHERE agent_id = ? AND user_id = ?`,
+    ).run(versionId, versionId, versionId, now, versionId, now, agentId, userId);
+    await this.databaseService.connection.prepare(
+      `UPDATE agents SET published = 1, api_enabled = 1, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(now, agentId, userId);
+    return {
+      agent: restored,
+      version: this.mapAgentVersion(await this.getVersionRow(userId, agentId, versionId)),
+    };
   }
 
   async createTestSuite(userId: string, agentId: string, dto: CreateAgentTestSuiteDto): Promise<Record<string, unknown>> {
@@ -2871,18 +3070,167 @@ export class AgentsService {
     return error instanceof Error ? error.message : String(error);
   }
 
+  private toDatabaseDateTime(value: unknown): string {
+    if (!value) return this.databaseService.now();
+    if (value instanceof Date) return this.formatDateTime(value);
+    const text = String(value);
+    const parsed = new Date(text);
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(text)) {
+      return text.includes('.') ? text : `${text}.000`;
+    }
+    if (Number.isFinite(parsed.getTime())) return this.formatDateTime(parsed);
+    return this.databaseService.now();
+  }
+
+  private formatDateTime(date: Date): string {
+    return [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, '0'),
+      String(date.getDate()).padStart(2, '0'),
+    ].join('-') + ' ' + [
+      String(date.getHours()).padStart(2, '0'),
+      String(date.getMinutes()).padStart(2, '0'),
+      String(date.getSeconds()).padStart(2, '0'),
+    ].join(':') + `.${String(date.getMilliseconds()).padStart(3, '0')}`;
+  }
+
   private async withBindings(userId: string, agent: AgentDefinition): Promise<AgentDefinition> {
-    const [tools, knowledgeBases, skills] = await Promise.all([
+    const [tools, knowledgeBases, skills, workflowIds] = await Promise.all([
       this.toolsService.getAgentTools(userId, agent.id),
       this.knowledgeService.getAgentKnowledgeBases(userId, agent.id),
       this.skillsService.getAgentSkills(userId, agent.id),
+      this.getAgentWorkflowIds(userId, agent.id),
     ]);
     return {
       ...agent,
       toolIds: tools.map((tool) => tool.id),
       knowledgeBaseIds: knowledgeBases.map((kb) => kb.id),
       skillIds: skills.map((skill) => skill.id),
+      workflowIds,
     };
+  }
+
+  private mapAgentVersion(row: AgentVersionRow): Record<string, unknown> {
+    return {
+      id: row.id,
+      agentId: row.agentId,
+      userId: row.userId,
+      versionNumber: Number(row.versionNumber),
+      label: row.label,
+      status: row.status || 'draft',
+      trafficPercent: Number(row.trafficPercent ?? 0),
+      notes: row.notes || '',
+      snapshot: this.parseJsonRecord(row.snapshotJson),
+      publishedAt: row.publishedAt || null,
+      rolledBackAt: row.rolledBackAt || null,
+      createdAt: row.createdAt,
+    };
+  }
+
+  private async getVersionRow(userId: string, agentId: string, versionId: string): Promise<AgentVersionRow> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, agent_id as agentId, user_id as userId, version_number as versionNumber,
+              label, status, traffic_percent as trafficPercent, notes, snapshot_json as snapshotJson,
+              published_at as publishedAt, rolled_back_at as rolledBackAt, created_at as createdAt
+       FROM agent_versions
+       WHERE id = ? AND agent_id = ? AND user_id = ?`,
+    ).get(versionId, agentId, userId) as unknown as AgentVersionRow | undefined;
+    if (!row) throw new NotFoundException('Agent 版本不存在');
+    return row;
+  }
+
+  private async getLatestVersionRow(userId: string, agentId: string): Promise<AgentVersionRow> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, agent_id as agentId, user_id as userId, version_number as versionNumber,
+              label, status, traffic_percent as trafficPercent, notes, snapshot_json as snapshotJson,
+              published_at as publishedAt, rolled_back_at as rolledBackAt, created_at as createdAt
+       FROM agent_versions
+       WHERE agent_id = ? AND user_id = ?
+       ORDER BY version_number DESC
+       LIMIT 1`,
+    ).get(agentId, userId) as unknown as AgentVersionRow | undefined;
+    if (!row) throw new NotFoundException('Agent 版本不存在');
+    return row;
+  }
+
+  private async resolvePublishedRunnableAgent(userId: string, agent: AgentDefinition, seed: string): Promise<AgentDefinition> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, agent_id as agentId, user_id as userId, version_number as versionNumber,
+              label, status, traffic_percent as trafficPercent, notes, snapshot_json as snapshotJson,
+              published_at as publishedAt, rolled_back_at as rolledBackAt, created_at as createdAt
+       FROM agent_versions
+       WHERE agent_id = ? AND user_id = ? AND status IN ('released', 'canary')
+       ORDER BY published_at DESC, version_number DESC`,
+    ).all(agent.id, userId) as unknown as AgentVersionRow[];
+    if (!rows.length) return agent;
+    const stable = rows.find((row) => row.status === 'released') ?? rows[0];
+    const canary = rows.find((row) => row.status === 'canary' && Number(row.trafficPercent ?? 0) > 0);
+    const selected = canary && this.percentBucket(`${agent.id}:${seed}`) < Number(canary.trafficPercent ?? 0) ? canary : stable;
+    return this.agentFromVersionSnapshot(agent, selected);
+  }
+
+  private agentFromVersionSnapshot(base: AgentDefinition, version: AgentVersionRow): AgentDefinition {
+    const snapshot = this.parseJsonRecord(version.snapshotJson) as Partial<AgentDefinition>;
+    return {
+      ...base,
+      name: snapshot.name || base.name,
+      description: snapshot.description ?? base.description,
+      model: snapshot.model || base.model,
+      systemPrompt: snapshot.systemPrompt ?? base.systemPrompt,
+      temperature: Number(snapshot.temperature ?? base.temperature),
+      maxTokens: Number(snapshot.maxTokens ?? base.maxTokens),
+      memoryEnabled: snapshot.memoryEnabled ?? base.memoryEnabled,
+      toolIds: Array.isArray(snapshot.toolIds) ? snapshot.toolIds.map(String) : base.toolIds,
+      knowledgeBaseIds: Array.isArray(snapshot.knowledgeBaseIds) ? snapshot.knowledgeBaseIds.map(String) : base.knowledgeBaseIds,
+      skillIds: Array.isArray(snapshot.skillIds) ? snapshot.skillIds.map(String) : base.skillIds,
+      workflowIds: Array.isArray(snapshot.workflowIds) ? snapshot.workflowIds.map(String) : base.workflowIds,
+      status: (snapshot.status as AgentDefinition['status']) || base.status,
+      updatedAt: version.publishedAt || version.createdAt || base.updatedAt,
+    };
+  }
+
+  private percentBucket(seed: string): number {
+    let hash = 2166136261;
+    for (let i = 0; i < seed.length; i++) {
+      hash ^= seed.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return Math.abs(hash >>> 0) % 100;
+  }
+
+  private async setAgentWorkflows(userId: string, agentId: string, workflowIds: string[]): Promise<void> {
+    const uniqueIds = Array.from(new Set(workflowIds.filter(Boolean)));
+    if (uniqueIds.length > 0) {
+      const rows = await this.databaseService.connection.prepare(
+        `SELECT id FROM workflows
+         WHERE user_id = ? AND deleted_at IS NULL AND status = 'active' AND id IN (${uniqueIds.map(() => '?').join(',')})`,
+      ).all(userId, ...uniqueIds) as Array<{ id: string }>;
+      const available = new Set(rows.map((row) => row.id));
+      const missing = uniqueIds.filter((id) => !available.has(id));
+      if (missing.length > 0) throw new NotFoundException('绑定的 Workflow 不存在或不可用');
+    }
+
+    await this.databaseService.connection.prepare(
+      'DELETE FROM agent_workflows WHERE agent_id = ? AND user_id = ?',
+    ).run(agentId, userId);
+    const now = this.databaseService.now();
+    for (const workflowId of uniqueIds) {
+      await this.databaseService.connection.prepare(
+        `INSERT INTO agent_workflows (agent_id, workflow_id, user_id, created_at)
+         VALUES (?, ?, ?, ?)`,
+      ).run(agentId, workflowId, userId, now);
+    }
+  }
+
+  private async getAgentWorkflowIds(userId: string, agentId: string): Promise<string[]> {
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT aw.workflow_id as workflowId
+       FROM agent_workflows aw
+       INNER JOIN workflows w ON w.id = aw.workflow_id AND w.user_id = aw.user_id
+       WHERE aw.agent_id = ? AND aw.user_id = ? AND w.deleted_at IS NULL AND w.status = 'active'
+       ORDER BY aw.created_at ASC`,
+    ).all(agentId, userId) as Array<{ workflowId: string }>;
+    return rows.map((row) => row.workflowId);
   }
 
   private async buildBuiltinRuntimeAgent(
@@ -2912,6 +3260,7 @@ export class AgentsService {
       toolIds,
       knowledgeBaseIds: inheritedKnowledgeBaseIds,
       skillIds,
+      workflowIds: [],
       published: false,
       apiEnabled: false,
       publicSlug: '',
@@ -2938,6 +3287,7 @@ export class AgentsService {
       toolIds: [],
       knowledgeBaseIds: [],
       skillIds: [],
+      workflowIds: [],
       published: Number(row.published ?? 0) === 1,
       apiEnabled: Number(row.apiEnabled ?? 0) === 1,
       publicSlug: row.publicSlug || '',

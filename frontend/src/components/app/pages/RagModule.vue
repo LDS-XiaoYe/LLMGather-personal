@@ -91,6 +91,14 @@ function kbStatusLabel(status: string) {
   return status === 'added' ? '已加入知识库' : '未入库';
 }
 
+function providerLabel(provider: string) {
+  return provider === 'ragflow' ? 'RAGFlow' : '本地';
+}
+
+function providerTagType(provider: string) {
+  return provider === 'ragflow' ? 'warning' : 'success';
+}
+
 function formatSize(size: number) {
   if (!size) return '0 B';
   if (size < 1024) return `${size} B`;
@@ -224,9 +232,10 @@ function formatSize(size: number) {
               <div v-for="kb in knowledgeBases" :key="kb.id" class="agent-resource-item" :class="{ active: knowledgeDocForm.kbId === kb.id }" @click="knowledgeDocForm.kbId = kb.id">
                 <div class="agent-resource-title">
                   <span>{{ kb.name }}</span>
-                  <el-tag size="small" type="success">就绪</el-tag>
+                  <el-tag size="small" :type="providerTagType(kb.provider)">{{ providerLabel(kb.provider) }}</el-tag>
                 </div>
-                <div class="agent-resource-meta">{{ kb.documentCount }} docs · {{ kb.chunkCount }} chunks</div>
+                <div class="agent-resource-meta">{{ kb.documentCount }} 文档 · {{ kb.chunkCount }} 片段</div>
+                <div v-if="kb.provider === 'ragflow'" class="agent-resource-meta">Dataset ID：{{ kb.engine?.datasetId || kb.externalId || '未绑定' }}</div>
                 <div class="agent-resource-content">{{ kb.description || '暂无描述' }}</div>
               </div>
               <el-empty v-if="knowledgeBases.length === 0" description="暂无知识库" :image-size="72" />
@@ -347,6 +356,23 @@ function formatSize(size: number) {
           <el-form-item label="描述">
             <el-input v-model="knowledgeForm.description" type="textarea" :rows="3" placeholder="描述这个知识库的用途" maxlength="300" show-word-limit />
           </el-form-item>
+          <el-form-item label="知识库引擎">
+            <el-segmented v-model="knowledgeForm.provider" :options="[
+              { label: '本地', value: 'native' },
+              { label: 'RAGFlow', value: 'ragflow' },
+            ]" />
+          </el-form-item>
+          <template v-if="knowledgeForm.provider === 'ragflow'">
+            <el-form-item label="RAGFlow 地址" required>
+              <el-input v-model="knowledgeForm.ragflowBaseUrl" placeholder="例如：http://localhost:9380" />
+            </el-form-item>
+            <el-form-item label="API Key" required>
+              <el-input v-model="knowledgeForm.ragflowApiKey" type="password" show-password placeholder="填入 RAGFlow API Key" />
+            </el-form-item>
+            <el-form-item label="Dataset ID">
+              <el-input v-model="knowledgeForm.ragflowDatasetId" placeholder="留空则自动创建 Dataset" />
+            </el-form-item>
+          </template>
         </el-form>
         <template #footer>
           <el-button @click="showKnowledgeCreateDialog = false">取消</el-button>

@@ -45,4 +45,9 @@ export class RunWorkflowDto {
   @IsNotEmpty()
   @MaxLength(30000)
   input!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  agentId?: string;
 }

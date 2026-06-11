@@ -31,6 +31,10 @@ export class WorkflowsController {
     @Param('id') id: string,
     @Body() payload: RunWorkflowDto,
   ) {
-    return { data: await this.workflowsService.run(user.id, id, payload.input) };
+    return {
+      data: await this.workflowsService.run(user.id, id, payload.input, payload.agentId
+        ? { runtimeAgentId: payload.agentId, skipWorkflowAgentIds: [payload.agentId] }
+        : {}),
+    };
   }
 }

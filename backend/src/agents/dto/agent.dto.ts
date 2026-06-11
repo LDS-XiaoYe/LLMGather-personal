@@ -84,6 +84,12 @@ export class CreateAgentDto {
   skillIds?: string[];
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  workflowIds?: string[];
+
+  @IsOptional()
   @IsIn(['active', 'archived'])
   status?: 'active' | 'archived';
 }
@@ -152,6 +158,12 @@ export class UpdateAgentDto {
   @ArrayMaxSize(30)
   @IsString({ each: true })
   skillIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  workflowIds?: string[];
 }
 
 export class RunAgentDto {
@@ -200,6 +212,7 @@ export class RunAgentDto {
   @ArrayMaxSize(50)
   @IsString({ each: true })
   approvedToolIds?: string[];
+
 }
 
 export class EvaluateAgentRunDto {
@@ -254,6 +267,50 @@ export class CreateAgentVersionDto {
   @IsString()
   @MaxLength(120)
   label?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
+}
+
+export class PublishAgentVersionDto {
+  @IsOptional()
+  @IsString()
+  versionId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  label?: string;
+
+  @IsOptional()
+  @IsIn(['stable', 'canary'])
+  releaseMode?: 'stable' | 'canary';
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  trafficPercent?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  published?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  apiEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  publicSlug?: string;
 }
 
 export class GenerateAgentImprovementSuggestionsDto {

@@ -2,6 +2,10 @@
   "name": "llmgather-langgraph",
   "private": true,
   "type": "module",
+  "scripts": {
+    "check": "node --check src/memory-graph.js",
+    "dev": "langgraphjs dev --host 0.0.0.0 --port 2024"
+  },
   "dependencies": {
     "@langchain/core": "^1.0.6",
     "@langchain/langgraph": "^1.3.6",

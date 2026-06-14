@@ -41,7 +41,7 @@ services:
     container_name: llmgather-langgraph-memory
     restart: unless-stopped
     working_dir: /app/langgraph
-    command: sh -c "npm install --omit=dev && npx langgraphjs dev --host 0.0.0.0 --port 2024"
+    command: sh -c "npm ci --omit=dev && npm run dev"
     volumes:
       - ./langgraph:/app/langgraph
       - langgraph_node_modules:/app/langgraph/node_modules

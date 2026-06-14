@@ -45,7 +45,7 @@ services:
     image: node:22-alpine
     container_name: llmgather-langgraph-memory-dev
     working_dir: /app/langgraph
-    command: sh -c "npm install && npx langgraphjs dev --host 0.0.0.0 --port 2024"
+    command: sh -c "npm ci && npm run dev"
     volumes:
       - ./langgraph:/app/langgraph
       - langgraph_node_modules_dev:/app/langgraph/node_modules

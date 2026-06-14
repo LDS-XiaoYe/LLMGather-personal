@@ -150,3 +150,103 @@ describe('MemoryService', () => {
     expect(memory?.content).toContain('保守驾驶策略');
   });
 });
+
+describe('LangGraphMemoryProvider', () => {
+  const originalFetch = global.fetch;
+  const originalUrl = process.env.LANGGRAPH_MEMORY_URL;
+  const originalAssistantId = process.env.LANGGRAPH_MEMORY_ASSISTANT_ID;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    if (originalUrl === undefined) {
+      delete process.env.LANGGRAPH_MEMORY_URL;
+    } else {
+      process.env.LANGGRAPH_MEMORY_URL = originalUrl;
+    }
+    if (originalAssistantId === undefined) {
+      delete process.env.LANGGRAPH_MEMORY_ASSISTANT_ID;
+    } else {
+      process.env.LANGGRAPH_MEMORY_ASSISTANT_ID = originalAssistantId;
+    }
+  });
+
+  it('writes memory through the real LangGraph memory graph before mirroring locally', async () => {
+    const { db } = makeMemoryDb();
+    const native = new NativeMemoryProvider(db as any);
+    const provider = new LangGraphMemoryProvider(native);
+    process.env.LANGGRAPH_MEMORY_URL = 'http://langgraph-memory:2024';
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        status: 'succeeded',
+        result: {
+          key: 'remote-key-1',
+          namespace: ['llmgather', 'user-1', 'global', 'default'],
+          value: {
+            content: '用户喜欢简洁回答',
+            memoryType: 'preference',
+            importance: 4,
+            userId: 'user-1',
+            agentId: null,
+            namespace: 'default',
+          },
+        },
+      }),
+    }));
+    global.fetch = fetchMock as any;
+
+    const item = await provider.create('user-1', {
+      content: '用户喜欢简洁回答',
+      memoryType: 'preference',
+      importance: 4,
+    });
+
+    expect(item.provider).toBe('langgraph');
+    expect(item.externalId).toBe('remote-key-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://langgraph-memory:2024/runs/wait');
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body.assistant_id).toBe('memory');
+    expect(body.input.operation).toBe('put');
+    expect(body.input.value.content).toBe('用户喜欢简洁回答');
+  });
+
+  it('reads graph search results without marking global memory as agent-specific', async () => {
+    const { db } = makeMemoryDb();
+    const native = new NativeMemoryProvider(db as any);
+    const provider = new LangGraphMemoryProvider(native);
+    process.env.LANGGRAPH_MEMORY_URL = 'http://langgraph-memory:2024';
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        status: 'succeeded',
+        results: [
+          {
+            key: 'global-pref-1',
+            namespace: ['llmgather', 'user-1', 'global', 'default'],
+            value: {
+              content: '用户喜欢 Markdown 表格',
+              memoryType: 'preference',
+              importance: 5,
+            },
+            score: 0.9,
+          },
+        ],
+      }),
+    }));
+    global.fetch = fetchMock as any;
+
+    const results = await provider.search('user-1', '表格', 'agent-1', 5);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].agentId).toBeNull();
+    expect(results[0].content).toContain('Markdown 表格');
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body.input.operation).toBe('search');
+    expect(body.input.includeGlobal).toBe(true);
+  });
+});

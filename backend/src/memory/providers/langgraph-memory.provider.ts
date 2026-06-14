@@ -15,6 +15,16 @@ type LangGraphStoreValue = {
   metadata?: Record<string, unknown>;
 };
 
+type LangGraphMemoryGraphState = {
+  status?: string;
+  error?: string;
+  key?: string;
+  result?: unknown;
+  results?: unknown[];
+  namespacePath?: string[];
+  value?: LangGraphStoreValue;
+};
+
 @Injectable()
 export class LangGraphMemoryProvider implements MemoryProvider {
   private readonly logger = new Logger(LangGraphMemoryProvider.name);
@@ -53,7 +63,19 @@ export class LangGraphMemoryProvider implements MemoryProvider {
       namespace,
       metadata: dto.metadata,
     };
-    const payload = await this.putStoreItem(this.namespace(userId, agentId, namespace), key, value);
+    const namespacePath = this.namespace(userId, agentId, namespace);
+    const payload = await this.runMemoryGraphWithStoreFallback(
+      {
+        operation: 'put',
+        userId,
+        agentId,
+        namespace,
+        namespacePath,
+        key,
+        value,
+      },
+      () => this.putStoreItem(namespacePath, key, value),
+    );
     const externalId = this.externalId(payload) || key;
     return this.nativeProvider.createMirror(
       userId,
@@ -69,12 +91,26 @@ export class LangGraphMemoryProvider implements MemoryProvider {
       return this.nativeProvider.search(userId, query, agentId, limit);
     }
     try {
-      const namespace = this.namespace(userId, agentId ?? null, 'default');
-      const results = await this.searchStore(namespace, query, limit);
+      const graphState = await this.runMemoryGraph({
+        operation: 'search',
+        userId,
+        agentId: agentId ?? null,
+        query,
+        limit,
+        includeGlobal: true,
+      });
+      const results = graphState.results ?? [];
       const remoteMemories = this.parseSearchResults(userId, agentId, results);
       if (remoteMemories.length > 0) return remoteMemories.slice(0, limit);
     } catch (error) {
-      this.logger.warn(`LangGraph memory search failed, fallback to local mirror: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`LangGraph memory graph search failed, fallback to Store/local mirror: ${this.errorMessage(error)}`);
+      try {
+        const results = await this.searchStoreForAgent(userId, agentId ?? null, query, limit);
+        const remoteMemories = this.parseSearchResults(userId, agentId, results);
+        if (remoteMemories.length > 0) return remoteMemories.slice(0, limit);
+      } catch (storeError) {
+        this.logger.warn(`LangGraph memory Store search failed, fallback to local mirror: ${this.errorMessage(storeError)}`);
+      }
     }
     return this.nativeProvider.search(userId, query, agentId, limit);
   }
@@ -95,7 +131,19 @@ export class LangGraphMemoryProvider implements MemoryProvider {
       namespace,
       metadata: dto.metadata,
     };
-    const payload = await this.putStoreItem(this.namespace(userId, agentId, namespace), key, value);
+    const namespacePath = this.namespace(userId, agentId, namespace);
+    const payload = await this.runMemoryGraphWithStoreFallback(
+      {
+        operation: 'put',
+        userId,
+        agentId,
+        namespace,
+        namespacePath,
+        key,
+        value,
+      },
+      () => this.putStoreItem(namespacePath, key, value),
+    );
     return this.nativeProvider.updateProviderMirror(
       userId,
       id,
@@ -109,9 +157,20 @@ export class LangGraphMemoryProvider implements MemoryProvider {
     const current = await this.nativeProvider.getOwned(userId, id);
     if (this.baseUrl && current.externalId) {
       try {
-        await this.deleteStoreItem(this.namespace(userId, current.agentId, current.namespace), current.externalId);
+        const namespacePath = this.namespace(userId, current.agentId, current.namespace);
+        await this.runMemoryGraphWithStoreFallback(
+          {
+            operation: 'delete',
+            userId,
+            agentId: current.agentId,
+            namespace: current.namespace,
+            namespacePath,
+            key: current.externalId,
+          },
+          () => this.deleteStoreItem(namespacePath, current.externalId),
+        );
       } catch (error) {
-        this.logger.warn(`LangGraph memory delete failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.warn(`LangGraph memory delete failed: ${this.errorMessage(error)}`);
       }
     }
     await this.nativeProvider.remove(userId, id);
@@ -129,6 +188,10 @@ export class LangGraphMemoryProvider implements MemoryProvider {
     return (process.env.LANGGRAPH_MEMORY_API_KEY || process.env.LANGGRAPH_API_KEY || '').trim();
   }
 
+  private get assistantId(): string {
+    return (process.env.LANGGRAPH_MEMORY_ASSISTANT_ID || 'memory').trim();
+  }
+
   private assertConfigured(): void {
     if (!this.baseUrl) {
       throw new BadRequestException('LangGraph Memory 未配置，请设置 LANGGRAPH_MEMORY_URL');
@@ -144,11 +207,58 @@ export class LangGraphMemoryProvider implements MemoryProvider {
     return `${userId}:${agentId || 'global'}:${namespace}:${memoryType}:${suffix}`;
   }
 
+  private async runMemoryGraph(input: Record<string, unknown>): Promise<LangGraphMemoryGraphState> {
+    const payload = await this.request('/runs/wait', {
+      method: 'POST',
+      body: JSON.stringify({
+        assistant_id: this.assistantId,
+        input,
+        metadata: {
+          source: 'llmgather-memory-provider',
+          operation: input.operation,
+        },
+      }),
+    });
+    const state = this.unwrapGraphState(payload);
+    if (state.status === 'failed' || state.error) {
+      throw new BadRequestException(`LangGraph Memory 图执行失败：${state.error || state.status}`);
+    }
+    return state;
+  }
+
+  private async runMemoryGraphWithStoreFallback(input: Record<string, unknown>, fallback: () => Promise<unknown>): Promise<unknown> {
+    try {
+      const state = await this.runMemoryGraph(input);
+      return state.result ?? state;
+    } catch (error) {
+      this.logger.warn(`LangGraph memory graph failed, fallback to Store REST: ${this.errorMessage(error)}`);
+      return fallback();
+    }
+  }
+
   private async putStoreItem(namespace: string[], key: string, value: LangGraphStoreValue): Promise<unknown> {
     return this.request('/store/items', {
       method: 'PUT',
       body: JSON.stringify({ namespace, key, value }),
     });
+  }
+
+  private async searchStoreForAgent(userId: string, agentId: string | null, query: string, limit: number): Promise<unknown[]> {
+    const prefixes = [this.namespace(userId, agentId, 'default').slice(0, 3)];
+    if (agentId) prefixes.push(this.namespace(userId, null, 'default').slice(0, 3));
+    const groups = await Promise.all(prefixes.map((prefix) => this.searchStore(prefix, query, limit)));
+    const seen = new Set<string>();
+    const merged: unknown[] = [];
+    for (const group of groups) {
+      for (const item of this.searchItems(group)) {
+        const record = item as Record<string, unknown>;
+        const id = `${Array.isArray(record.namespace) ? record.namespace.join('/') : ''}:${String(record.key || record.id || '')}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        merged.push(item);
+      }
+    }
+    return merged.slice(0, limit);
   }
 
   private async searchStore(namespace: string[], query: string, limit: number): Promise<unknown> {
@@ -191,20 +301,41 @@ export class LangGraphMemoryProvider implements MemoryProvider {
     return String(record.key || record.id || record.itemId || '');
   }
 
+  private unwrapGraphState(payload: unknown): LangGraphMemoryGraphState {
+    if (!payload || typeof payload !== 'object') return {};
+    const record = payload as Record<string, unknown>;
+    const values = record.values && typeof record.values === 'object'
+      ? record.values as Record<string, unknown>
+      : record;
+    return values as LangGraphMemoryGraphState;
+  }
+
+  private searchItems(payload: unknown): unknown[] {
+    if (Array.isArray(payload)) return payload;
+    if (payload && typeof payload === 'object' && Array.isArray((payload as Record<string, unknown>).items)) {
+      return (payload as { items: unknown[] }).items;
+    }
+    return [];
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   private parseSearchResults(userId: string, agentId: string | undefined, payload: unknown): MemoryItem[] {
-    const items = Array.isArray(payload)
-      ? payload
-      : Array.isArray((payload as Record<string, unknown> | null)?.items)
-        ? (payload as { items: unknown[] }).items
-        : [];
+    const items = this.searchItems(payload);
     return items.map((item, index) => {
       const record = item as Record<string, unknown>;
       const value = (record.value && typeof record.value === 'object' ? record.value : record) as Record<string, unknown>;
+      const namespace = Array.isArray(record.namespace) ? record.namespace.map(String) : [];
+      const remoteAgentId = namespace.length >= 3
+        ? namespace[2] !== 'global' ? namespace[2] : null
+        : agentId || null;
       return {
         id: String(record.key || record.id || `langgraph-${index}`),
         userId,
-        agentId: agentId || null,
-        namespace: Array.isArray(record.namespace) ? String(record.namespace.at(-1) || 'default') : 'default',
+        agentId: remoteAgentId,
+        namespace: namespace.length > 0 ? String(namespace.at(-1) || 'default') : 'default',
         memoryType: normalizeMemoryType(String(value.memoryType || 'fact')),
         content: String(value.content || value.text || ''),
         importance: Number(value.importance ?? 3),

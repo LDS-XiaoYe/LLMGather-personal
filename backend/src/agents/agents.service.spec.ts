@@ -28,6 +28,8 @@ function makeTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
     runtime: overrides.runtime ?? 'javascript',
     riskLevel: overrides.riskLevel ?? 'low',
     code: overrides.code,
+    version: overrides.version ?? 1,
+    callCount: overrides.callCount ?? 0,
     timeoutMs: overrides.timeoutMs ?? 30000,
     retries: overrides.retries ?? 0,
     enabled: overrides.enabled ?? true,
@@ -97,6 +99,7 @@ const agent = {
   knowledgeBaseIds: [],
   skillIds: [],
   workflowIds: [],
+  subAgentIds: [],
   published: false,
   apiEnabled: false,
   publicSlug: '',
@@ -112,6 +115,8 @@ function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
     agentId: overrides.agentId ?? 'agent-1',
     userId: overrides.userId ?? 'user-1',
     status: overrides.status ?? 'succeeded',
+    conversationId: overrides.conversationId ?? 'conversation-1',
+    parentRunId: overrides.parentRunId ?? null,
     input: overrides.input ?? '写一段论文摘要',
     output: overrides.output ?? '这是一段完整的论文摘要，包含研究背景、方法、发现和结论，足以触发自动评测输出分。',
     model: overrides.model ?? 'qwen-plus',
@@ -158,6 +163,29 @@ function completion(content: string, toolCalls: unknown[] = []) {
   };
 }
 
+async function completeStep(
+  stepId: number,
+  status: 'succeeded' | 'failed',
+  output: string,
+  error = '',
+  metadata: Record<string, unknown> = {},
+) {
+  return {
+    id: stepId ?? 0,
+    runId: 'run-1',
+    stepType: 'llm_completion',
+    name: '完成步骤',
+    status,
+    input: '',
+    output,
+    error,
+    startedAt: '2026-06-09 09:00:00.000',
+    endedAt: '2026-06-09 09:00:00.100',
+    latencyMs: 100,
+    metadata: JSON.stringify(metadata),
+  };
+}
+
 describe('AgentsService function calling harness', () => {
   it('converts bound tools to OpenAI function definitions', () => {
     const { service } = makeService();
@@ -197,8 +225,10 @@ describe('AgentsService function calling harness', () => {
       'run-1',
       { model: 'qwen-plus', messages: [{ role: 'user', content: '计算 1+2' }] },
       [makeTool()],
+      [],
       3,
       async (step: unknown) => { steps.push(step); return step; },
+      completeStep,
       { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     );
 
@@ -233,12 +263,60 @@ describe('AgentsService function calling harness', () => {
       'run-1',
       { model: 'qwen-plus', messages: [{ role: 'user', content: '计算并告诉我时间' }] },
       [makeTool(), makeTool({ id: 'tool-2', name: 'current_time', displayName: 'Current time', schema: { type: 'object', properties: { timezone: { type: 'string' } } } })],
+      [],
       3,
       async (step: unknown) => step,
+      completeStep,
       { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     );
 
     expect(invoke.mock.calls.map((call) => call[1])).toEqual(['tool-1', 'tool-2']);
+  });
+
+  it('executes delegate_agent calls and feeds the child result back into the next LLM turn', async () => {
+    const delegateCall = {
+      id: 'call-delegate',
+      type: 'function',
+      function: { name: 'delegate_agent', arguments: '{"agentId":"agent-2","task":"核查事实","reason":"需要专家复核"}' },
+    };
+    const childAgent = { ...agent, id: 'agent-2', name: 'Fact Checker', subAgentIds: [] };
+    const { service, chatService } = makeService({
+      completions: [completion('', [delegateCall]), completion('已经综合子 Agent 结果')],
+    });
+    (service as any).delegateUserAgent = jest.fn(async () => ({
+      observation: 'Fact Checker (succeeded) runId=child-run\n事实无误',
+      run: makeRun({ id: 'child-run', agentId: 'agent-2', output: '事实无误' }),
+    }));
+
+    const output = await (service as any).runToolUseHarness(
+      'user-1',
+      { ...agent, subAgentIds: ['agent-2'] },
+      { input: '请复核事实' },
+      'run-1',
+      { model: 'qwen-plus', messages: [{ role: 'user', content: '请复核事实' }] },
+      [],
+      [childAgent],
+      3,
+      async (step: unknown) => step,
+      completeStep,
+      { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      { delegationDepth: 0 },
+    );
+
+    expect(output).toBe('已经综合子 Agent 结果');
+    expect((service as any).delegateUserAgent).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ id: 'agent-1' }),
+      expect.objectContaining({ input: '请复核事实' }),
+      expect.objectContaining({ action: 'delegate', agentId: 'agent-2', input: '核查事实' }),
+      'run-1',
+      expect.any(Object),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(chatService.createCompletion.mock.calls[1][0].messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'tool', tool_call_id: 'call-delegate', content: expect.stringContaining('事实无误'), name: 'delegate_agent' }),
+    ]));
   });
 
   it('records malformed tool arguments as failed observations without invoking the tool', async () => {
@@ -258,8 +336,10 @@ describe('AgentsService function calling harness', () => {
       'run-1',
       { model: 'qwen-plus', messages: [{ role: 'user', content: '计算' }] },
       [makeTool()],
+      [],
       3,
       async (step: any) => { steps.push(step); return step; },
+      completeStep,
       { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     );
 
@@ -274,7 +354,7 @@ describe('AgentsService function calling harness', () => {
   it('does not expose disabled, high-risk, or unapproved confirm tools', async () => {
     const allowedConfirm = makeTool({ id: 'confirm-1', name: 'safe_confirm', permissionLevel: 'confirm' });
     const disabled = makeTool({ id: 'disabled-1', name: 'disabled_tool', permissionLevel: 'disabled' });
-    const highRisk = makeTool({ id: 'runner-1', name: 'javascript_runner', riskLevel: 'high' });
+    const highRisk = makeTool({ id: 'danger-1', name: 'external_delete', riskLevel: 'high' });
     const getAgentTools = jest.fn(async () => [allowedConfirm, disabled, highRisk]);
     const { service } = makeService({ getAgentTools });
 
@@ -285,7 +365,7 @@ describe('AgentsService function calling harness', () => {
     );
 
     expect(resolved.allowed.map((tool: ToolDefinition) => tool.id)).toEqual(['confirm-1']);
-    expect(resolved.skipped.map((item: { tool: ToolDefinition }) => item.tool.id)).toEqual(['disabled-1', 'runner-1']);
+    expect(resolved.skipped.map((item: { tool: ToolDefinition }) => item.tool.id)).toEqual(['disabled-1', 'danger-1']);
   });
 
   it('stops tool looping at maxSteps and asks for a final non-tool response', async () => {
@@ -305,8 +385,10 @@ describe('AgentsService function calling harness', () => {
       'run-1',
       { model: 'qwen-plus', messages: [{ role: 'user', content: '计算 1+2' }] },
       [makeTool()],
+      [],
       1,
       async (step: unknown) => step,
+      completeStep,
       { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     );
 

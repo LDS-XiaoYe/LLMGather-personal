@@ -203,6 +203,59 @@ export class WorkflowsService {
   }
 
   private async runNode(userId: string, node: WorkflowNodeDto, input: string, originalInput: string, options: WorkflowRunOptions): Promise<string> {
+    const dagType = typeof node.config.dagType === 'string' ? node.config.dagType : node.type;
+    if (node.type === 'end' || dagType === 'end' || dagType === 'output') {
+      return this.interpolateText(String(node.config.template ?? '{{input}}'), input, originalInput);
+    }
+
+    if (node.type === 'template_transform' || dagType === 'template_transform' || dagType === 'prompt_builder' || dagType === 'format_output') {
+      return this.interpolateText(String(node.config.template ?? '{{input}}'), input, originalInput);
+    }
+
+    if (node.type === 'variable_assigner' || dagType === 'variable_assigner') {
+      const vars = this.interpolateArgs(node.config.variables as Record<string, unknown> | undefined, input, originalInput);
+      return JSON.stringify({ input, variables: vars }, null, 2);
+    }
+
+    if (node.type === 'if_else' || dagType === 'if_else' || dagType === 'condition') {
+      const expression = String(node.config.expression ?? '').trim();
+      const matched = expression ? input.toLowerCase().includes(expression.toLowerCase()) : Boolean(input.trim());
+      const template = matched ? String(node.config.trueTemplate ?? '{{input}}') : String(node.config.falseTemplate ?? '{{input}}');
+      return this.interpolateText(template, input, originalInput);
+    }
+
+    if (node.type === 'question_classifier' || dagType === 'question_classifier' || dagType === 'multi_branch') {
+      const branches = Array.isArray(node.config.branches) ? node.config.branches as Array<Record<string, unknown>> : [];
+      const matched = branches.find((branch) => String(branch.keyword ?? '').trim() && input.includes(String(branch.keyword)));
+      return JSON.stringify({ branch: matched?.name || matched?.id || 'default', input }, null, 2);
+    }
+
+    if (node.type === 'http_request' || dagType === 'http_request') {
+      return this.runHttpNode(node, input, originalInput);
+    }
+
+    if (node.type === 'code' || dagType === 'code') {
+      const code = String(node.config.code ?? '');
+      if (!code.trim()) return input;
+      const result = await this.toolsService.invoke(userId, 'javascript_runner', { code, input: { input, originalInput } });
+      return result.output;
+    }
+
+    if (node.type === 'llm' || dagType === 'llm_generate' || dagType === 'result_summary' || dagType === 'result_rewrite') {
+      const template = String(node.config.template ?? node.config.prompt ?? '{{input}}');
+      const rendered = this.interpolateText(template, input, originalInput);
+      if (options.runtimeAgentId) {
+        const run = await this.agentsService.runFromWorkflow(userId, options.runtimeAgentId, {
+          input: rendered,
+          mode: 'fast',
+          maxSteps: 3,
+        }, options.skipWorkflowAgentIds ?? []);
+        if (run.status === 'failed') throw new Error(run.error || 'Workflow LLM 节点执行失败');
+        return run.output;
+      }
+      return rendered;
+    }
+
     if (node.type === 'prompt') {
       const template = String(node.config.template ?? '{{input}}');
       const rendered = this.interpolateText(template, input, originalInput);
@@ -220,14 +273,14 @@ export class WorkflowsService {
       return rendered;
     }
 
-    if (node.type === 'tool') {
+    if (node.type === 'tool' || dagType === 'tool_call') {
       const tool = String(node.config.tool || node.config.toolId || '');
       const args = this.interpolateArgs(node.config.args as Record<string, unknown> | undefined, input, originalInput);
       const result = await this.toolsService.invoke(userId, tool, args);
       return result.output;
     }
 
-    if (node.type === 'agent') {
+    if (node.type === 'agent' || dagType === 'agent_call') {
       const agentId = String(node.config.agentId || '');
       if (!agentId) throw new NotFoundException('Workflow Agent 节点缺少 agentId');
       const agentInputTemplate = typeof node.config.input === 'string' ? node.config.input : '{{input}}';
@@ -240,19 +293,19 @@ export class WorkflowsService {
       return run.output;
     }
 
-    if (node.type === 'knowledge') {
+    if (node.type === 'knowledge' || dagType === 'knowledge_search') {
       const kbIds = Array.isArray(node.config.kbIds) ? node.config.kbIds.map(String) : [];
       const results = await this.knowledgeService.search(userId, kbIds, input, 5);
       return results.map((item, idx) => `[${idx + 1}] ${item.title}\n${item.content}`).join('\n\n') || '未检索到相关知识。';
     }
 
-    if (node.type === 'memory') {
+    if (node.type === 'memory' || dagType === 'memory_read') {
       const agentId = typeof node.config.agentId === 'string' ? node.config.agentId : undefined;
       const results = await this.memoryService.search(userId, input, agentId, 5);
       return results.map((item, idx) => `[${idx + 1}] ${item.memoryType}: ${item.content}`).join('\n\n') || '未检索到相关记忆。';
     }
 
-    if (node.type === 'skill') {
+    if (node.type === 'skill' || dagType === 'skill_call') {
       const skillId = String(node.config.skillId || '');
       if (!skillId) throw new NotFoundException('Workflow Skill 节点缺少 skillId');
       const skillInputTemplate = typeof node.config.input === 'string' ? node.config.input : '{{input}}';
@@ -273,6 +326,22 @@ export class WorkflowsService {
       result[key] = typeof value === 'string' ? this.interpolateText(value, input, originalInput) : value;
     }
     return result;
+  }
+
+  private async runHttpNode(node: WorkflowNodeDto, input: string, originalInput: string): Promise<string> {
+    const urlText = this.interpolateText(String(node.config.url ?? ''), input, originalInput);
+    if (!/^https?:\/\//i.test(urlText)) throw new Error('HTTP 节点 URL 必须以 http:// 或 https:// 开头');
+    const method = String(node.config.method ?? 'GET').toUpperCase();
+    const headers = this.interpolateArgs(node.config.headers as Record<string, unknown> | undefined, input, originalInput);
+    const bodyTemplate = typeof node.config.body === 'string' ? node.config.body : '';
+    const response = await fetch(urlText, {
+      method,
+      headers: Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)])),
+      body: ['GET', 'HEAD'].includes(method) ? undefined : this.interpolateText(bodyTemplate || input, input, originalInput),
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await response.text();
+    return JSON.stringify({ status: response.status, ok: response.ok, body: text.slice(0, 12000) }, null, 2);
   }
 
   private shouldRunPromptWithAgent(node: WorkflowNodeDto): boolean {

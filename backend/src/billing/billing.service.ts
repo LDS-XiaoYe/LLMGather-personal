@@ -83,12 +83,19 @@ export class BillingService {
     return await db.prepare(
       `SELECT id, model, request_type as requestType, prompt_tokens as promptTokens,
               completion_tokens as completionTokens, total_tokens as totalTokens,
-              cost, created_at as createdAt
+              cost, provider_name as providerName, provider_key_id as providerKeyId,
+              provider_key_name as providerKeyName, provider_key_prefix as providerKeyPrefix,
+              audit_metadata as auditMetadata, created_at as createdAt
        FROM billing_ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`,
     ).all(userId) as Array<{
       id: string;
       model: string;
       requestType: string;
+      providerName: string;
+      providerKeyId: string;
+      providerKeyName: string;
+      providerKeyPrefix: string;
+      auditMetadata: string;
       promptTokens: number;
       completionTokens: number;
       totalTokens: number;

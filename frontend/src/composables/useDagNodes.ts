@@ -8,11 +8,9 @@ export const dagNodeCategories: DagNodeCategory[] = [
     label: '输入输出',
     icon: '📥',
     nodes: [
-      { type: 'start', label: '开始节点', description: 'DAG流程起点', icon: '▶️', category: 'io', inputs: [], outputs: ['trigger'], configSchema: {} },
-      { type: 'user_input', label: '用户输入', description: '接收用户输入文本', icon: '💬', category: 'io', inputs: ['trigger'], outputs: ['text', 'user_id'], configSchema: { placeholder: '', maxLength: 10000 } },
-      { type: 'file_input', label: '文件输入', description: '接收用户上传文件', icon: '📁', category: 'io', inputs: ['trigger'], outputs: ['file_content', 'file_name', 'file_type'], configSchema: { acceptTypes: ['.txt', '.md', '.pdf'], maxSize: 10 } },
-      { type: 'output', label: '输出回复', description: '输出最终回复给用户', icon: '📤', category: 'io', inputs: ['text'], outputs: [], configSchema: { format: 'text' } },
-      { type: 'end', label: '终止节点', description: 'DAG流程终点', icon: '⏹️', category: 'io', inputs: ['result'], outputs: [], configSchema: {} },
+      { type: 'start', label: '开始', description: '流程起点，通常不用配置。', icon: '▶️', category: 'io', inputs: [], outputs: ['trigger'], configSchema: {} },
+      { type: 'user_input', label: '用户输入', description: '把用户发来的话作为后续节点输入。', icon: '💬', category: 'io', inputs: ['trigger'], outputs: ['text', 'user_id'], configSchema: { placeholder: '', maxLength: 10000 } },
+      { type: 'output', label: '回复用户', description: '把上一步结果作为最终回复发给用户。', icon: '📤', category: 'io', inputs: ['text'], outputs: [], configSchema: { format: 'text' } },
     ]
   },
   {
@@ -20,10 +18,10 @@ export const dagNodeCategories: DagNodeCategory[] = [
     label: '理解与决策',
     icon: '🧠',
     nodes: [
-      { type: 'intent_detection', label: '意图识别', description: '识别用户输入的意图', icon: '🎯', category: 'understand', inputs: ['text'], outputs: ['intent', 'confidence', 'reason'], configSchema: { model: '', prompt: '', intents: [], threshold: 0.7 } },
-      { type: 'parameter_extract', label: '参数提取', description: '从文本中提取关键参数', icon: '🔑', category: 'understand', inputs: ['text'], outputs: ['params'], configSchema: { model: '', params: [], prompt: '' } },
-      { type: 'condition', label: '条件判断', description: '根据条件分支执行', icon: '🔀', category: 'understand', inputs: ['value'], outputs: ['true_branch', 'false_branch'], configSchema: { expression: '' } },
-      { type: 'multi_branch', label: '多分支路由', description: '根据值选择多个分支', icon: '🔄', category: 'understand', inputs: ['value'], outputs: ['branches'], configSchema: { branches: [] } },
+      { type: 'intent_detection', label: '意图识别', description: '需要先判断用户想做什么时使用。', icon: '🎯', category: 'understand', inputs: ['text'], outputs: ['intent', 'confidence', 'reason'], configSchema: { model: '', prompt: '', intents: [], threshold: 0.7 } },
+      { type: 'parameter_extract', label: '参数提取', description: '从用户文本里提取订单号、时间、关键词等字段。', icon: '🔑', category: 'understand', inputs: ['text'], outputs: ['params'], configSchema: { model: '', params: [], prompt: '' } },
+      { type: 'if_else', label: '条件分支', description: '只有两个去向时使用：命中 / 未命中。', icon: '🔀', category: 'understand', inputs: ['value'], outputs: ['true', 'false'], configSchema: { expression: '', trueTemplate: '{{input}}', falseTemplate: '{{input}}' } },
+      { type: 'question_classifier', label: '问题分类器', description: '有多个业务分类时使用，例如售前、订单、退款。', icon: '🧭', category: 'understand', inputs: ['question'], outputs: ['class'], configSchema: { branches: [{ name: '默认', keyword: '' }] } },
     ]
   },
   {
@@ -31,9 +29,9 @@ export const dagNodeCategories: DagNodeCategory[] = [
     label: '知识与上下文',
     icon: '📚',
     nodes: [
-      { type: 'knowledge_search', label: '知识库查询', description: '从知识库检索相关内容', icon: '🔍', category: 'knowledge', inputs: ['query'], outputs: ['chunks', 'citations', 'scores', 'rag_context'], configSchema: { kbIds: [], topK: 5, threshold: 0.7, rerank: false, returnCitations: true } },
-      { type: 'memory_read', label: '记忆读取', description: '读取长期记忆', icon: '🧠', category: 'knowledge', inputs: ['query'], outputs: ['memory_context'], configSchema: { memoryType: 'agent', topK: 5 } },
-      { type: 'memory_write', label: '记忆写入', description: '写入长期记忆', icon: '💾', category: 'knowledge', inputs: ['content'], outputs: ['status'], configSchema: { memoryType: 'agent', importance: 3, confirm: false } },
+      { type: 'knowledge_search', label: '查知识库', description: '需要按资料回答时使用，要选择知识库。', icon: '🔍', category: 'knowledge', inputs: ['query'], outputs: ['chunks', 'citations', 'scores', 'rag_context'], configSchema: { kbIds: [], topK: 5, threshold: 0.7, rerank: false, returnCitations: true } },
+      { type: 'memory_read', label: '读记忆', description: '需要参考长期偏好、事实或项目背景时使用。', icon: '🧠', category: 'knowledge', inputs: ['query'], outputs: ['memory_context'], configSchema: { memoryType: 'agent', topK: 5 } },
+      { type: 'memory_write', label: '写记忆', description: '需要把重要信息沉淀为长期记忆时使用。', icon: '💾', category: 'knowledge', inputs: ['content'], outputs: ['status'], configSchema: { memoryType: 'agent', importance: 3, confirm: false } },
     ]
   },
   {
@@ -41,10 +39,11 @@ export const dagNodeCategories: DagNodeCategory[] = [
     label: '执行动作',
     icon: '⚡',
     nodes: [
-      { type: 'tool_call', label: '调用工具', description: '调用平台或自定义工具', icon: '🔧', category: 'execute', inputs: ['tool_params'], outputs: ['tool_result', 'status_code', 'error_message'], configSchema: { toolId: '', paramMapping: {}, timeout: 30, retries: 0, confirm: false } },
-      { type: 'skill_call', label: '调用 Skill', description: '调用平台或自定义Skill', icon: '⚡', category: 'execute', inputs: ['skill_input'], outputs: ['skill_result', 'skill_logs'], configSchema: { skillId: '', inputMapping: {}, confirm: false } },
-      { type: 'agent_call', label: '调用 Agent', description: '调用其他Agent', icon: '🤖', category: 'execute', inputs: ['agent_input'], outputs: ['agent_result', 'agent_logs'], configSchema: { agentId: '', inputMapping: {}, waitForResult: true } },
-      { type: 'http_request', label: 'HTTP 请求', description: '发送HTTP请求', icon: '🌐', category: 'execute', inputs: ['params'], outputs: ['response', 'status_code'], configSchema: { method: 'GET', url: '', headers: {}, body: '' } },
+      { type: 'tool_call', label: '调用工具', description: '要算数、查时间、文本统计或执行自定义工具时使用。', icon: '🔧', category: 'execute', inputs: ['tool_params'], outputs: ['tool_result', 'status_code', 'error_message'], configSchema: { toolId: '', paramMapping: {}, timeout: 30, retries: 0, confirm: false } },
+      { type: 'skill_call', label: '调用 Skill', description: '要复用一个已配置的能力包时使用。', icon: '⚡', category: 'execute', inputs: ['skill_input'], outputs: ['skill_result', 'skill_logs'], configSchema: { skillId: '', inputMapping: {}, confirm: false } },
+      { type: 'agent_call', label: '调用 Agent', description: '要把任务交给另一个 Agent 处理时使用。', icon: '🤖', category: 'execute', inputs: ['agent_input'], outputs: ['agent_result', 'agent_logs'], configSchema: { agentId: '', inputMapping: {}, waitForResult: true } },
+      { type: 'http_request', label: 'HTTP 请求', description: '要访问外部 API 时使用，需要填写 URL。', icon: '🌐', category: 'execute', inputs: ['params'], outputs: ['response', 'status_code'], configSchema: { method: 'GET', url: '', headers: {}, body: '' } },
+      { type: 'code', label: '代码处理', description: '简单 JS 逻辑处理，比如格式转换、字段计算。', icon: '💻', category: 'execute', inputs: ['input'], outputs: ['result'], configSchema: { code: 'return input.input;' } },
     ]
   },
   {
@@ -52,9 +51,11 @@ export const dagNodeCategories: DagNodeCategory[] = [
     label: '生成与处理',
     icon: '✨',
     nodes: [
-      { type: 'llm_generate', label: 'LLM 生成', description: '调用大模型生成内容', icon: '🤖', category: 'generate', inputs: ['prompt', 'context'], outputs: ['response', 'tokens'], configSchema: { model: '', temperature: 0.7, maxTokens: 2000 } },
-      { type: 'prompt_builder', label: 'Prompt 组装', description: '组装完整的Prompt', icon: '📝', category: 'generate', inputs: ['template', 'variables'], outputs: ['prompt_text'], configSchema: { template: '', variables: [] } },
-      { type: 'result_summary', label: '结果总结', description: '总结和提炼结果', icon: '📋', category: 'generate', inputs: ['input'], outputs: ['summary'], configSchema: { model: '', prompt: '' } },
+      { type: 'prompt_builder', label: '组装提示词', description: '把知识库、用户问题等拼成给模型的提示词。', icon: '📝', category: 'generate', inputs: ['template', 'variables'], outputs: ['prompt_text'], configSchema: { template: '', variables: [] } },
+      { type: 'llm_generate', label: '模型生成', description: '让大模型根据提示词生成答案。', icon: '🤖', category: 'generate', inputs: ['prompt', 'context'], outputs: ['response', 'tokens'], configSchema: { model: '', temperature: 0.7, maxTokens: 2000 } },
+      { type: 'template_transform', label: '模板转换', description: '把上一步结果按模板改写成固定格式。', icon: '🧩', category: 'generate', inputs: ['input'], outputs: ['text'], configSchema: { template: '{{input}}' } },
+      { type: 'variable_assigner', label: '变量赋值', description: '把固定值或上游内容保存成变量。', icon: '📌', category: 'generate', inputs: ['input'], outputs: ['variables'], configSchema: { variables: {} } },
+      { type: 'result_summary', label: '结果总结', description: '把工具或多步结果整理成最终摘要。', icon: '📋', category: 'generate', inputs: ['input'], outputs: ['summary'], configSchema: { model: '', prompt: '' } },
     ]
   },
   {
@@ -170,14 +171,17 @@ export function useDagNodes() {
       x: number;
       y: number;
       config: { nextIds?: string[] };
-    }> = template.nodes.map((node, index) => ({
-      id: `node_${Date.now()}_${index}`,
-      type: node.type,
-      name: getDagNodeInfo(node.type as DagNodeType)?.label || node.type,
-      x: node.x,
-      y: node.y,
-      config: {},
-    }));
+    }> = template.nodes.map((node, index) => {
+      const nodeInfo = getDagNodeInfo(node.type as DagNodeType);
+      return {
+        id: `node_${Date.now()}_${index}`,
+        type: node.type,
+        name: nodeInfo?.label || node.type,
+        x: node.x,
+        y: node.y,
+        config: { ...(nodeInfo?.configSchema || {}), ...(node.config || {}), dagType: node.type },
+      };
+    });
 
     const nodeMap = new Map(newNodes.map((n, i) => [template.nodes[i].type, n.id]));
     newNodes.forEach((node, index) => {

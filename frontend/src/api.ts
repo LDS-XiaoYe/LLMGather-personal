@@ -19,6 +19,51 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+export interface BehaviorPayload {
+  duration: number;
+  mouseMoveCount: number;
+  clickCount: number;
+  keydownCount: number;
+  focusCount: number;
+  blurCount: number;
+  screenWidth: number;
+  screenHeight: number;
+  timezone: string;
+  language: string;
+  userAgent: string;
+  webdriver: boolean;
+}
+
+export interface AuthSecurityPayload {
+  challengeId: string;
+  behaviorPayload: BehaviorPayload;
+  captchaId?: string;
+  captchaCode?: string;
+}
+
+export interface SecurityChallenge {
+  challengeId: string;
+  expiresIn: number;
+}
+
+export interface SecurityCaptcha {
+  captchaId: string;
+  image: string;
+  expiresIn: number;
+}
+
+export class ApiError extends Error {
+  payload?: Record<string, unknown>;
+  status: number;
+
+  constructor(message: string, status: number, payload?: Record<string, unknown>) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -46,6 +91,11 @@ export interface BillingLedgerItem {
   id: string;
   model: string;
   requestType: string;
+  providerName?: string;
+  providerKeyId?: string;
+  providerKeyName?: string;
+  providerKeyPrefix?: string;
+  auditMetadata?: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -153,6 +203,52 @@ async function readError(response: Response): Promise<string> {
   }
 }
 
+async function throwApiError(response: Response): Promise<never> {
+  const fallback = `Request failed (${response.status})`;
+  const text = await response.text();
+  if (!text) throw new ApiError(fallback, response.status);
+  try {
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    const rawMessage = payload.message;
+    const message = Array.isArray(rawMessage)
+      ? rawMessage.join('; ')
+      : typeof rawMessage === 'string'
+        ? rawMessage
+        : rawMessage && typeof rawMessage === 'object' && 'message' in rawMessage
+          ? String((rawMessage as Record<string, unknown>).message)
+          : typeof payload.error === 'string'
+            ? payload.error
+            : text;
+    throw new ApiError(message, response.status, payload);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(text || fallback, response.status);
+  }
+}
+
+export function isCaptchaRequiredError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const direct = error.payload?.captchaRequired === true;
+  const nested = error.payload?.message && typeof error.payload.message === 'object'
+    ? (error.payload.message as Record<string, unknown>).captchaRequired === true
+    : false;
+  return direct || nested;
+}
+
+export async function fetchSecurityChallenge(baseUrl = defaultBaseUrl): Promise<SecurityChallenge> {
+  const response = await fetch(`${baseUrl}/security/challenge`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) await throwApiError(response);
+  const payload = (await response.json()) as { data: SecurityChallenge };
+  return payload.data;
+}
+
+export async function fetchSecurityCaptcha(baseUrl = defaultBaseUrl): Promise<SecurityCaptcha> {
+  const response = await fetch(`${baseUrl}/security/captcha`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) await throwApiError(response);
+  const payload = (await response.json()) as { data: SecurityCaptcha };
+  return payload.data;
+}
+
 export async function fetchModels(baseUrl = defaultBaseUrl): Promise<ModelDescriptor[]> {
   const { signal, cleanup } = withTimeoutSignal();
   let response: Response;
@@ -193,30 +289,33 @@ export async function register(
   email: string,
   verificationCode: string,
   invitationCode: string | undefined,
+  tosAccepted: boolean,
+  security: AuthSecurityPayload,
   baseUrl = defaultBaseUrl,
 ): Promise<AuthResponse> {
   const response = await fetch(`${baseUrl}/auth/register`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ username, password, email, verificationCode, invitationCode }),
+    body: JSON.stringify({ username, password, email, verificationCode, invitationCode, tosAccepted, ...security }),
     ...credOpts,
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) await throwApiError(response);
   return (await response.json()) as AuthResponse;
 }
 
 export async function login(
   username: string,
   password: string,
+  security: AuthSecurityPayload,
   baseUrl = defaultBaseUrl,
 ): Promise<AuthResponse> {
   const response = await fetch(`${baseUrl}/auth/login`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, ...security }),
     ...credOpts,
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) await throwApiError(response);
   return (await response.json()) as AuthResponse;
 }
 
@@ -513,6 +612,7 @@ export interface AgentDefinition {
   knowledgeBaseIds: string[];
   skillIds: string[];
   workflowIds: string[];
+  subAgentIds: string[];
   published: boolean;
   apiEnabled: boolean;
   publicSlug: string;
@@ -553,6 +653,7 @@ export interface AgentMarketplaceTemplate {
   skillIds?: string[];
   knowledgeBaseIds?: string[];
   source?: 'builtin' | 'custom' | string;
+  sourceAgentId?: string;
 }
 
 export interface AgentInput {
@@ -567,11 +668,16 @@ export interface AgentInput {
   knowledgeBaseIds?: string[];
   skillIds?: string[];
   workflowIds?: string[];
+  subAgentIds?: string[];
   status?: 'active' | 'archived';
 }
 
 export interface AgentRunInput {
   input: string;
+  messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  conversationId?: string;
+  parentRunId?: string;
+  continueFromLast?: boolean;
   imageUrls?: string[];
   maxSteps?: number;
   mode?: 'standard' | 'reflective' | 'fast';
@@ -604,6 +710,8 @@ export interface AgentRun {
   agentId: string;
   userId: string;
   status: 'running' | 'succeeded' | 'failed';
+  conversationId: string;
+  parentRunId: string | null;
   input: string;
   output: string;
   model: string;
@@ -959,9 +1067,11 @@ export interface ToolDefinition {
   runtime?: string;
   riskLevel?: 'low' | 'medium' | 'high';
   code?: string;
+  version?: number | string;
   timeoutMs?: number;
   retries?: number;
   enabled: boolean;
+  callCount?: number;
   permissionLevel?: 'auto' | 'confirm' | 'disabled';
 }
 
@@ -1079,9 +1189,25 @@ export interface MemoryItem {
   content: string;
   importance: number;
   metadata: string;
+  provider?: 'native' | 'langgraph';
+  externalId?: string;
+  providerPayload?: string;
   createdAt: string;
   updatedAt: string;
   score?: number;
+}
+
+export interface MemoryProviderInfo {
+  active: 'native' | 'langgraph';
+  providers: Array<{
+    provider: 'native' | 'langgraph';
+    displayName: string;
+    configured: boolean;
+    writable: boolean;
+    searchable: boolean;
+    supportedTypes: string[];
+    note?: string;
+  }>;
 }
 
 export interface SkillDefinition {
@@ -1109,7 +1235,7 @@ export interface SkillDefinition {
 
 export interface WorkflowNode {
   id: string;
-  type: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory' | 'skill';
+  type: 'prompt' | 'agent' | 'tool' | 'knowledge' | 'memory' | 'skill' | 'llm' | 'http_request' | 'code' | 'template_transform' | 'variable_assigner' | 'if_else' | 'question_classifier' | 'end';
   name?: string;
   config: Record<string, unknown>;
 }
@@ -1455,6 +1581,15 @@ export async function createAgentMarketplaceTemplate(
   if (!response.ok) throw new Error(await readError(response));
   const data = (await response.json()) as { data: AgentMarketplaceTemplate };
   return data.data;
+}
+
+export async function deleteAgentMarketplaceTemplate(id: string, baseUrl = defaultBaseUrl): Promise<void> {
+  const response = await fetch(`${baseUrl}/agents/marketplace/templates/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
 }
 
 export async function runAgentTeam(
@@ -1871,8 +2006,15 @@ export async function fetchMemories(agentId?: string, baseUrl = defaultBaseUrl):
   return payload.data ?? [];
 }
 
+export async function fetchMemoryProviders(baseUrl = defaultBaseUrl): Promise<MemoryProviderInfo> {
+  const response = await fetch(`${baseUrl}/memory/providers`, { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: MemoryProviderInfo };
+  return payload.data;
+}
+
 export async function createMemory(
-  payload: { content: string; agentId?: string; namespace?: string; memoryType?: string; importance?: number },
+  payload: { content: string; agentId?: string; namespace?: string; memoryType?: string; importance?: number; metadata?: Record<string, unknown> },
   baseUrl = defaultBaseUrl,
 ): Promise<MemoryItem> {
   const response = await fetch(`${baseUrl}/memory`, {
@@ -1888,7 +2030,7 @@ export async function createMemory(
 
 export async function updateMemory(
   id: string,
-  payload: { content?: string; namespace?: string; memoryType?: string; importance?: number },
+  payload: { content?: string; namespace?: string; memoryType?: string; importance?: number; metadata?: Record<string, unknown> },
   baseUrl = defaultBaseUrl,
 ): Promise<MemoryItem> {
   const response = await fetch(`${baseUrl}/memory/${encodeURIComponent(id)}`, {
@@ -2010,6 +2152,7 @@ export interface AdminUser {
   id: string;
   username: string;
   email: string | null;
+  emailVerified: boolean;
   role: string;
   credits: number;
   totalSpent: number;
@@ -2058,8 +2201,23 @@ export async function fetchAdminUsers(
   return (await response.json()) as { data: AdminUser[]; total: number };
 }
 
+export async function createAdminUser(
+  input: { username: string; password: string; email: string; role?: string; credits?: number; emailVerified?: boolean },
+  baseUrl = defaultBaseUrl,
+): Promise<AdminUser> {
+  const response = await fetch(`${baseUrl}/admin/users`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(input),
+    ...credOpts,
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  const payload = (await response.json()) as { data: AdminUser };
+  return payload.data;
+}
+
 export async function updateAdminUser(
-  userId: string, updates: { credits?: number; role?: string }, baseUrl = defaultBaseUrl,
+  userId: string, updates: { credits?: number; role?: string; emailVerified?: boolean }, baseUrl = defaultBaseUrl,
 ): Promise<AdminUser> {
   const response = await fetch(`${baseUrl}/admin/users/${userId}`, {
     method: 'PATCH',

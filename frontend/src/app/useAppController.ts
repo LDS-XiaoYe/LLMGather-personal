@@ -15,14 +15,14 @@ import {
   copySkill as apiCopySkill,
   createAgentTeam as apiCreateAgentTeam,
   createAgentMarketplaceTemplate as apiCreateAgentMarketplaceTemplate,
-  createAgentTestCase as apiCreateAgentTestCase,
-  createAgentTestSuite as apiCreateAgentTestSuite,
   createAgentVersion as apiCreateAgentVersion,
+  createAdminUser as apiCreateAdminUser,
   createMcpServer as apiCreateMcpServer,
   createTool as apiCreateTool,
   createWorkflow as apiCreateWorkflow,
   deleteAdminUser,
   deleteAgent as apiDeleteAgent,
+  deleteAgentMarketplaceTemplate as apiDeleteAgentMarketplaceTemplate,
   deleteConversation,
   deleteAllMemories as apiDeleteAllMemories,
   deleteMemory as apiDeleteMemory,
@@ -40,10 +40,11 @@ import {
   fetchAgents,
   fetchBuiltinAgents,
   fetchAgentRuns,
+  fetchSecurityCaptcha,
+  fetchSecurityChallenge,
   fetchAgentRun,
   fetchAgentEvaluations,
   fetchAgentStats,
-  fetchAgentTestRuns,
   fetchBillingLedger,
   fetchBillingRules,
   fetchConversations,
@@ -55,12 +56,11 @@ import {
   fetchUserLibraryFiles as apiFetchUserLibraryFiles,
   fetchMe,
   fetchMemories,
+  fetchMemoryProviders,
   fetchModels,
   fetchSkills,
   fetchSkillDetail,
   fetchAgentTeams,
-  fetchAgentTestCases,
-  fetchAgentTestSuites,
   fetchAgentVersions,
   fetchAgentMarketplaceTemplates,
   fetchMcpServers,
@@ -69,6 +69,7 @@ import {
   installAgentMarketplaceTemplate as apiInstallAgentMarketplaceTemplate,
   installBuiltinAgent as apiInstallBuiltinAgent,
   getStoredToken,
+  isCaptchaRequiredError,
   fetchTools,
   fetchWorkflows,
   listApiKeys,
@@ -79,7 +80,6 @@ import {
   revokeApiKey as apiRevokeApiKey,
   runAgent as apiRunAgent,
   runAgentTeam as apiRunAgentTeam,
-  runAgentTestSuite as apiRunAgentTestSuite,
   runWorkflow as apiRunWorkflow,
   sendVerificationCode,
   searchKnowledgeBase as apiSearchKnowledgeBase,
@@ -136,24 +136,24 @@ import {
   type AgentEvaluation,
   type AgentImprovementSuggestions,
   type AgentRun,
+  type AgentRunInput,
   type AgentRunStats,
   type AgentTeam,
   type AgentTeamRun,
-  type AgentTestCase,
-  type AgentTestRun,
-  type AgentTestSuite,
   type AgentVersion,
   type AgentVersionCompareResult,
   type AgentMarketplaceTemplate,
   type BuiltinAgentSpec,
   type ApiKeyItem,
   type AuthUser,
+  type BehaviorPayload,
   type BillingLedgerItem,
   type BillingRule,
   type ConversationSession,
   type DailyUsage,
   type ModelDescriptor,
   type ModelUsageStat,
+  type MemoryProviderInfo,
   type ProviderApiKeyRow,
   type ProviderKeyMetric,
   type ProviderKeyPoolMetric,
@@ -245,8 +245,18 @@ export function useAppController() {
   const authEmail = ref('');
   const authVerificationCode = ref('');
   const authInvitationCode = ref('');
+  const authTosAccepted = ref(false);
+  const authTosDialogOpen = ref(false);
   const authLoading = ref(false);
   const authError = ref('');
+  const authChallengeId = ref('');
+  const authBehaviorStartedAt = ref(Date.now());
+  const authBehavior = ref({ mouseMoveCount: 0, clickCount: 0, keydownCount: 0, focusCount: 0, blurCount: 0 });
+  const authCaptchaRequired = ref(false);
+  const authCaptchaId = ref('');
+  const authCaptchaImage = ref('');
+  const authCaptchaCode = ref('');
+  const authCaptchaLoading = ref(false);
   const codeCountdown = ref(0);
   let codeTimer: ReturnType<typeof setInterval> | null = null;
   const userInvitationCode = ref<string | null>(null);
@@ -276,10 +286,8 @@ export function useAppController() {
   const agentGenerating = ref(false);
   const agentPrompt = ref('');
   const agentImageUrlInput = ref('');
-  const agentInvokeMode = ref<'standard' | 'reflective' | 'fast'>('reflective');
-  const agentContextStrategy = ref<'balanced' | 'knowledge_first' | 'memory_first' | 'minimal'>('balanced');
   const agentInvokeMaxSteps = ref(6);
-  const agentInvokePanelTab = ref<'diagnosis' | 'trace' | 'history' | 'api'>('trace');
+  const agentInvokePanelTab = ref<'trace' | 'history'>('trace');
   const agentImageInputOpen = ref(false);
   const agentLastPrompt = ref('');
   const agentRunHistoryFilter = ref<'all' | 'succeeded' | 'failed'>('all');
@@ -288,11 +296,12 @@ export function useAppController() {
   const agentImprovementLoading = ref(false);
   const agentRuns = ref<AgentRun[]>([]);
   const activeAgentRun = ref<AgentRun | null>(null);
+  const agentConversationId = ref('');
   const activeAgentTraceStepId = ref<number | null>(null);
   const agentTraceReplayIndex = ref(0);
   const agentTraceReplayPlaying = ref(false);
   const agentWorkspaceMode = ref<'develop' | 'invoke'>('develop');
-  const agentPageTab = ref<'overview' | 'basic' | 'capabilities' | 'tools' | 'workflow' | 'collab' | 'integration' | 'publish' | 'prompt' | 'marketplace'>('basic');
+  const agentPageTab = ref<'starter' | 'overview' | 'basic' | 'capabilities' | 'tools' | 'workflow' | 'collab' | 'integration' | 'publish' | 'prompt' | 'marketplace'>('starter');
   const agentConsoleTab = ref<'history' | 'memory' | 'team' | 'workflow' | 'versions' | 'tests' | 'mcp' | 'eval'>('memory');
 
   // 使用DAG节点composable
@@ -308,9 +317,6 @@ export function useAppController() {
   const agentVersions = ref<AgentVersion[]>([]);
   const agentVersionCompare = ref<AgentVersionCompareResult | null>(null);
   const agentVersionCompareVisible = ref(false);
-  const agentTestSuites = ref<AgentTestSuite[]>([]);
-  const agentTestCases = ref<AgentTestCase[]>([]);
-  const agentTestRuns = ref<AgentTestRun[]>([]);
   const marketplaceTemplates = ref<AgentMarketplaceTemplate[]>([]);
   const builtinAgents = ref<BuiltinAgentSpec[]>([]);
   const agentResourceLoading = ref(false);
@@ -346,6 +352,15 @@ export function useAppController() {
   const settingsMemories = ref<MemoryItem[]>([]);
   const settingsMemoryLoading = ref(false);
   const settingsMemorySaving = ref(false);
+  const memoryTypeOptions = [
+    { label: '对话历史', value: 'messages' },
+    { label: '摘要记忆', value: 'summary' },
+    { label: '用户偏好', value: 'preference' },
+    { label: '事实记忆', value: 'fact' },
+    { label: '项目记忆', value: 'project' },
+    { label: '技能记忆', value: 'skill' },
+  ];
+  const memoryProviderInfo = ref<MemoryProviderInfo | null>(null);
   const settingsMemoryForm = ref({ content: '', importance: 3, namespace: 'manual', memoryType: 'fact' });
   const skillCreating = ref(false);
   const showSkillCreateDialog = ref(false);
@@ -353,8 +368,6 @@ export function useAppController() {
   const showTeamCreateDialog = ref(false);
   const showMcpCreateDialog = ref(false);
   const showMcpTestDialog = ref(false);
-  const showTestSuiteCreateDialog = ref(false);
-  const showTestCaseCreateDialog = ref(false);
   const showMarketplacePublishDialog = ref(false);
   const showVersionCreateDialog = ref(false);
   const showVersionPublishDialog = ref(false);
@@ -378,8 +391,6 @@ export function useAppController() {
   const mcpSaving = ref(false);
   const mcpTesting = ref(false);
   const versionSaving = ref(false);
-  const testSaving = ref(false);
-  const testRunning = ref(false);
   const marketplaceLoading = ref(false);
   const marketplaceInstalling = ref(false);
   const marketplacePublishing = ref(false);
@@ -389,13 +400,12 @@ export function useAppController() {
   const activeTeamId = ref('');
   const teamInput = ref('');
   const activeTeamRun = ref<AgentTeamRun | null>(null);
-  const activeTestSuiteId = ref('');
-  const activeTestRun = ref<AgentTestRun | null>(null);
   const activeMcpTestServerId = ref('');
   const agentEvaluations = ref<AgentEvaluation[]>([]);
   const agentStats = ref<AgentRunStats | null>(null);
   const agentEvaluationLoading = ref(false);
   const agentEvaluationSaving = ref(false);
+  const beginnerAssistTarget = ref<'goal' | 'success' | 'avoid' | 'sample' | ''>('');
   const evaluationForm = ref({
     expectedOutput: '',
     rubric: '',
@@ -409,6 +419,14 @@ export function useAppController() {
   const agentCreateWizardAdvancedOpen = ref<string[]>([]);
   const selectedAgentTemplateId = ref('general');
   const agentCreationGoal = ref('');
+  const beginnerAgentForm = ref({
+    audience: '',
+    job: '',
+    tone: '清楚、耐心、像同事一样说话',
+    success: '',
+    avoid: '',
+    sampleInput: '',
+  });
   const showAgentExportDialog = ref(false);
 
   // ===== Tool相关状态 =====
@@ -484,6 +502,7 @@ export function useAppController() {
   const dagNodeConfigVisible = ref(false);
   const activeDagNode = ref<any>(null);
   const dagNodeConfig = ref<Record<string, any>>({});
+  const dagNodeConfigErrors = ref<string[]>([]);
 
   const agentForm = ref({
     id: '',
@@ -495,10 +514,10 @@ export function useAppController() {
     maxTokens: 1024,
     memoryEnabled: true,
     toolIds: [] as string[],
-    toolPermissions: {} as Record<string, string>,
     knowledgeBaseIds: [] as string[],
     skillIds: [] as string[],
     workflowIds: [] as string[],
+    subAgentIds: [] as string[],
     published: false,
     apiEnabled: false,
     publicSlug: '',
@@ -528,6 +547,8 @@ export function useAppController() {
   const memoryForm = ref({
     content: '',
     importance: 3,
+    memoryType: 'fact',
+    scope: 'agent' as 'agent' | 'user_profile',
   });
   const editingMemoryId = ref('');
   const skillForm = ref({
@@ -545,7 +566,49 @@ export function useAppController() {
     description: '',
     strategy: 'sequential' as AgentTeam['strategy'],
     memberIds: [] as string[],
+    members: [] as Array<{ agentId: string; role: string; inputTemplate: string }>,
   });
+  const teamTemplates = [
+    {
+      id: 'review',
+      name: '评审团队',
+      description: '一个 Agent 产出，另一个 Agent 做质量审查和补全。',
+      strategy: 'review' as AgentTeam['strategy'],
+      roles: [
+        { role: '主执行 Agent', inputTemplate: '你负责完成用户原始任务。\n\n用户原始任务:\n{{originalInput}}\n\n请给出完整结果。' },
+        { role: '质量评审 Agent', inputTemplate: '你负责审查上一位 Agent 的输出。\n\n用户原始任务:\n{{originalInput}}\n\n上一位 Agent 输出:\n{{previousOutput}}\n\n请指出问题并给出改进后的最终版本。' },
+      ],
+    },
+    {
+      id: 'parallel',
+      name: '并行专家',
+      description: '多个 Agent 从不同视角同时分析，再由页面汇总对比。',
+      strategy: 'parallel' as AgentTeam['strategy'],
+      roles: [
+        { role: '事实核查专家', inputTemplate: '你担任事实核查专家。\n\n用户原始任务:\n{{originalInput}}\n\n请只输出事实依据、风险点和需要确认的信息。' },
+        { role: '方案设计专家', inputTemplate: '你担任方案设计专家。\n\n用户原始任务:\n{{originalInput}}\n\n请输出可执行方案、步骤和取舍。' },
+      ],
+    },
+    {
+      id: 'router',
+      name: '路由分发',
+      description: '根据输入内容选择最匹配的成员 Agent 执行。',
+      strategy: 'router' as AgentTeam['strategy'],
+      roles: [
+        { role: '问题分流 Agent', inputTemplate: '你是被路由选中的 {{role}}。\n\n用户原始任务:\n{{originalInput}}\n\n请直接完成最匹配你角色能力的任务。' },
+      ],
+    },
+    {
+      id: 'consensus',
+      name: '共识总结',
+      description: '多个 Agent 独立输出，再合并成共识结果。',
+      strategy: 'consensus' as AgentTeam['strategy'],
+      roles: [
+        { role: '正向方案专家', inputTemplate: '你从可行性和收益角度分析。\n\n用户原始任务:\n{{originalInput}}\n\n请输出支持方案、依据和执行建议。' },
+        { role: '风险挑战专家', inputTemplate: '你从风险、遗漏和反例角度分析。\n\n用户原始任务:\n{{originalInput}}\n\n请输出主要风险、挑战和修正建议。' },
+      ],
+    },
+  ];
   const mcpForm = ref({
     name: 'Notion',
     serverType: 'notion' as 'notion',
@@ -564,53 +627,10 @@ export function useAppController() {
     compareLeftId: '',
     compareRightId: '',
   });
-  const testSuiteForm = ref({
-    name: '',
-    description: '',
-  });
-  const testCaseForm = ref({
-    name: '',
-    input: '',
-    expectedOutput: '',
-    rubric: '',
-  });
   const marketplaceForm = ref({
     name: '',
     description: '',
     category: '',
-  });
-  type AgentBuilderBlockType = 'identity' | 'model' | 'tools' | 'skills' | 'knowledge' | 'memory' | 'prompt' | 'constraints';
-  interface AgentBuilderBlock {
-    type: AgentBuilderBlockType;
-    title: string;
-    detail: string;
-    icon: string;
-    category: 'core' | 'ability' | 'config';
-  }
-  const agentBuilderBlocks: AgentBuilderBlock[] = [
-    { type: 'identity', title: '角色设定', detail: '自动生成名称、描述和系统提示词', icon: '👤', category: 'core' },
-    { type: 'model', title: '选择模型', detail: '绑定当前默认语言模型', icon: '🤖', category: 'core' },
-    { type: 'prompt', title: '提示词模板', detail: '预设常用提示词结构', icon: '📝', category: 'core' },
-    { type: 'tools', title: '基础工具', detail: '挂载时间、计算、文本统计工具', icon: '🔧', category: 'ability' },
-    { type: 'skills', title: '能力包', detail: '挂载研究、代码、数据分析能力', icon: '⚡', category: 'ability' },
-    { type: 'knowledge', title: '知识库', detail: '挂载第一个可用知识库', icon: '📚', category: 'ability' },
-    { type: 'memory', title: '长期记忆', detail: '开启长期记忆功能', icon: '🧠', category: 'config' },
-    { type: 'constraints', title: '安全约束', detail: '添加输出限制和安全边界', icon: '🛡️', category: 'config' },
-  ];
-  const agentBuilderCanvas = ref<AgentBuilderBlock[]>([]);
-  const agentBuilderDragging = ref<AgentBuilderBlockType | ''>('');
-  const agentBuilderSkillDragging = ref('');
-  const showBuilderGuide = ref(false);
-  const activeBuilderBlock = ref<AgentBuilderBlockType | null>(null);
-  const builderBlockConfigs = ref<Record<string, any>>({
-    identity: { name: '', description: '', prompt: '' },
-    model: { model: '' },
-    prompt: { template: 'default' },
-    tools: { selected: [] },
-    skills: { selected: [] },
-    knowledge: { selected: [] },
-    memory: { enabled: true },
-    constraints: { rules: '' },
   });
   const agentCreationTemplates = [
     {
@@ -750,7 +770,8 @@ export function useAppController() {
   const workflowCanvasEdges = computed(() => {
     const byId = new Map(workflowCanvasNodes.value.map((node) => [node.id, node]));
     return workflowCanvasNodes.value.flatMap((node) => {
-      const nextIds = Array.isArray(node.config.nextIds) ? node.config.nextIds.map(String) : [];
+      const config = node.config ?? {};
+      const nextIds = Array.isArray(config.nextIds) ? config.nextIds.map(String) : [];
       return nextIds
         .map((nextId) => {
           const target = byId.get(nextId);
@@ -814,13 +835,39 @@ export function useAppController() {
     {
       step: '4',
       title: '测试发布',
-      detail: agentForm.value.published ? '已发布，可通过 API 接入' : '创建测试集后再发布',
+      detail: agentForm.value.published ? '已发布，可通过 API 接入' : '保存后可稳定发布并同步市场',
       status: agentForm.value.published ? 'done' : 'todo',
     },
   ]);
 
-  watch(activeTestSuiteId, () => {
-    void loadSelectedTestCases();
+  const beginnerAgentPlainGuide = computed(() => {
+    const template = resolveAgentTemplate();
+    const name = agentForm.value.name || template.name;
+    const job = beginnerAgentForm.value.job.trim() || agentCreationGoal.value.trim() || agentForm.value.description || template.description;
+    const abilityParts = [
+      agentForm.value.knowledgeBaseIds.length ? '查你选的知识库' : '',
+      agentForm.value.toolIds.length ? '调用工具处理信息' : '',
+      agentForm.value.skillIds.length ? '使用能力包完成专门任务' : '',
+      agentForm.value.memoryEnabled ? '记住长期偏好和背景' : '',
+    ].filter(Boolean);
+    return {
+      title: `${name} 可以帮你做什么`,
+      does: job || '把你交代的任务拆清楚，然后给出可直接使用的结果。',
+      howToUse: agentPrompt.value.trim()
+        ? `保存后你可以直接这样试：${agentPrompt.value.trim()}`
+        : `保存后，在调用页输入一句具体任务，例如：${template.example}`,
+      abilities: abilityParts.length ? abilityParts.join('、') : '先用基础对话能力工作，之后可以再加知识库、工具或技能。',
+      safety: beginnerAgentForm.value.avoid.trim() || '遇到不确定的信息会说明不确定，不会装作知道。',
+    };
+  });
+
+  const beginnerAgentProgress = computed(() => {
+    let done = 0;
+    if (selectedAgentTemplateId.value) done += 1;
+    if (beginnerAgentForm.value.job.trim() || agentCreationGoal.value.trim()) done += 1;
+    if (agentForm.value.name.trim() && agentForm.value.description.trim() && agentForm.value.systemPrompt.trim()) done += 1;
+    if (agentPrompt.value.trim()) done += 1;
+    return done;
   });
 
   watch(() => knowledgeDocForm.value.kbId, (kbId) => {
@@ -834,6 +881,17 @@ export function useAppController() {
   watch(activeWorkflowId, () => {
     syncWorkflowCanvasFromSelected();
   });
+
+  watch(agentPageTab, (tab) => {
+    if (tab === 'starter' && (agentCreateWizardStep.value < 0 || agentCreateWizardStep.value > 3)) {
+      agentCreateWizardStep.value = 0;
+    }
+  });
+
+  watch(dagNodeConfig, (config) => {
+    if (!dagNodeConfigVisible.value || !activeDagNode.value) return;
+    dagNodeConfigErrors.value = validateDagNodeConfig(String(activeDagNode.value.type), config);
+  }, { deep: true });
 
   // API Docs
   const apiKeys = ref<Array<{ id: string; name: string; maskedKey: string; fullKey?: string; createdAt: string }>>([]);
@@ -1039,6 +1097,17 @@ export function useAppController() {
   const adminEditUserCredits = ref(0);
   const adminEditUserRole = ref('user');
   const adminEditUserUsername = ref('');
+  const adminEditUserEmailVerified = ref(false);
+  const adminCreateUserDialog = ref(false);
+  const adminCreateUserForm = ref({
+    username: '',
+    email: '',
+    password: '',
+    role: 'user',
+    credits: 20,
+    emailVerified: true,
+  });
+  const adminCreateUserSaving = ref(false);
   const adminTab = ref<'dashboard' | 'users' | 'billing' | 'modelstats' | 'modeltiers' | 'providers' | 'apikeys' | 'settings' | 'router'>('dashboard');
   const adminDailyUsage = ref<DailyUsage[]>([]);
   const adminChartDays = ref(30);
@@ -1083,9 +1152,10 @@ export function useAppController() {
   const adminEditSettingTagFilter = ref('');
   const adminEditSettingTextMode = ref(false);
 
+  const realModels = computed(() => models.value.filter((m) => m.id !== 'auto'));
   const filteredModelsForSetting = computed(() => {
-    if (!adminEditSettingTagFilter.value) return models.value;
-    const filtered = models.value.filter((m) => getModelTags(m.id).includes(adminEditSettingTagFilter.value));
+    if (!adminEditSettingTagFilter.value) return realModels.value;
+    const filtered = realModels.value.filter((m) => getModelTags(m.id).includes(adminEditSettingTagFilter.value));
     return filtered;
   });
   const consoleDailyUsage = ref<DailyUsage[]>([]);
@@ -1328,10 +1398,10 @@ export function useAppController() {
       maxTokens: 1024,
       memoryEnabled: true,
       toolIds: [],
-      toolPermissions: {},
       knowledgeBaseIds: [],
       skillIds: [],
       workflowIds: [],
+      subAgentIds: [],
       published: false,
       apiEnabled: false,
       publicSlug: '',
@@ -1339,6 +1409,7 @@ export function useAppController() {
     };
     agentRuns.value = [];
     activeAgentRun.value = null;
+    agentConversationId.value = '';
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
@@ -1357,16 +1428,23 @@ export function useAppController() {
       maxTokens: Number(agent.maxTokens),
       memoryEnabled: agent.memoryEnabled !== false,
       toolIds: [...(agent.toolIds ?? [])],
-      toolPermissions: {},
       knowledgeBaseIds: [...(agent.knowledgeBaseIds ?? [])],
       skillIds: [...(agent.skillIds ?? [])],
       workflowIds: [...(agent.workflowIds ?? [])],
+      subAgentIds: [...(agent.subAgentIds ?? [])],
       published: agent.published === true,
       apiEnabled: agent.apiEnabled === true,
       publicSlug: agent.publicSlug ?? '',
       status: agent.status,
     };
     activeWorkflowId.value = agentForm.value.workflowIds[0] ?? '';
+    if (activeWorkflowId.value && workflows.value.some((item) => item.id === activeWorkflowId.value)) {
+      syncWorkflowCanvasFromSelected();
+    } else {
+      workflowCanvasNodes.value = [];
+      workflowCanvasConnecting.value = '';
+      workflowCanvasDrag.value = null;
+    }
   }
 
   async function refreshAgentStudio() {
@@ -1385,8 +1463,6 @@ export function useAppController() {
       agentTeams.value = [];
       mcpServers.value = [];
       agentVersions.value = [];
-      agentTestSuites.value = [];
-      agentTestCases.value = [];
       marketplaceTemplates.value = [];
       builtinAgents.value = [];
       customTools.value = [];
@@ -1434,7 +1510,6 @@ export function useAppController() {
       await loadAgentMemories();
       await loadAgentEvaluations();
       await loadAgentVersions();
-      await loadAgentTestSuites();
       if (knowledgeDocForm.value.kbId) await loadKnowledgeDocuments(knowledgeDocForm.value.kbId);
       await loadUserLibraryFiles();
     } catch (error) {
@@ -1489,28 +1564,6 @@ export function useAppController() {
     }
   }
 
-  async function loadAgentTestSuites(agentId = agentForm.value.id) {
-    if (!isAuthenticated.value || !agentId) {
-      agentTestSuites.value = [];
-      agentTestCases.value = [];
-      agentTestRuns.value = [];
-      activeTestSuiteId.value = '';
-      return;
-    }
-    try {
-      agentTestSuites.value = await fetchAgentTestSuites(agentId, backendBaseUrl.value);
-      if (!activeTestSuiteId.value && agentTestSuites.value[0]) {
-        activeTestSuiteId.value = agentTestSuites.value[0].id;
-      }
-      if (activeTestSuiteId.value) {
-        agentTestCases.value = await fetchAgentTestCases(activeTestSuiteId.value, backendBaseUrl.value);
-        agentTestRuns.value = await fetchAgentTestRuns(activeTestSuiteId.value, backendBaseUrl.value);
-      }
-    } catch (error) {
-      console.error('[loadAgentTestSuites] failed:', error);
-    }
-  }
-
   async function loadAgents() {
     if (!isAuthenticated.value) {
       agents.value = [];
@@ -1530,7 +1583,6 @@ export function useAppController() {
         await loadAgentMemories(next.id);
         await loadAgentEvaluations(next.id);
         await loadAgentVersions(next.id);
-        await loadAgentTestSuites(next.id);
       } else {
         activeAgentId.value = '';
         resetAgentForm();
@@ -1547,6 +1599,7 @@ export function useAppController() {
     if (!agentId || !isAuthenticated.value) {
       agentRuns.value = [];
       activeAgentRun.value = null;
+      agentConversationId.value = '';
       activeAgentTraceStepId.value = null;
       return;
     }
@@ -1558,6 +1611,7 @@ export function useAppController() {
     try {
       agentRuns.value = (await fetchAgentRuns(agentId, backendBaseUrl.value)).filter((run) => run.agentId === agentId);
       activeAgentRun.value = agentRuns.value[0] ?? activeAgentRun.value;
+      agentConversationId.value = activeAgentRun.value?.conversationId || activeAgentRun.value?.id || agentConversationId.value;
       activeAgentTraceStepId.value = activeAgentRun.value?.steps[0]?.id ?? null;
     } catch (error) {
       console.error('[loadAgentRuns] failed:', error);
@@ -1570,9 +1624,17 @@ export function useAppController() {
     agentCreateWizardStep.value = 0;
     selectedAgentTemplateId.value = 'general';
     agentCreationGoal.value = '';
+    beginnerAgentForm.value = {
+      audience: '',
+      job: '',
+      tone: '清楚、耐心、像同事一样说话',
+      success: '',
+      avoid: '',
+      sampleInput: '',
+    };
     agentCreateWizardAdvancedOpen.value = [];
     agentWorkspaceMode.value = 'develop';
-    agentPageTab.value = 'basic';
+    agentPageTab.value = 'starter';
     status.value = '已创建本地 Agent 草稿';
   }
 
@@ -1618,6 +1680,249 @@ export function useAppController() {
     status.value = `已应用模板：${template.name}`;
   }
 
+  function applyBeginnerExample(templateId = selectedAgentTemplateId.value) {
+    selectedAgentTemplateId.value = templateId;
+    const examples: Record<string, typeof beginnerAgentForm.value> = {
+      general: {
+        audience: '我自己和团队同事',
+        job: '把零散想法整理成清楚的行动计划、总结和回复草稿。',
+        tone: '清楚、直接、像可靠同事一样说话',
+        success: '输出有结论、有步骤、有下一步，不绕弯。',
+        avoid: '不要编造事实，不确定时提醒我补充信息。',
+        sampleInput: '把这段需求整理成三条结论和下一步计划。',
+      },
+      support: {
+        audience: '第一次咨询产品的客户',
+        job: '根据产品资料回答客户问题，整理可直接发送的客服回复。',
+        tone: '耐心、专业、友好',
+        success: '回答准确，能说明下一步处理方式，客户看得懂。',
+        avoid: '不要承诺资料里没有的政策，缺少信息时先问清楚。',
+        sampleInput: '客户问退款规则，请给一段可以直接发送的回复。',
+      },
+      research: {
+        audience: '需要快速了解一个主题的业务同事',
+        job: '把资料拆成问题、观点、证据和结论，帮助我做判断。',
+        tone: '严谨、客观、少废话',
+        success: '能列出关键结论、依据、风险和还要验证的点。',
+        avoid: '不要只给泛泛建议，必须说明判断依据。',
+        sampleInput: '帮我整理这个主题的调研提纲和关键问题。',
+      },
+      code: {
+        audience: '需要理解代码问题的开发者',
+        job: '解释报错、梳理实现方案，给出最小可行修改建议。',
+        tone: '专业、简洁、先结论后细节',
+        success: '能说清原因、改哪里、怎么验证。',
+        avoid: '不要大改架构，除非明确说明原因和风险。',
+        sampleInput: '分析这个报错原因，并给出最小修复方案。',
+      },
+      data: {
+        audience: '看业务指标的运营或产品同事',
+        job: '解释表格和指标变化，找异常、原因和下一步建议。',
+        tone: '清楚、客观、用业务语言解释',
+        success: '能指出变化、可能原因、证据和建议动作。',
+        avoid: '不要只报数字，要解释这些数字意味着什么。',
+        sampleInput: '分析这组指标，找出异常变化和可能原因。',
+      },
+      workflow: {
+        audience: '需要把复杂任务拆成步骤的人',
+        job: '把任务拆成步骤，判断每一步要用知识库、工具还是人工确认。',
+        tone: '有条理、明确、可执行',
+        success: '能输出执行计划、所需能力和检查点。',
+        avoid: '不要跳过风险步骤，关键动作要提醒确认。',
+        sampleInput: '把这个任务拆成执行计划，并说明每一步需要什么工具。',
+      },
+    };
+    beginnerAgentForm.value = { ...(examples[templateId] ?? examples.general) };
+    agentCreationGoal.value = beginnerAgentForm.value.job;
+    applyBeginnerFormToAgent();
+    status.value = '已填入一套可修改的新手示例';
+  }
+
+  function buildBeginnerRequirement() {
+    const template = resolveAgentTemplate();
+    const form = beginnerAgentForm.value;
+    const lines = [
+      `场景模板：${template.name}`,
+      `服务对象：${form.audience || '普通用户'}`,
+      `要帮我做的事：${form.job || agentCreationGoal.value || template.description}`,
+      `说话风格：${form.tone || '清楚、耐心、直接'}`,
+      `怎样算做好：${form.success || '输出清楚、准确、可执行'}`,
+      `不要做什么：${form.avoid || '不要编造事实，不确定时说明需要补充信息'}`,
+      `试运行输入：${form.sampleInput || template.example}`,
+    ];
+    return lines.join('\n');
+  }
+
+  function applyBeginnerFormToAgent() {
+    const template = resolveAgentTemplate();
+    const form = beginnerAgentForm.value;
+    const defaultModel = agentForm.value.model || (selectedModel.value && selectedModel.value !== 'auto'
+      ? selectedModel.value
+      : (chatModels.value[0]?.id || models.value[0]?.id || ''));
+    const plainJob = form.job.trim() || agentCreationGoal.value.trim() || template.description;
+    const audience = form.audience.trim() || '使用者';
+    const tone = form.tone.trim() || '清楚、耐心、直接';
+    const success = form.success.trim() || '回答准确、步骤清楚、结果可直接使用';
+    const avoid = form.avoid.trim() || '不要编造事实；不确定时说明需要补充的信息';
+    agentCreationGoal.value = plainJob;
+    agentForm.value.name = agentForm.value.name && agentForm.value.name !== '新建 Agent'
+      ? agentForm.value.name
+      : template.name;
+    agentForm.value.description = plainJob;
+    agentForm.value.model = defaultModel;
+    agentForm.value.systemPrompt = [
+      template.prompt,
+      '',
+      '# 服务对象',
+      audience,
+      '',
+      '# 要完成的事',
+      plainJob,
+      '',
+      '# 说话方式',
+      tone,
+      '',
+      '# 做好的标准',
+      success,
+      '',
+      '# 边界',
+      avoid,
+      '',
+      '# 输出要求',
+      '- 先说结论，再给步骤或建议。',
+      '- 用用户听得懂的大白话解释。',
+      '- 需要用户补充信息时，直接列出要问的问题。',
+    ].join('\n');
+    agentForm.value.temperature = template.temperature;
+    agentForm.value.maxTokens = template.maxTokens;
+    agentForm.value.memoryEnabled = template.memoryEnabled;
+    agentForm.value.toolIds = Array.from(new Set([...agentForm.value.toolIds, ...resolveToolIdsByNames(template.toolNames)]));
+    agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, ...resolveSkillIdsByNames(template.skillNames)]));
+    if (knowledgeBases.value[0] && ['support', 'research', 'workflow'].includes(template.id)) {
+      agentForm.value.knowledgeBaseIds = Array.from(new Set([...agentForm.value.knowledgeBaseIds, knowledgeBases.value[0].id]));
+    }
+    agentPrompt.value = form.sampleInput.trim() || template.example;
+  }
+
+  async function generateBeginnerAgentDraft() {
+    if (agentGenerating.value) return;
+    const model = agentForm.value.model || selectedModel.value || chatModels.value[0]?.id || models.value[0]?.id || '';
+    if (!model || model === 'auto') {
+      status.value = '请先选择一个具体模型，AI 才能帮你生成草稿';
+      return;
+    }
+    agentGenerating.value = true;
+    try {
+      const generated = await apiGenerateAgent({
+        requirement: buildBeginnerRequirement(),
+        model,
+        persist: false,
+      }, backendBaseUrl.value) as any;
+      agentForm.value.name = generated.name || agentForm.value.name || resolveAgentTemplate().name;
+      agentForm.value.description = generated.description || agentForm.value.description;
+      agentForm.value.model = model;
+      agentForm.value.systemPrompt = generated.systemPrompt || agentForm.value.systemPrompt;
+      agentForm.value.temperature = Number(generated.temperature ?? agentForm.value.temperature);
+      agentForm.value.maxTokens = Number(generated.maxTokens ?? agentForm.value.maxTokens);
+      agentForm.value.memoryEnabled = generated.memoryEnabled !== false;
+      agentForm.value.toolIds = Array.from(new Set([...(generated.toolIds ?? []), ...agentForm.value.toolIds]));
+      agentForm.value.skillIds = Array.from(new Set([...(generated.skillIds ?? []), ...agentForm.value.skillIds]));
+      if (!agentPrompt.value.trim()) agentPrompt.value = beginnerAgentForm.value.sampleInput || resolveAgentTemplate().example;
+      agentCreateWizardStep.value = 2;
+      status.value = 'AI 已生成可编辑草稿，还没有保存';
+    } catch (error) {
+      applyBeginnerFormToAgent();
+      status.value = error instanceof Error ? `${error.message}，已先用本地规则补全草稿` : 'AI 生成失败，已先用本地规则补全草稿';
+    } finally {
+      agentGenerating.value = false;
+    }
+  }
+
+  function fallbackImproveBeginnerText(target: 'goal' | 'success' | 'avoid' | 'sample') {
+    const template = resolveAgentTemplate();
+    const form = beginnerAgentForm.value;
+    if (target === 'goal') {
+      form.job = form.job.trim()
+        ? `${form.job.trim()}。处理时先判断用户真正想要什么，再给出可直接使用的结果。`
+        : template.description;
+    } else if (target === 'success') {
+      form.success = form.success.trim()
+        ? `${form.success.trim()}；输出要让新手也知道下一步该做什么。`
+        : '回答准确、结构清楚、能直接复制使用；缺少信息时会主动追问。';
+    } else if (target === 'avoid') {
+      form.avoid = form.avoid.trim()
+        ? `${form.avoid.trim()}；不要编造资料里没有的信息。`
+        : '不要编造事实，不要跳过关键限制，不确定时先说明原因并提问。';
+    } else {
+      form.sampleInput = form.sampleInput.trim() || template.example;
+    }
+    applyBeginnerFormToAgent();
+  }
+
+  async function completeBeginnerAssist(prompt: string, model: string) {
+    let output = '';
+    await streamCompletion(
+      {
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: '你是一个帮助新手搭建 AI Agent 的产品文案助手。只输出用户要填进表单的一段中文，不要 Markdown，不要解释。',
+          },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.35,
+        max_tokens: 220,
+      },
+      {
+        onChunk: (chunk) => {
+          const token = chunk.choices?.[0]?.delta?.content;
+          if (token) output += token;
+        },
+      },
+      backendBaseUrl.value,
+      new AbortController().signal,
+    );
+    return output.trim().replace(/^["“]|["”]$/g, '');
+  }
+
+  async function improveBeginnerText(target: 'goal' | 'success' | 'avoid' | 'sample') {
+    if (beginnerAssistTarget.value) return;
+    const model = agentForm.value.model || selectedModel.value || chatModels.value[0]?.id || models.value[0]?.id || '';
+    if (!model || model === 'auto') {
+      fallbackImproveBeginnerText(target);
+      status.value = '未选择具体模型，已先用本地规则补全';
+      return;
+    }
+    const template = resolveAgentTemplate();
+    const current = buildBeginnerRequirement();
+    const prompts: Record<typeof target, string> = {
+      goal: `请基于以下信息，扩写“它要帮你做什么”这个字段。要求：一句到两句，大白话，具体、可执行，不超过80字。\n${current}`,
+      success: `请基于以下信息，生成“怎样算做得好”这个字段。要求：列出清楚的成功标准，一句话，不超过80字。\n${current}`,
+      avoid: `请基于以下信息，生成“哪些事不要做”这个字段。要求：写清边界和不确定时怎么处理，一句话，不超过80字。\n${current}`,
+      sample: `请基于以下 Agent 场景，生成一个适合保存后试运行的用户输入。要求：像真实用户会输入的一句话，不超过60字。\n默认示例：${template.example}\n${current}`,
+    };
+    beginnerAssistTarget.value = target;
+    try {
+      const text = await completeBeginnerAssist(prompts[target], model);
+      if (!text) throw new Error('模型返回为空');
+      if (target === 'goal') beginnerAgentForm.value.job = text;
+      else if (target === 'success') beginnerAgentForm.value.success = text;
+      else if (target === 'avoid') beginnerAgentForm.value.avoid = text;
+      else {
+        beginnerAgentForm.value.sampleInput = text;
+        agentPrompt.value = text;
+      }
+      applyBeginnerFormToAgent();
+      status.value = 'AI 已补全当前字段';
+    } catch (error) {
+      fallbackImproveBeginnerText(target);
+      status.value = error instanceof Error ? `${error.message}，已用本地规则补全` : 'AI 补全失败，已用本地规则补全';
+    } finally {
+      beginnerAssistTarget.value = '';
+    }
+  }
+
   function nextAgentWizardStep() {
     if (agentCreateWizardStep.value === 0) {
       applyAgentTemplate();
@@ -1651,217 +1956,25 @@ export function useAppController() {
     fillAgentForm(agent);
     agentRuns.value = [];
     activeAgentRun.value = null;
+    agentConversationId.value = '';
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
     agentImprovementSuggestions.value = null;
     agentInvokePanelTab.value = 'trace';
+    workflowCanvasNodes.value = [];
+    workflowCanvasConnecting.value = '';
+    workflowCanvasDrag.value = null;
+    activeWorkflowRun.value = null;
     void loadAgentRuns(agent.id);
     void loadAgentMemories(agent.id);
     void loadAgentEvaluations(agent.id);
     void loadAgentVersions(agent.id);
-    void loadAgentTestSuites(agent.id);
   }
 
   function selectAgentById(agentId: string) {
     const agent = agents.value.find((item) => item.id === agentId);
     if (agent) selectAgent(agent);
-  }
-
-  function startAgentBuilderDrag(block: AgentBuilderBlock) {
-    agentBuilderDragging.value = block.type;
-    agentBuilderSkillDragging.value = '';
-  }
-
-  function startSkillBuilderDrag(skill: SkillDefinition) {
-    agentBuilderSkillDragging.value = skill.id;
-    agentBuilderDragging.value = '';
-  }
-
-  function dropAgentBuilderBlock() {
-    if (agentBuilderSkillDragging.value) {
-      const skill = availableSkills.value.find((item) => item.id === agentBuilderSkillDragging.value);
-      if (skill) {
-        agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, skill.id]));
-        if (!agentBuilderCanvas.value.some((item) => item.type === 'skills')) {
-          const block = agentBuilderBlocks.find((item) => item.type === 'skills');
-          if (block) agentBuilderCanvas.value = [...agentBuilderCanvas.value, block];
-        }
-        status.value = `已拖入 Skill：${skill.name}`;
-      }
-      agentBuilderSkillDragging.value = '';
-      return;
-    }
-    const type = agentBuilderDragging.value;
-    if (!type) return;
-    const block = agentBuilderBlocks.find((item) => item.type === type);
-    if (!block) return;
-    if (!agentBuilderCanvas.value.some((item) => item.type === type)) {
-      agentBuilderCanvas.value = [...agentBuilderCanvas.value, block];
-    }
-    agentBuilderDragging.value = '';
-  }
-
-  function removeAgentBuilderBlock(type: AgentBuilderBlockType) {
-    agentBuilderCanvas.value = agentBuilderCanvas.value.filter((item) => item.type !== type);
-  }
-
-  function clearAgentBuilderCanvas() {
-    agentBuilderCanvas.value = [];
-    agentBuilderSkillDragging.value = '';
-  }
-
-  function applyAgentBuilder() {
-    if (agentBuilderCanvas.value.length === 0) {
-      status.value = '请先拖入至少一个 Agent 模块';
-      return;
-    }
-
-    const selectedTypes = new Set(agentBuilderCanvas.value.map((item) => item.type));
-    if (selectedTypes.has('identity')) {
-      agentForm.value.name = agentForm.value.id ? agentForm.value.name : '拖拽生成 Agent';
-      agentForm.value.description = '由 Agent Builder 组合生成，可继续微调工具、知识库和提示词。';
-      agentForm.value.systemPrompt = [
-        '你是一个任务型 AI Agent。',
-        '你会先理解用户目标，再按步骤调用可用工具、参考知识库和长期记忆。',
-        '输出时先给结论，再给关键步骤和可执行结果。',
-      ].join('\n');
-    }
-
-    if (selectedTypes.has('model')) {
-      const defaultModel = selectedModel.value && selectedModel.value !== 'auto'
-        ? selectedModel.value
-        : (chatModels.value[0]?.id || models.value[0]?.id || '');
-      if (defaultModel) agentForm.value.model = defaultModel;
-    }
-
-    if (selectedTypes.has('tools')) {
-      const preferred = ['current_time', 'calculator', 'text_stats', 'javascript_runner'];
-      const preferredIds = availableTools.value
-        .filter((tool) => preferred.includes(tool.name))
-        .map((tool) => tool.id);
-      agentForm.value.toolIds = Array.from(new Set([...agentForm.value.toolIds, ...preferredIds]));
-    }
-
-    if (selectedTypes.has('skills')) {
-      const preferred = ['Research Planner', 'Code Operator', 'Data Analyst', 'Workflow Orchestrator'];
-      const preferredIds = availableSkills.value
-        .filter((skill) => preferred.includes(skill.name))
-        .map((skill) => skill.id);
-      agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, ...preferredIds]));
-    }
-
-    if (selectedTypes.has('knowledge')) {
-      const kbId = knowledgeBases.value[0]?.id;
-      if (kbId && !agentForm.value.knowledgeBaseIds.includes(kbId)) {
-        agentForm.value.knowledgeBaseIds = [...agentForm.value.knowledgeBaseIds, kbId];
-      }
-    }
-
-    if (selectedTypes.has('memory')) {
-      agentForm.value.memoryEnabled = true;
-    }
-
-    if (selectedTypes.has('prompt')) {
-      if (!agentForm.value.systemPrompt || agentForm.value.systemPrompt.trim() === '') {
-        agentForm.value.systemPrompt = [
-          '# 角色',
-          '你是一个专业的 AI 助手。',
-          '',
-          '# 目标',
-          '帮助用户完成任务，提供准确、有用的回答。',
-          '',
-          '# 输出格式',
-          '- 使用清晰的结构化格式',
-          '- 先给出结论，再补充细节',
-          '',
-          '# 约束',
-          '- 遵循安全准则',
-          '- 不确定时说明原因',
-        ].join('\n');
-      }
-    }
-
-    if (selectedTypes.has('constraints')) {
-      const currentPrompt = agentForm.value.systemPrompt || '';
-      if (!currentPrompt.includes('# 安全约束')) {
-        agentForm.value.systemPrompt = currentPrompt + '\n\n# 安全约束\n- 不生成有害内容\n- 保护用户隐私\n- 遵循伦理准则';
-      }
-    }
-
-    if (selectedTypes.has('run')) {
-      agentPrompt.value = '请基于你的角色设定、可用工具、知识库和长期记忆，给出一份当前能力说明和一次示例执行。';
-    }
-
-    status.value = `已应用 ${agentBuilderCanvas.value.length} 个 Builder 模块`;
-  }
-
-  function applyBuilderConfigs() {
-    const configs = builderBlockConfigs.value;
-    
-    if (agentBuilderCanvas.value.some(b => b.type === 'identity')) {
-      if (configs.identity.name) agentForm.value.name = configs.identity.name;
-      if (configs.identity.description) agentForm.value.description = configs.identity.description;
-      if (configs.identity.prompt) agentForm.value.systemPrompt = configs.identity.prompt;
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'model')) {
-      if (configs.model.model) agentForm.value.model = configs.model.model;
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'prompt')) {
-      const templates: Record<string, string> = {
-        general: '你是一个专业的 AI 助手，帮助用户完成各种任务。',
-        code: '你是一个代码专家，精通多种编程语言，帮助用户编写、调试和优化代码。',
-        research: '你是一个研究分析师，擅长收集信息、分析数据并提供洞察。',
-        support: '你是一个客服支持专员，耐心解答用户问题并提供解决方案。',
-      };
-      agentForm.value.systemPrompt = templates[configs.prompt.template] || templates.general;
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'tools')) {
-      if (configs.tools.selected.length > 0) {
-        agentForm.value.toolIds = Array.from(new Set([...agentForm.value.toolIds, ...configs.tools.selected]));
-      } else {
-        const preferred = ['current_time', 'calculator', 'text_stats', 'javascript_runner'];
-        const preferredIds = availableTools.value.filter(t => preferred.includes(t.name)).map(t => t.id);
-        agentForm.value.toolIds = Array.from(new Set([...agentForm.value.toolIds, ...preferredIds]));
-      }
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'skills')) {
-      if (configs.skills.selected.length > 0) {
-        agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, ...configs.skills.selected]));
-      } else {
-        const preferred = ['Research Planner', 'Code Operator', 'Data Analyst'];
-        const preferredIds = availableSkills.value.filter(s => preferred.includes(s.name)).map(s => s.id);
-        agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, ...preferredIds]));
-      }
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'knowledge')) {
-      if (configs.knowledge.selected.length > 0) {
-        agentForm.value.knowledgeBaseIds = Array.from(new Set([...agentForm.value.knowledgeBaseIds, ...configs.knowledge.selected]));
-      } else {
-        const kbId = knowledgeBases.value[0]?.id;
-        if (kbId) agentForm.value.knowledgeBaseIds = Array.from(new Set([...agentForm.value.knowledgeBaseIds, kbId]));
-      }
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'memory')) {
-      agentForm.value.memoryEnabled = configs.memory.enabled;
-    }
-
-    if (agentBuilderCanvas.value.some(b => b.type === 'constraints')) {
-      const rules = configs.constraints.rules || '- 不生成有害内容\n- 保护用户隐私\n- 遵循伦理准则';
-      const currentPrompt = agentForm.value.systemPrompt || '';
-      if (!currentPrompt.includes('# 安全约束')) {
-        agentForm.value.systemPrompt = currentPrompt + '\n\n# 安全约束\n' + rules;
-      }
-    }
-
-    status.value = `已应用 ${agentBuilderCanvas.value.length} 个组件配置`;
-    activeBuilderBlock.value = null;
   }
 
   async function persistAgent(): Promise<AgentDefinition | null> {
@@ -1887,10 +2000,10 @@ export function useAppController() {
         maxTokens: agentForm.value.maxTokens,
         memoryEnabled: agentForm.value.memoryEnabled,
         toolIds: [...agentForm.value.toolIds],
-        toolPermissions: { ...agentForm.value.toolPermissions },
         knowledgeBaseIds: [...agentForm.value.knowledgeBaseIds],
         skillIds: [...agentForm.value.skillIds],
         workflowIds: [...agentForm.value.workflowIds],
+        subAgentIds: [...agentForm.value.subAgentIds],
       };
       const updatePayload = {
         ...basePayload,
@@ -2013,19 +2126,41 @@ export function useAppController() {
     }
   }
 
+  function upsertMarketplaceTemplate(template: AgentMarketplaceTemplate) {
+    const sourceAgentId = String(template.sourceAgentId || '');
+    const templateName = String(template.name || '').trim().toLowerCase();
+    marketplaceTemplates.value = [
+      template,
+      ...marketplaceTemplates.value.filter((item) => {
+        const sameId = item.id === template.id;
+        const sameSourceAgent = String(item.sourceAgentId || '') === sourceAgentId;
+        const sameName = String(item.name || '').trim().toLowerCase() === templateName;
+        return !sameId && !(sameSourceAgent && sameName);
+      }),
+    ];
+  }
+
+  async function syncAgentMarketplaceTemplate(
+    agent: AgentDefinition,
+    options: { name?: string; description?: string; category?: string } = {},
+  ) {
+    const name = (options.name?.trim() || agent.name).slice(0, 80);
+    const template = await apiCreateAgentMarketplaceTemplate({
+      name,
+      description: options.description?.trim() || agent.description || '',
+      category: options.category?.trim() || 'custom',
+      sourceAgentId: agent.id,
+    }, backendBaseUrl.value);
+    upsertMarketplaceTemplate(template);
+    return template;
+  }
+
   async function publishCurrentAgentToMarketplace() {
     const agent = agentForm.value.id ? activeAgent.value : await persistAgent();
     if (!agent || marketplacePublishing.value) return;
-    const name = (marketplaceForm.value.name.trim() || `${agent.name} 模板`).slice(0, 80);
     marketplacePublishing.value = true;
     try {
-      const template = await apiCreateAgentMarketplaceTemplate({
-        name,
-        description: marketplaceForm.value.description.trim() || agent.description,
-        category: marketplaceForm.value.category.trim() || 'custom',
-        sourceAgentId: agent.id,
-      }, backendBaseUrl.value);
-      marketplaceTemplates.value = [template, ...marketplaceTemplates.value.filter((item) => item.id !== template.id)];
+      const template = await syncAgentMarketplaceTemplate(agent, marketplaceForm.value);
       marketplaceForm.value = { name: '', description: '', category: '' };
       showMarketplacePublishDialog.value = false;
       status.value = `已发布到 Agent 市场：${template.name}`;
@@ -2033,6 +2168,18 @@ export function useAppController() {
       status.value = error instanceof Error ? error.message : '发布模板失败';
     } finally {
       marketplacePublishing.value = false;
+    }
+  }
+
+  async function deleteMarketplaceTemplate(template: AgentMarketplaceTemplate) {
+    if (template.source !== 'custom') return;
+    if (!window.confirm(`确认删除市场模板「${template.name}」？这不会删除原 Agent。`)) return;
+    try {
+      await apiDeleteAgentMarketplaceTemplate(template.id, backendBaseUrl.value);
+      marketplaceTemplates.value = marketplaceTemplates.value.filter((item) => item.id !== template.id);
+      status.value = '市场模板已删除';
+    } catch (error) {
+      status.value = error instanceof Error ? error.message : '删除市场模板失败';
     }
   }
 
@@ -2048,7 +2195,7 @@ export function useAppController() {
 
   async function confirmToolExecutionIfNeeded(): Promise<string[] | null> {
     const confirmToolIds = agentForm.value.toolIds
-      .filter((toolId) => agentForm.value.toolPermissions[toolId] === 'confirm' || isHighRiskTool(toolId));
+      .filter((toolId) => isHighRiskTool(toolId));
     const confirmTools = confirmToolIds.map(getToolLabelById);
     if (confirmTools.length === 0) return [];
     try {
@@ -2092,6 +2239,23 @@ export function useAppController() {
     }
   }
 
+  function buildAgentRunPayload(input: string, imageUrls: string[], approvedToolIds?: string[]): AgentRunInput {
+    const lastRun = activeAgentRun.value || agentRuns.value.find((run) => run.agentId === agentForm.value.id) || null;
+    const conversationId = agentConversationId.value || lastRun?.conversationId || lastRun?.id || '';
+    const parentRunId = lastRun?.id || '';
+    const payload: AgentRunInput = {
+      input,
+      imageUrls,
+      maxSteps: agentInvokeMaxSteps.value,
+      retryPolicy: { maxRetries: 1, retryToolFailure: true, retryPlannerFailure: true },
+      continueFromLast: true,
+    };
+    if (conversationId) payload.conversationId = conversationId;
+    if (parentRunId) payload.parentRunId = parentRunId;
+    if (approvedToolIds) payload.approvedToolIds = approvedToolIds;
+    return payload;
+  }
+
   async function runCurrentAgent() {
     const input = agentPrompt.value.trim();
     if (!input || agentRunning.value) return;
@@ -2114,15 +2278,7 @@ export function useAppController() {
         .split(/\n|,/)
         .map((item) => item.trim())
         .filter(Boolean);
-      await streamAgentRun(agent.id, {
-        input,
-        imageUrls,
-        maxSteps: agentInvokeMaxSteps.value,
-        mode: agentInvokeMode.value,
-        contextStrategy: agentContextStrategy.value,
-        retryPolicy: { maxRetries: 1, retryToolFailure: true, retryPlannerFailure: true },
-        approvedToolIds,
-      }, {
+      await streamAgentRun(agent.id, buildAgentRunPayload(input, imageUrls, approvedToolIds), {
         onEvent: (event) => {
           applyAgentRunStreamEvent(event);
         },
@@ -2185,23 +2341,10 @@ export function useAppController() {
     }
   }
 
-  function createTestCaseFromActiveRun() {
-    if (!activeAgentRun.value) return;
-    testCaseForm.value = {
-      name: `运行样例 ${formatAgentDate(activeAgentRun.value.createdAt)}`.slice(0, 120),
-      input: activeAgentRun.value.input,
-      expectedOutput: activeAgentRun.value.output,
-      rubric: '输出应准确回应用户目标，保留关键依据，并说明必要的不确定性。',
-    };
-    showTestCaseCreateDialog.value = true;
-    agentWorkspaceMode.value = 'develop';
-    agentPageTab.value = 'integration';
-    status.value = '已用本次运行填充测试用例草稿';
-  }
-
   function applyAgentRunStreamEvent(event: any) {
     if (event.type === 'run_created') {
       activeAgentRun.value = event.run;
+      agentConversationId.value = event.run.conversationId || event.run.id || agentConversationId.value;
       agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
       status.value = 'Agent 追踪已开始';
       return;
@@ -2213,7 +2356,7 @@ export function useAppController() {
       const steps = activeAgentRun.value.steps.filter((item) => item.id !== step.id);
       activeAgentRun.value = {
         ...activeAgentRun.value,
-        steps: [...steps, step].sort((a, b) => a.id - b.id),
+        steps: [...steps, step].sort(sortAgentRunSteps),
       };
       activeAgentTraceStepId.value = step.id;
       agentTraceReplayIndex.value = Math.max(0, activeAgentRun.value.steps.findIndex((item) => item.id === step.id));
@@ -2229,6 +2372,7 @@ export function useAppController() {
     }
     if (event.type === 'run_completed') {
       activeAgentRun.value = event.run;
+      agentConversationId.value = event.run.conversationId || event.run.id || agentConversationId.value;
       const failedStep = event.run.steps.find((step) => step.status === 'failed' || step.error);
       activeAgentTraceStepId.value = failedStep?.id ?? event.run.steps[event.run.steps.length - 1]?.id ?? null;
       agentTraceReplayIndex.value = failedStep ? Math.max(0, event.run.steps.findIndex((step) => step.id === failedStep.id)) : Math.max(0, event.run.steps.length - 1);
@@ -2247,6 +2391,7 @@ export function useAppController() {
 
   function selectAgentRun(run: AgentRun) {
     activeAgentRun.value = run;
+    agentConversationId.value = run.conversationId || run.id || agentConversationId.value;
     activeAgentTraceStepId.value = run.steps[0]?.id ?? null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
@@ -2266,7 +2411,6 @@ export function useAppController() {
             loadAgentMemories(owner.id),
             loadAgentEvaluations(owner.id),
             loadAgentVersions(owner.id),
-            loadAgentTestSuites(owner.id),
           ]);
         }
       }
@@ -2321,8 +2465,8 @@ export function useAppController() {
       memory_extract: '记忆提取',
       memory_update: '记忆更新',
       memory_write: '记忆写入',
-      delegate_agent: 'Agent 委派',
-      delegate_observation: '委派结果',
+      delegate_agent: '子 Agent 调用',
+      delegate_observation: '子 Agent 返回',
       final: '最终输出',
     };
     return typeValue ? (labels[typeValue] ?? typeValue) : '未知';
@@ -2339,25 +2483,6 @@ export function useAppController() {
     if (risk === 'medium') return '中风险';
     if (risk === 'low') return '低风险';
     return risk || '未知';
-  }
-
-  function agentInvokeModeLabel(mode?: string) {
-    const labels: Record<string, string> = {
-      standard: '标准',
-      reflective: '反思',
-      fast: '快速',
-    };
-    return mode ? (labels[mode] ?? mode) : '标准';
-  }
-
-  function agentContextStrategyLabel(strategy?: string) {
-    const labels: Record<string, string> = {
-      balanced: '均衡',
-      knowledge_first: '知识优先',
-      memory_first: '记忆优先',
-      minimal: '最小上下文',
-    };
-    return strategy ? (labels[strategy] ?? strategy) : '均衡';
   }
 
   function teamStrategyLabel(strategy?: string) {
@@ -2433,7 +2558,7 @@ export function useAppController() {
         recentRunLimit: 8,
         judgeModel: evaluationForm.value.judgeModel.trim() || agentForm.value.model || undefined,
       }, backendBaseUrl.value);
-      agentInvokePanelTab.value = 'diagnosis';
+      agentInvokePanelTab.value = 'trace';
       status.value = '已生成 Agent 优化建议草案';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '生成优化建议失败';
@@ -2468,40 +2593,61 @@ export function useAppController() {
 
   const agentTraceReplayMax = computed(() => Math.max(0, (activeAgentRun.value?.steps.length ?? 1) - 1));
 
+  function traceStepToolName(step: AgentRun['steps'][number]) {
+    try {
+      const input = JSON.parse(step.input || '{}') as { tool?: string; args?: unknown };
+      if (input.tool) return input.tool;
+    } catch {
+      // Older runs may store the tool name as a plain input string.
+    }
+    try {
+      const metadata = JSON.parse(step.metadata || '{}') as { toolName?: string };
+      if (metadata.toolName) return metadata.toolName;
+    } catch {
+      // Ignore malformed metadata from legacy traces.
+    }
+    return step.input && !step.input.trim().startsWith('{') ? step.input.trim() : '';
+  }
+
   const agentTraceNodes = computed(() => {
     const steps = activeAgentRun.value?.steps ?? [];
-    return steps.map((step, index) => ({
-      id: String(step.id),
-      label: step.name,
-      type: step.stepType,
-      status: step.status,
-      latencyMs: step.latencyMs,
-      active: step.id === activeAgentTraceStepId.value || index === agentTraceReplayIndex.value,
-    }));
+    return steps.map((step, index) => {
+      const type = step.stepType.toLowerCase();
+      const toolName = type.includes('observation') ? traceStepToolName(step) : '';
+      return {
+        id: String(step.id),
+        label: toolName ? `观察：${toolName}` : step.name,
+        type: step.stepType,
+        status: step.status,
+        latencyMs: step.latencyMs,
+        active: step.id === activeAgentTraceStepId.value || index === agentTraceReplayIndex.value,
+        isFinal: isFinalAnswerStep(step),
+      };
+    });
   });
 
   const agentTraceStageGroups = computed(() => {
     const stages = [
       { id: 'context', label: '上下文', types: ['context', 'memory_read', 'memory_retrieval', 'rag', 'rag_retrieval', 'knowledge', 'input'] },
       { id: 'plan', label: '规划', types: ['plan', 'reflection'] },
-      { id: 'capability', label: '技能 / 工具 / RAG', types: ['skill', 'skill_context', 'tool', 'tool_call', 'tool_calling', 'rag', 'knowledge_search'] },
+      { id: 'capability', label: '技能 / 工具 / RAG', types: ['skill', 'skill_context', 'tool', 'tool_call', 'tool_calling', 'observation', 'rag', 'knowledge_search'] },
       { id: 'delegate', label: '委派', types: ['delegate_agent', 'delegate_observation'] },
       { id: 'llm', label: 'LLM', types: ['llm', 'llm_completion', 'completion'] },
+      { id: 'final', label: '最终输出', types: ['final'] },
       { id: 'memory', label: '记忆', types: ['memory_write', 'memory_extract', 'memory_update', 'memory'] },
       { id: 'other', label: '其他', types: [] },
     ];
     const nodes = agentTraceNodes.value;
-    return stages
-      .map((stage) => ({
-        ...stage,
-        nodes: nodes.filter((node) => {
-          const type = node.type.toLowerCase();
-          if (stage.id === 'other') {
-            return !stages.some((candidate) => candidate.id !== 'other' && candidate.types.some((item) => type.includes(item)));
-          }
-          return stage.types.some((item) => type.includes(item));
-        }),
-      }))
+    const groups = stages.map((stage) => ({ ...stage, nodes: [] as typeof nodes }));
+    for (const node of nodes) {
+      const type = node.type.toLowerCase();
+      const group = node.isFinal
+        ? groups.find((stage) => stage.id === 'final')
+        : groups.find((stage) => stage.id !== 'other' && stage.id !== 'final' && stage.types.some((item) => type.includes(item)))
+        ?? groups.find((stage) => stage.id === 'other');
+      group?.nodes.push(node);
+    }
+    return groups
       .filter((stage) => stage.nodes.length > 0);
   });
 
@@ -2522,13 +2668,25 @@ export function useAppController() {
     .sort((a, b) => b.latencyMs - a.latencyMs)
     .slice(0, 6));
 
+  const agentUserPreferenceMemories = computed(() => agentMemories.value
+    .filter((memory) => !memory.agentId || memory.namespace === 'user_profile' || memory.memoryType === 'preference'));
+
+  const agentScopedMemories = computed(() => agentMemories.value
+    .filter((memory) => memory.agentId === agentForm.value.id && memory.namespace !== 'user_profile' && memory.memoryType !== 'preference'));
+
   const traceStageDefinitions = [
-    { id: 'input', label: '用户输入', types: ['input', 'context_pack'], accent: 'info' },
-    { id: 'llm', label: 'LLM', types: ['llm_completion', 'plan', 'reflection'], accent: 'primary' },
-    { id: 'tool', label: '工具', types: ['tool_call', 'observation', 'delegate_agent', 'delegate_observation'], accent: 'warning' },
-    { id: 'memory', label: '记忆', types: ['memory_retrieval', 'memory_extract', 'memory_update', 'skill_context', 'rag_retrieval'], accent: 'success' },
-    { id: 'final', label: '最终输出', types: ['final', 'llm_completion'], accent: 'danger' },
+    { id: 'input', label: '用户输入', types: ['user_input'], accent: 'info' },
+    { id: 'context', label: '上下文 / 能力注入', types: ['context_pack', 'memory_retrieval', 'memory_extract', 'memory_update', 'skill_context', 'rag_retrieval'], accent: 'success' },
+    { id: 'llm', label: 'LLM 执行', types: ['plan', 'reflection', 'llm_completion'], accent: 'primary' },
+    { id: 'tool', label: '工具 / 子 Agent', types: ['tool_call', 'observation', 'delegate_agent', 'delegate_observation'], accent: 'warning' },
+    { id: 'final', label: '最终输出', types: ['final'], accent: 'danger' },
   ];
+
+  function isFinalAnswerStep(step: AgentRun['steps'][number]) {
+    const type = step.stepType.toLowerCase();
+    const name = step.name.toLowerCase();
+    return type.includes('final') || name.includes('最终') || name.includes('final');
+  }
 
   function stepMatchesTypes(step: AgentRun['steps'][number], types: string[]) {
     const type = step.stepType.toLowerCase();
@@ -2536,22 +2694,105 @@ export function useAppController() {
     return types.some((item) => type.includes(item) || name.includes(item));
   }
 
+  function sortAgentRunSteps(a: AgentRun['steps'][number], b: AgentRun['steps'][number]) {
+    const aTime = Date.parse(String(a.startedAt || '').replace(' ', 'T'));
+    const bTime = Date.parse(String(b.startedAt || '').replace(' ', 'T'));
+    if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return aTime - bTime;
+    return a.id - b.id;
+  }
+
+  function formatTraceSummary(value: unknown) {
+    if (value === null || value === undefined || value === '') return '';
+    if (Array.isArray(value) && value.length === 0) return '无结果';
+    let text = typeof value === 'string' ? value : JSON.stringify(value);
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('"')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed) && parsed.length === 0) return '无结果';
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const payload = parsed as Record<string, unknown>;
+          if ('result' in payload || 'stdout' in payload || 'logs' in payload) {
+            if (payload.result && typeof payload.result === 'object') {
+              text = JSON.stringify(payload.result);
+            } else if (typeof payload.stdout === 'string' && payload.stdout.trim()) {
+              try {
+                const stdoutPayload = JSON.parse(payload.stdout.trim());
+                text = typeof stdoutPayload === 'string' ? stdoutPayload : JSON.stringify(stdoutPayload);
+              } catch {
+                text = payload.stdout.trim();
+              }
+            } else {
+              text = JSON.stringify(parsed);
+            }
+          } else {
+            text = JSON.stringify(parsed);
+          }
+        } else {
+          text = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+        }
+      } catch {
+        text = trimmed;
+      }
+    }
+    return text
+      .replace(/\\r\\n/g, ' ')
+      .replace(/\\n/g, ' ')
+      .replace(/\\t/g, ' ')
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 240);
+  }
+
+  function formatMemoryTraceOutput(value: unknown) {
+    const summary = formatTraceSummary(value);
+    return !summary || summary === '无结果' ? '未发现需要保存或遗忘的长期记忆。' : summary;
+  }
+
   const agentExecutionTraceFlow = computed(() => {
     const run = activeAgentRun.value;
-    const steps = run?.steps ?? [];
+    const steps = [...(run?.steps ?? [])].sort(sortAgentRunSteps);
+    const finalStep = [...steps].reverse().find((step) => isFinalAnswerStep(step)) ?? null;
+    const currentStep = activeAgentTraceStep.value
+      ?? steps[agentTraceReplayIndex.value]
+      ?? [...steps].reverse().find((step) => step.status === 'running')
+      ?? steps[steps.length - 1]
+      ?? null;
+    const currentIndex = currentStep ? steps.findIndex((step) => step.id === currentStep.id) : -1;
     return traceStageDefinitions.map((stage) => {
       const matched = stage.id === 'final'
-        ? [...steps].reverse().find((step) => step.stepType === 'llm_completion') ?? null
-        : steps.find((step) => stepMatchesTypes(step, stage.types)) ?? null;
+        ? finalStep
+        : [...steps].reverse().find((step) => stepMatchesTypes(step, stage.types) && !isFinalAnswerStep(step)) ?? null;
+      const matchedIndex = matched ? steps.findIndex((step) => step.id === matched.id) : -1;
+      const current = Boolean(currentStep && matched?.id === currentStep.id);
+      const inferredStatus = (() => {
+        if (matched?.status) return matched.status;
+        if (stage.id === 'input' && run) return 'succeeded';
+        if (stage.id === 'final' && run?.status && run.status !== 'running' && run.output) return run.status;
+        if (stage.id === 'llm' && run && run.status !== 'running') return 'skipped';
+        if (currentIndex >= 0) {
+          const nextMatchedIndex = steps.findIndex((step) => stepMatchesTypes(step, stage.types) && !isFinalAnswerStep(step));
+          if (nextMatchedIndex >= 0 && nextMatchedIndex < currentIndex) return 'succeeded';
+        }
+        if (matchedIndex >= 0 && currentIndex > matchedIndex) return 'succeeded';
+        return 'pending';
+      })();
+      const detailSource = stage.id === 'input'
+        ? (run?.input || agentPrompt.value || '等待输入')
+        : matched?.output || matched?.error || matched?.input
+          || (stage.id === 'final' && run?.output ? run.output : '')
+          || (stage.id === 'context' ? '等待上下文、记忆、知识库和 Skill 注入' : '')
+          || (stage.id === 'llm' && inferredStatus === 'skipped' ? '本次由确定性工具、工作流或已有结果直接完成，未调用 LLM。' : '')
+          || '等待上游节点完成';
       return {
         ...stage,
         step: matched,
-        status: matched?.status ?? (stage.id === 'input' && run ? 'succeeded' : 'pending'),
+        status: inferredStatus,
         title: matched?.name || (stage.id === 'input' ? '用户输入' : stage.label),
-        detail: stage.id === 'input'
-          ? (run?.input || agentPrompt.value || '等待输入')
-          : matched?.output || matched?.error || matched?.input || '等待上游节点完成',
+        detail: formatTraceSummary(detailSource) || '等待上游节点完成',
         latencyMs: matched?.latencyMs ?? 0,
+        current,
       };
     });
   });
@@ -2562,7 +2803,11 @@ export function useAppController() {
     const metadata = (() => {
       try { return JSON.parse(step?.metadata || '{}') as Record<string, any>; } catch { return {}; }
     })();
-    const toolStep = step?.stepType.includes('tool') ? step : (run?.steps ?? []).find((item) => item.stepType.includes('tool'));
+    const isToolLikeStep = (item: AgentRun['steps'][number] | null | undefined) => {
+      const type = item?.stepType.toLowerCase() || '';
+      return type.includes('tool') || type.includes('observation') || type.includes('delegate_observation');
+    };
+    const toolStep = isToolLikeStep(step) ? step : (run?.steps ?? []).find((item) => isToolLikeStep(item));
     const memorySteps = (run?.steps ?? []).filter((item) => item.stepType.includes('memory'));
     return {
       prompt: agentForm.value.systemPrompt || '',
@@ -2572,14 +2817,34 @@ export function useAppController() {
         temperature: agentForm.value.temperature,
         maxTokens: agentForm.value.maxTokens,
         maxSteps: agentInvokeMaxSteps.value,
-        mode: agentInvokeMode.value,
-        contextStrategy: agentContextStrategy.value,
       },
       toolInput: toolStep?.input || '',
       toolOutput: toolStep?.output || toolStep?.error || '',
-      memoryState: memorySteps.map((item) => ({ name: item.name, status: item.status, output: item.output || item.error })),
+      memoryState: memorySteps.length
+        ? memorySteps.map((item) => ({ name: item.name, status: item.status, output: formatMemoryTraceOutput(item.output || item.error) }))
+        : '未发现需要保存或遗忘的长期记忆。',
       metadata,
     };
+  });
+
+  const activeAgentToolResultCards = computed(() => {
+    const steps = activeAgentRun.value?.steps ?? [];
+    return steps
+      .filter((step) => step.stepType.includes('tool') && (step.output || step.error))
+      .map((step) => {
+        let metadata: Record<string, any> = {};
+        try { metadata = JSON.parse(step.metadata || '{}') as Record<string, any>; } catch {}
+        return {
+          id: step.id,
+          name: step.name,
+          toolName: metadata.toolName || metadata.toolId || step.name,
+          deterministic: Boolean(metadata.deterministic),
+          status: step.status,
+          input: step.input,
+          output: step.output || step.error,
+          latencyMs: step.latencyMs,
+        };
+      });
   });
 
   const agentTraceDebuggerState = computed(() => ({
@@ -2633,59 +2898,6 @@ export function useAppController() {
       averageTokens: tokens,
     };
   });
-
-  const agentHarnessDatasetTypes = computed(() => [
-    { id: 'manual', label: '手动数据集', count: agentTestCases.value.length },
-    { id: 'production', label: '生产数据集', count: agentRuns.value.length },
-    { id: 'synthetic', label: '合成数据集', count: agentImprovementSuggestions.value?.testSuggestions?.length ?? 0 },
-  ]);
-
-  const agentHarnessScenarios = computed(() => {
-    const scenarios = [
-      { label: 'RAG', keyword: 'RAG' },
-      { label: '工具调用', keyword: 'Tool Use' },
-      { label: '代码任务', keyword: 'Coding' },
-      { label: '浏览器任务', keyword: 'Browser Use' },
-      { label: '多 Agent', keyword: 'Multi-Agent' },
-      { label: '客户支持', keyword: 'Customer Support' },
-    ];
-    return scenarios.map((scenarioItem) => {
-      const scenario = scenarioItem.keyword;
-      const q = scenario.toLowerCase().replace(/\s+/g, '');
-      const count = agentTestCases.value.filter((testCase) => {
-        const blob = `${testCase.name} ${testCase.input} ${testCase.expectedOutput} ${testCase.rubric}`.toLowerCase();
-        if (scenario === 'RAG') return /rag|knowledge|知识|检索/.test(blob);
-        if (scenario === 'Tool Use') return /tool|工具|function/.test(blob);
-        if (scenario === 'Coding') return /code|coding|代码|javascript|python/.test(blob);
-        if (scenario === 'Browser Use') return /browser|网页|浏览器|fetch/.test(blob);
-        if (scenario === 'Multi-Agent') return /multi|team|多.?agent|团队/.test(blob);
-        if (scenario === 'Customer Support') return /support|客服|客户|退款|订单/.test(blob);
-        return blob.includes(q);
-      }).length;
-      return { id: q, label: scenarioItem.label, count };
-    });
-  });
-
-  const activeHarnessRunMetrics = computed(() => {
-    const run = activeTestRun.value;
-    const summary = run?.summary ?? {};
-    const caseResults = run?.caseResults ?? [];
-    const avgCost = caseResults.reduce((sum, item) => sum + Number(item.cost || 0), 0);
-    const avgLatency = caseResults.length
-      ? Math.round(caseResults.reduce((sum, item) => sum + Number(item.latencyMs || item.latency || 0), 0) / caseResults.length)
-      : 0;
-    return {
-      successRate: Number(summary.successRate ?? summary.passRate ?? 0),
-      accuracy: Number(summary.averageScore ?? summary.accuracy ?? 0),
-      cost: Number(avgCost.toFixed(4)),
-      latency: avgLatency,
-    };
-  });
-
-  function getHarnessExpectedTool(testCase: AgentTestCase) {
-    const match = String(testCase.rubric || '').match(/expected_tool[:：]\s*([^\n]+)/i);
-    return match?.[1]?.trim() || '未设置';
-  }
 
   const skillMarketStats = computed(() => ({
     total: availableSkills.value.length,
@@ -3082,16 +3294,16 @@ export function useAppController() {
   async function createAgentMemory() {
     const content = memoryForm.value.content.trim();
     if (!content || memorySaving.value) return;
-    if (!agentForm.value.id) {
+    if (memoryForm.value.scope === 'agent' && !agentForm.value.id) {
       status.value = '请先保存 Agent，再写入专属记忆';
       return;
     }
     memorySaving.value = true;
     try {
       await apiCreateMemory({
-        agentId: agentForm.value.id,
-        namespace: 'manual',
-        memoryType: 'fact',
+        agentId: memoryForm.value.scope === 'agent' ? agentForm.value.id : '',
+        namespace: memoryForm.value.scope === 'user_profile' ? 'user_profile' : 'manual',
+        memoryType: memoryForm.value.scope === 'user_profile' ? 'preference' : memoryForm.value.memoryType,
         content,
         importance: memoryForm.value.importance,
       }, backendBaseUrl.value);
@@ -3111,13 +3323,15 @@ export function useAppController() {
     memoryForm.value = {
       content: memory.content,
       importance: memory.importance,
+      memoryType: memory.memoryType || 'fact',
+      scope: !memory.agentId || memory.namespace === 'user_profile' || memory.memoryType === 'preference' ? 'user_profile' : 'agent',
     };
     showMemoryCreateDialog.value = true;
   }
 
   function resetMemoryEditor() {
     editingMemoryId.value = '';
-    memoryForm.value = { content: '', importance: 3 };
+    memoryForm.value = { content: '', importance: 3, memoryType: 'preference', scope: 'user_profile' };
   }
 
   async function saveAgentMemory() {
@@ -3129,6 +3343,8 @@ export function useAppController() {
         await apiUpdateMemory(editingMemoryId.value, {
           content,
           importance: memoryForm.value.importance,
+          memoryType: memoryForm.value.scope === 'user_profile' ? 'preference' : memoryForm.value.memoryType,
+          namespace: memoryForm.value.scope === 'user_profile' ? 'user_profile' : undefined,
         }, backendBaseUrl.value);
         showMemoryCreateDialog.value = false;
         resetMemoryEditor();
@@ -3170,6 +3386,7 @@ export function useAppController() {
     }
     settingsMemoryLoading.value = true;
     try {
+      memoryProviderInfo.value = await fetchMemoryProviders(backendBaseUrl.value);
       settingsMemories.value = await fetchMemories(undefined, backendBaseUrl.value);
     } catch (error) {
       status.value = error instanceof Error ? error.message : '加载记忆失败';
@@ -3606,21 +3823,79 @@ export function useAppController() {
   }
 
   // ===== Tool相关函数 =====
-  function toolDefinitionToCustomTool(tool: ToolDefinition): CustomTool {
+  function normalizeToolSchema(value: unknown, fallback: Record<string, any>) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : fallback;
+  }
+
+  function normalizeToolRuntime(tool: Partial<ToolDefinition> & Partial<CustomTool>): CustomTool['runtime'] {
+    const runtime = String(tool.runtime || '').toLowerCase();
+    if (['python', 'javascript', 'typescript', 'http', 'webhook', 'db'].includes(runtime)) {
+      return runtime as CustomTool['runtime'];
+    }
+    const name = String(tool.name || '').toLowerCase();
+    if (name.includes('python') || name === 'text_stats') return 'python';
+    if (name.includes('javascript') || name.includes('calculator') || name.includes('uuid') || name.includes('time')) return 'javascript';
+    return tool.userId ? 'python' : 'http';
+  }
+
+  function defaultBuiltinToolCode(name: string) {
+    if (name === 'javascript_runner' || name === 'container_javascript_runner') {
+      return [
+        '// 这个工具实际执行入参里的 code 字段。',
+        '// input 会作为变量注入给代码使用，最后一个表达式作为 result 返回。',
+        'const input = args.input ?? {};',
+        'const result = await runUserJavaScript(args.code, input);',
+        'return { result };',
+      ].join('\n');
+    }
+    if (name === 'python_runner') {
+      return [
+        '# 这个工具实际执行入参里的 code 字段。',
+        '# input 会作为变量注入给代码使用，运行结果会包装到 result/stdout/logs 中。',
+        'input = args.get("input", {})',
+        'result = run_user_python(args["code"], input)',
+        'return {"result": result}',
+      ].join('\n');
+    }
+    if (name === 'text_stats') {
+      return [
+        'import re',
+        '',
+        'text = input.get("text", "")',
+        'lines = text.splitlines()',
+        'words = re.findall(r"\\b\\w+\\b", text, flags=re.UNICODE)',
+        'result = {',
+        '    "characters": len(text),',
+        '    "charactersNoSpaces": len(re.sub(r"\\s+", "", text)),',
+        '    "words": len(words),',
+        '    "lines": len(lines),',
+        '    "paragraphs": len([p for p in re.split(r"\\n\\s*\\n", text) if p.strip()]),',
+        '}',
+      ].join('\n');
+    }
+    return '';
+  }
+
+  function toolDefinitionToCustomTool(tool: ToolDefinition | CustomTool): CustomTool {
+    const raw = tool as ToolDefinition & CustomTool & { inputSchema?: Record<string, any> };
+    const timeoutMs = typeof raw.timeoutMs === 'number'
+      ? raw.timeoutMs
+      : Math.max(1, Number(raw.timeout || 30)) * 1000;
+    const type = raw.type || (raw.source === 'custom' || raw.userId ? 'custom' : 'builtin');
     return {
       id: tool.id,
       name: tool.name,
-      displayName: tool.displayName,
-      description: tool.description,
-      icon: '🔧',
-      category: tool.category || 'custom',
-      type: 'custom',
-      runtime: (tool.runtime || 'python') as CustomTool['runtime'],
-      status: tool.enabled ? 'enabled' : 'disabled',
+      displayName: tool.displayName || tool.name,
+      description: tool.description || '',
+      icon: raw.icon || '🔧',
+      category: tool.category || (type === 'custom' ? 'custom' : 'builtin'),
+      type,
+      runtime: normalizeToolRuntime(raw),
+      status: raw.status || (raw.enabled === false ? 'disabled' : 'enabled'),
       riskLevel: (tool.riskLevel || 'low') as CustomTool['riskLevel'],
-      version: '1.0.0',
-      inputSchema: tool.schema || { type: 'object', properties: {}, required: [] },
-      outputSchema: tool.outputSchema || { type: 'object', properties: {} },
+      version: String(raw.version ?? '1'),
+      inputSchema: normalizeToolSchema(raw.inputSchema || raw.schema, { type: 'object', properties: {}, required: [] }),
+      outputSchema: normalizeToolSchema(raw.outputSchema, { type: 'object', properties: {} }),
       permissions: {
         network: Boolean(tool.permissions?.network),
         database: Boolean(tool.permissions?.database),
@@ -3628,14 +3903,15 @@ export function useAppController() {
         fileWrite: Boolean(tool.permissions?.fileWrite),
         externalRequest: Boolean(tool.permissions?.externalRequest),
       },
-      code: tool.code || '',
-      exampleInput: '',
-      exampleOutput: '',
-      timeout: Math.max(1, Math.round((tool.timeoutMs || 30000) / 1000)),
-      retries: tool.retries || 0,
-      createdAt: '',
-      updatedAt: '',
-      callCount: 0,
+      code: raw.code || defaultBuiltinToolCode(tool.name),
+      exampleInput: raw.exampleInput || '',
+      exampleOutput: raw.exampleOutput || '',
+      timeout: Math.max(1, Math.round(timeoutMs / 1000)),
+      retries: Number(tool.retries ?? 0),
+      createdAt: raw.createdAt || '',
+      updatedAt: raw.updatedAt || '',
+      callCount: Number(raw.callCount ?? 0),
+      lastCallAt: raw.lastCallAt,
     };
   }
 
@@ -3742,14 +4018,14 @@ export function useAppController() {
     }
   }
 
-  function previewTool(tool: CustomTool) {
-    activeTool.value = tool;
+  function previewTool(tool: CustomTool | ToolDefinition) {
+    activeTool.value = toolDefinitionToCustomTool(tool);
     toolPreviewVisible.value = true;
   }
 
-  function openToolTest(tool: CustomTool) {
-    activeTool.value = tool;
-    toolTestInput.value = tool.exampleInput || '{}';
+  function openToolTest(tool: CustomTool | ToolDefinition) {
+    activeTool.value = toolDefinitionToCustomTool(tool);
+    toolTestInput.value = activeTool.value.exampleInput || '{}';
     toolTestResult.value = null;
     toolTestVisible.value = true;
   }
@@ -3786,16 +4062,257 @@ export function useAppController() {
   function openDagNodeConfig(node: any) {
     activeDagNode.value = node;
     const nodeInfo = getDagNodeInfo(node.type);
-    dagNodeConfig.value = nodeInfo?.configSchema ? { ...nodeInfo.configSchema, ...node.config } : {};
+    const config = nodeInfo?.configSchema ? { ...nodeInfo.configSchema, ...node.config } : { ...node.config };
+    dagNodeConfig.value = {
+      ...config,
+      headersText: formatConfigJson(config.headers ?? {}),
+      variablesText: formatConfigJson(config.variables ?? {}),
+      argsText: formatConfigJson(config.args ?? config.paramMapping ?? {}),
+      branchesText: formatDagBranches(config.branches),
+      intentsStr: Array.isArray(config.intents) ? config.intents.join('\n') : String(config.intentsStr ?? ''),
+      paramsText: Array.isArray(config.params) ? config.params.join('\n') : String(config.paramsText ?? ''),
+    };
+    dagNodeConfigErrors.value = validateDagNodeConfig(String(node.type), dagNodeConfig.value);
     dagNodeConfigVisible.value = true;
   }
 
   function saveDagNodeConfig() {
     if (activeDagNode.value) {
-      activeDagNode.value.config = { ...dagNodeConfig.value };
+      const errors = validateDagNodeConfig(String(activeDagNode.value.type), dagNodeConfig.value);
+      dagNodeConfigErrors.value = errors;
+      if (errors.length > 0) {
+        status.value = `节点配置有 ${errors.length} 处需要修正`;
+        return;
+      }
+      activeDagNode.value.config = normalizeDagNodeConfigForSave(String(activeDagNode.value.type), dagNodeConfig.value);
       dagNodeConfigVisible.value = false;
       status.value = '节点配置已保存';
     }
+  }
+
+  function formatConfigJson(value: unknown): string {
+    try {
+      return JSON.stringify(value && typeof value === 'object' ? value : {}, null, 2);
+    } catch {
+      return '{}';
+    }
+  }
+
+  function parseConfigJson(text: unknown, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+    if (typeof text !== 'string' || !text.trim()) return fallback;
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : fallback;
+    } catch {
+      status.value = '配置 JSON 格式不正确，已保留为空对象';
+      return fallback;
+    }
+  }
+
+  function tryParseConfigJson(text: unknown): string | null {
+    if (typeof text !== 'string' || !text.trim()) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '必须是 JSON 对象，例如 { "text": "{{input}}" }';
+      return null;
+    } catch (error) {
+      return error instanceof Error ? `JSON 格式错误：${error.message}` : 'JSON 格式错误';
+    }
+  }
+
+  function getDagNodeConfigGuide(type?: string) {
+    const guides: Record<string, { use: string; tips: string[]; example: string }> = {
+      intent_detection: {
+        use: '把用户输入归到一个意图里，后面可按意图分支。',
+        tips: ['模型必选。', '意图列表一行一个，例如：售前咨询、订单查询、退款。', '阈值越高越严格，常用 0.6-0.8。'],
+        example: '售前咨询\n订单查询\n退款申请',
+      },
+      parameter_extract: {
+        use: '从文本里提取结构化字段，比如订单号、手机号、时间范围。',
+        tips: ['模型必选。', '提示词要写清输出 JSON。', '没有字段时让模型返回空对象。'],
+        example: '从 {{input}} 中提取 orderId、phone，输出 JSON。',
+      },
+      knowledge_search: {
+        use: '从知识库里找和用户问题相关的资料。',
+        tips: ['至少选择一个知识库。', 'Top K 是最多返回几段资料，常用 3-5。', '阈值越高越严格，搜不到时可降到 0.4-0.6。'],
+        example: '用户问产品政策时，先查知识库，再交给模型生成答案。',
+      },
+      tool_call: {
+        use: '调用确定性工具，比如文本统计、计算器、当前时间、自定义工具。',
+        tips: ['必须选择工具。', '入参映射必须是 JSON 对象。', '{{input}} 表示上一节点输入。'],
+        example: '{ "text": "{{input}}" }',
+      },
+      skill_call: {
+        use: '调用一个已配置好的 Skill 能力包。',
+        tips: ['必须选择技能。', '输入模板可写 {{input}}，也可加说明。'],
+        example: '请基于以下内容执行技能：{{input}}',
+      },
+      agent_call: {
+        use: '把任务交给另一个 Agent 处理。',
+        tips: ['必须选择 Agent。', '输入模板要说明交给对方做什么。'],
+        example: '请帮我审核以下回复是否准确：{{input}}',
+      },
+      http_request: {
+        use: '请求外部 API。',
+        tips: ['URL 必须以 http:// 或 https:// 开头。', '请求头必须是 JSON 对象。', '不要把密钥写进公开模板。'],
+        example: 'https://api.example.com/search?q={{input}}',
+      },
+      code: {
+        use: '执行简单 JavaScript 处理上游数据。',
+        tips: ['代码要返回结果。', '可以读取 input.input。', '适合格式转换，不适合复杂长任务。'],
+        example: 'return input.input;',
+      },
+      if_else: {
+        use: '做二选一判断。',
+        tips: ['条件表达式可以写关键词或简单说明。', '命中和未命中模板都建议保留 {{input}}。'],
+        example: '退款',
+      },
+      question_classifier: {
+        use: '把问题分到多个业务分支。',
+        tips: ['每行一个分支，格式：分支名=关键词。', '至少写一个分支。', '关键词可以留空作为默认分支。'],
+        example: '售前咨询=价格\n订单查询=订单\n售后退款=退款',
+      },
+      llm_generate: {
+        use: '调用模型生成回复。',
+        tips: ['模型必选。', '温度 0.2-0.7 更稳定。', '最大 Token 控制输出长度。'],
+        example: '根据上游 prompt 和 context 生成答案。',
+      },
+      prompt_builder: {
+        use: '把用户输入、知识库内容等组装成模型提示词。',
+        tips: ['模板里使用 {{input}} 引用上游内容。', '把角色、资料、输出格式写清楚。'],
+        example: '请基于资料回答用户问题。\n资料：{{input}}\n要求：先结论后依据。',
+      },
+      template_transform: {
+        use: '把上游内容套进固定文案模板。',
+        tips: ['必须保留需要替换的位置，例如 {{input}}。'],
+        example: '处理后的内容：{{input}}',
+      },
+      variable_assigner: {
+        use: '保存变量给后续节点使用。',
+        tips: ['变量定义必须是 JSON 对象。', '值里可以用 {{input}}。'],
+        example: '{ "query": "{{input}}", "source": "workflow" }',
+      },
+      memory_read: {
+        use: '读取长期记忆作为上下文。',
+        tips: ['选择记忆类型。', '返回数量常用 3-5。'],
+        example: '读取 Agent 记忆，给后续生成节点参考。',
+      },
+      memory_write: {
+        use: '把重要事实写入长期记忆。',
+        tips: ['建议只写确定事实。', '涉及隐私或高风险信息时打开确认。'],
+        example: '用户偏好：{{input}}',
+      },
+      result_summary: {
+        use: '把多个步骤结果整理成清晰摘要。',
+        tips: ['模型必选。', '提示词写清楚摘要格式。'],
+        example: '请把以下结果总结成结论、依据、下一步：{{input}}',
+      },
+    };
+    return guides[type || ''] ?? {
+      use: '这个节点使用默认配置即可运行；需要时只改节点名称。',
+      tips: ['先连接上游和下游节点。', '保存前系统会检查当前节点配置。'],
+      example: '{{input}}',
+    };
+  }
+
+  function validateDagNodeConfig(type: string, raw: Record<string, any>): string[] {
+    const errors: string[] = [];
+    const requireText = (key: string, label: string) => {
+      if (!String(raw[key] ?? '').trim()) errors.push(`${label}不能为空`);
+    };
+    if (type === 'intent_detection') {
+      requireText('model', '使用模型');
+      if (!String(raw.intentsStr || raw.intents?.join?.('\n') || '').trim()) errors.push('意图分类列表至少填写一项');
+    }
+    if (type === 'parameter_extract') {
+      requireText('model', '使用模型');
+      requireText('template', '提取提示词');
+      if (!String(raw.paramsText || raw.params?.join?.('\n') || '').trim()) errors.push('提取字段至少填写一项');
+    }
+    if (type === 'knowledge_search' && (!Array.isArray(raw.kbIds) || raw.kbIds.length === 0)) errors.push('请选择至少一个知识库');
+    if (type === 'tool_call') {
+      requireText('toolId', '工具');
+      const jsonError = tryParseConfigJson(raw.argsText);
+      if (jsonError) errors.push(`入参映射 ${jsonError}`);
+    }
+    if (type === 'skill_call') requireText('skillId', '技能');
+    if (type === 'agent_call') requireText('agentId', 'Agent');
+    if (type === 'http_request') {
+      requireText('url', '请求地址');
+      const url = String(raw.url || '').trim();
+      if (url && !/^https?:\/\//i.test(url)) errors.push('请求地址必须以 http:// 或 https:// 开头');
+      const jsonError = tryParseConfigJson(raw.headersText);
+      if (jsonError) errors.push(`请求头 ${jsonError}`);
+    }
+    if (type === 'code') requireText('code', 'JavaScript 代码');
+    if (type === 'if_else' || type === 'condition') requireText('expression', '条件表达式');
+    if (type === 'question_classifier' || type === 'multi_branch') {
+      if (parseDagBranches(raw.branchesText).length === 0) errors.push('分类分支至少填写一项');
+    }
+    if (type === 'llm_generate' || type === 'result_summary') requireText('model', '使用模型');
+    if (type === 'prompt_builder' || type === 'template_transform') requireText('template', '模板');
+    if (type === 'variable_assigner') {
+      const jsonError = tryParseConfigJson(raw.variablesText);
+      if (jsonError) errors.push(`变量定义 ${jsonError}`);
+    }
+    return errors;
+  }
+
+  function formatDagBranches(value: unknown): string {
+    const branches = Array.isArray(value) ? value : [];
+    if (branches.length === 0) return '默认=';
+    return branches.map((branch: any) => `${branch.name || branch.id || '分支'}=${branch.keyword || branch.condition || ''}`).join('\n');
+  }
+
+  function parseDagBranches(text: unknown): Array<Record<string, string>> {
+    const source = typeof text === 'string' ? text : '';
+    const rows = source.split('\n').map((line) => line.trim()).filter(Boolean);
+    if (rows.length === 0) return [{ name: '默认', keyword: '' }];
+    return rows.map((line, index) => {
+      const [name, ...rest] = line.split('=');
+      return {
+        id: `branch_${index + 1}`,
+        name: (name || `分支 ${index + 1}`).trim(),
+        keyword: rest.join('=').trim(),
+      };
+    });
+  }
+
+  function normalizeDagNodeConfigForSave(type: string, raw: Record<string, any>): Record<string, unknown> {
+    const config: Record<string, unknown> = { ...raw };
+    delete config.headersText;
+    delete config.variablesText;
+    delete config.argsText;
+    delete config.branchesText;
+
+    if (type === 'http_request') {
+      config.headers = parseConfigJson(raw.headersText);
+      config.method = String(raw.method || 'GET').toUpperCase();
+      config.url = String(raw.url || '');
+      config.body = String(raw.body || '');
+    }
+    if (type === 'variable_assigner') {
+      config.variables = parseConfigJson(raw.variablesText);
+    }
+    if (type === 'intent_detection') {
+      config.intents = String(raw.intentsStr || '').split('\n').map((item) => item.trim()).filter(Boolean);
+    }
+    if (type === 'parameter_extract') {
+      config.params = String(raw.paramsText || '').split('\n').map((item) => item.trim()).filter(Boolean);
+      config.template = String(raw.template || '');
+    }
+    if (type === 'tool_call') {
+      config.args = parseConfigJson(raw.argsText, { text: '{{input}}' });
+    }
+    if (type === 'question_classifier' || type === 'multi_branch') {
+      config.branches = parseDagBranches(raw.branchesText);
+    }
+    if (type === 'if_else' || type === 'condition') {
+      config.expression = String(raw.expression || '');
+      config.trueTemplate = String(raw.trueTemplate || '{{input}}');
+      config.falseTemplate = String(raw.falseTemplate || '{{input}}');
+    }
+    return config;
   }
 
   async function createDefaultWorkflow() {
@@ -3816,13 +4333,72 @@ export function useAppController() {
     status.value = `已应用模板: ${template.name || 'DAG 模板'}`;
   }
 
+  function availableTeamAgentOptions() {
+    const used = new Set(teamForm.value.members.map((member) => member.agentId).filter(Boolean));
+    return agents.value.filter((agent) => agent.status === 'active' && !used.has(agent.id));
+  }
+
+  function addTeamFormMember(agentId = '') {
+    const options = availableTeamAgentOptions();
+    const picked = agents.value.find((agent) => agent.id === agentId)
+      ?? options.find((agent) => agent.id !== agentForm.value.id)
+      ?? options[0];
+    teamForm.value.members.push({
+      agentId: picked?.id || '',
+      role: picked?.id === agentForm.value.id ? '主执行 Agent' : `协作 Agent ${teamForm.value.members.length + 1}`,
+      inputTemplate: '',
+    });
+    teamForm.value.memberIds = teamForm.value.members.map((member) => member.agentId).filter(Boolean);
+  }
+
+  function removeTeamFormMember(index: number) {
+    teamForm.value.members.splice(index, 1);
+    teamForm.value.memberIds = teamForm.value.members.map((member) => member.agentId).filter(Boolean);
+  }
+
+  function applyTeamTemplate(templateId: string) {
+    const template = teamTemplates.find((item) => item.id === templateId) ?? teamTemplates[0];
+    const selectedAgents = [
+      ...(agentForm.value.id ? agents.value.filter((agent) => agent.id === agentForm.value.id) : []),
+      ...agents.value.filter((agent) => agent.status === 'active' && agent.id !== agentForm.value.id),
+    ];
+    teamForm.value.name = teamForm.value.name || `${agentForm.value.name || template.name} · ${template.name}`;
+    teamForm.value.description = template.description;
+    teamForm.value.strategy = template.strategy;
+    teamForm.value.members = template.roles.map((role, index) => ({
+      agentId: selectedAgents[index]?.id || '',
+      role: role.role,
+      inputTemplate: role.inputTemplate,
+    }));
+    teamForm.value.memberIds = teamForm.value.members.map((member) => member.agentId).filter(Boolean);
+  }
+
+  function openTeamCreateDialog() {
+    if (!teamForm.value.members.length) applyTeamTemplate('review');
+    showTeamCreateDialog.value = true;
+  }
+
   async function createTeamFromForm() {
     const name = (teamForm.value.name.trim() || `${agentForm.value.name || 'Agent'} Team`).slice(0, 80);
-    const ids = Array.from(new Set([
+    const members = teamForm.value.members
+      .filter((member) => member.agentId)
+      .map((member, index) => ({
+        agentId: member.agentId,
+        role: member.role.trim() || (index === 0 ? '主执行 Agent' : `协作 Agent ${index + 1}`),
+        inputTemplate: member.inputTemplate.trim(),
+      }));
+    const fallbackIds = Array.from(new Set([
       agentForm.value.id,
       ...teamForm.value.memberIds,
     ].filter(Boolean)));
-    if (ids.length === 0) {
+    const normalizedMembers = members.length > 0
+      ? members
+      : fallbackIds.map((agentId, index) => ({
+        agentId,
+        role: index === 0 ? '主执行 Agent' : `协作 Agent ${index + 1}`,
+        inputTemplate: '',
+      }));
+    if (normalizedMembers.length === 0) {
       status.value = '请先保存或选择至少一个 Agent';
       return;
     }
@@ -3833,16 +4409,14 @@ export function useAppController() {
         name,
         description: teamForm.value.description.trim(),
         strategy: teamForm.value.strategy,
-        members: ids.map((agentId, index) => ({
-          agentId,
-          role: index === 0 ? '主执行 Agent' : `协作 Agent ${index + 1}`,
-        })),
+        members: normalizedMembers,
       }, backendBaseUrl.value);
       agentTeams.value = [team, ...agentTeams.value.filter((item) => item.id !== team.id)];
       activeTeamId.value = team.id;
       teamForm.value.name = '';
       teamForm.value.description = '';
       teamForm.value.memberIds = [];
+      teamForm.value.members = [];
       showTeamCreateDialog.value = false;
       status.value = 'Agent Team 已创建';
     } catch (error) {
@@ -3889,14 +4463,15 @@ export function useAppController() {
     if (!agentForm.value.id || versionSaving.value) return;
     versionSaving.value = true;
     try {
+      const releaseMode = versionForm.value.releaseMode;
       const result = await apiPublishAgentVersion(agentForm.value.id, {
         versionId: versionId || undefined,
         label: versionForm.value.label.trim() || '发布版本',
-        releaseMode: versionForm.value.releaseMode,
+        releaseMode,
         trafficPercent: versionForm.value.trafficPercent,
         notes: versionForm.value.notes.trim(),
         published: true,
-        apiEnabled: agentForm.value.apiEnabled || true,
+        apiEnabled: agentForm.value.apiEnabled,
         publicSlug: agentForm.value.publicSlug || agentForm.value.name,
       }, backendBaseUrl.value);
       const idx = agents.value.findIndex((agent) => agent.id === result.agent.id);
@@ -3907,7 +4482,21 @@ export function useAppController() {
       versionForm.value.targetVersionId = '';
       versionForm.value.notes = '';
       versionForm.value.label = '';
-      status.value = versionForm.value.releaseMode === 'canary' ? 'Agent 灰度发布已生效' : 'Agent 稳定版本已发布';
+      if (releaseMode === 'canary') {
+        status.value = 'Agent 灰度发布已生效';
+        return;
+      }
+      try {
+        await syncAgentMarketplaceTemplate(result.agent, {
+          name: result.agent.name,
+          description: result.agent.description || '',
+          category: 'custom',
+        });
+        status.value = 'Agent 稳定版本已发布，并已同步到市场';
+      } catch (marketError) {
+        const message = marketError instanceof Error ? marketError.message : '未知错误';
+        status.value = `Agent 稳定版本已发布，但市场同步失败：${message}`;
+      }
     } catch (error) {
       status.value = error instanceof Error ? error.message : '发布版本失败';
     } finally {
@@ -3972,80 +4561,6 @@ export function useAppController() {
     }
   }
 
-  async function createTestSuiteFromForm() {
-    if (!agentForm.value.id || !testSuiteForm.value.name.trim() || testSaving.value) return;
-    testSaving.value = true;
-    try {
-      const suite = await apiCreateAgentTestSuite(agentForm.value.id, {
-        name: testSuiteForm.value.name.trim(),
-        description: testSuiteForm.value.description.trim(),
-      }, backendBaseUrl.value);
-      agentTestSuites.value = [suite, ...agentTestSuites.value.filter((item) => item.id !== suite.id)];
-      activeTestSuiteId.value = suite.id;
-      testSuiteForm.value = { name: '', description: '' };
-      agentTestCases.value = [];
-      showTestSuiteCreateDialog.value = false;
-      status.value = '测试集已创建';
-    } catch (error) {
-      status.value = error instanceof Error ? error.message : '创建测试集失败';
-    } finally {
-      testSaving.value = false;
-    }
-  }
-
-  async function createTestCaseFromForm() {
-    if (!activeTestSuiteId.value || !testCaseForm.value.name.trim() || !testCaseForm.value.input.trim() || testSaving.value) return;
-    testSaving.value = true;
-    try {
-      const testCase = await apiCreateAgentTestCase(activeTestSuiteId.value, {
-        name: testCaseForm.value.name.trim(),
-        input: testCaseForm.value.input.trim(),
-        expectedOutput: testCaseForm.value.expectedOutput.trim(),
-        rubric: testCaseForm.value.rubric.trim(),
-      }, backendBaseUrl.value);
-      agentTestCases.value = [...agentTestCases.value, testCase];
-      testCaseForm.value = { name: '', input: '', expectedOutput: '', rubric: '' };
-      await loadAgentTestSuites();
-      showTestCaseCreateDialog.value = false;
-      status.value = '测试用例已添加';
-    } catch (error) {
-      status.value = error instanceof Error ? error.message : '添加测试用例失败';
-    } finally {
-      testSaving.value = false;
-    }
-  }
-
-  async function loadSelectedTestCases() {
-    if (!activeTestSuiteId.value) {
-      agentTestCases.value = [];
-      agentTestRuns.value = [];
-      return;
-    }
-    try {
-      agentTestCases.value = await fetchAgentTestCases(activeTestSuiteId.value, backendBaseUrl.value);
-      agentTestRuns.value = await fetchAgentTestRuns(activeTestSuiteId.value, backendBaseUrl.value);
-    } catch (error) {
-      status.value = error instanceof Error ? error.message : '加载测试用例失败';
-    }
-  }
-
-  async function runSelectedTestSuite() {
-    if (!activeTestSuiteId.value || testRunning.value) return;
-    testRunning.value = true;
-    try {
-      activeTestRun.value = await apiRunAgentTestSuite(activeTestSuiteId.value, {
-        judgeModel: evaluationForm.value.judgeModel.trim() || agentForm.value.model || undefined,
-        evaluationMode: evaluationForm.value.mode,
-      }, backendBaseUrl.value);
-      agentTestRuns.value = await fetchAgentTestRuns(activeTestSuiteId.value, backendBaseUrl.value);
-      status.value = '回归测试已完成';
-    } catch (error) {
-      status.value = error instanceof Error ? error.message : '运行回归测试失败';
-    } finally {
-      testRunning.value = false;
-    }
-  }
-
   async function createMcpServerFromForm() {
     if (!mcpForm.value.token.trim() || mcpSaving.value) return;
     mcpSaving.value = true;
@@ -4095,19 +4610,24 @@ export function useAppController() {
     const workflow = selectedWorkflow.value;
     if (!workflow) {
       workflowCanvasNodes.value = [];
+      workflowCanvasConnecting.value = '';
+      workflowCanvasDrag.value = null;
       return;
     }
     workflowCanvasNodes.value = workflow.nodes.map((node, index) => {
-      const position = (node.config.position ?? {}) as { x?: unknown; y?: unknown };
-      const dagType = typeof node.config.dagType === 'string' ? node.config.dagType : node.type;
+      const config = node.config ?? {};
+      const position = (config.position ?? {}) as { x?: unknown; y?: unknown };
+      const dagType = typeof config.dagType === 'string' ? config.dagType : node.type;
       return {
         ...node,
         type: dagType as any,
-        config: { ...node.config },
+        config: { ...config },
         x: typeof position.x === 'number' ? position.x : 40 + index * 210,
         y: typeof position.y === 'number' ? position.y : 80 + (index % 2) * 110,
       };
     });
+    workflowCanvasConnecting.value = '';
+    workflowCanvasDrag.value = null;
   }
 
   function createWorkflowNodeConfig(type: WorkflowNode['type']): Record<string, unknown> {
@@ -4128,7 +4648,15 @@ export function useAppController() {
   function normalizeDagNodeType(type: string): WorkflowNode['type'] {
     if (type === 'knowledge_search' || type === 'context_read' || type === 'doc_parse') return 'knowledge';
     if (type === 'memory_read' || type === 'memory_write') return 'memory';
-    if (type === 'tool_call' || type === 'http_request' || type === 'db_query' || type === 'webhook' || type === 'code执行') return 'tool';
+    if (type === 'http_request') return 'http_request';
+    if (type === 'code' || type === 'code执行') return 'code';
+    if (type === 'llm_generate') return 'llm';
+    if (type === 'template_transform') return 'template_transform';
+    if (type === 'variable_assigner') return 'variable_assigner';
+    if (type === 'if_else' || type === 'condition') return 'if_else';
+    if (type === 'question_classifier' || type === 'multi_branch') return 'question_classifier';
+    if (type === 'end' || type === 'output') return 'end';
+    if (type === 'tool_call' || type === 'db_query' || type === 'webhook') return 'tool';
     if (type === 'skill_call') return 'skill';
     if (type === 'agent_call') return 'agent';
     return 'prompt';
@@ -4137,19 +4665,20 @@ export function useAppController() {
   function createDagWorkflowNodeConfig(dagType: string): Record<string, unknown> {
     const runtimeType = normalizeDagNodeType(dagType);
     const base = createWorkflowNodeConfig(runtimeType);
+    const schema = getDagNodeInfo(dagType as DagNodeType)?.configSchema ?? {};
     if (dagType === 'start' || dagType === 'user_input' || dagType === 'file_input' || dagType === 'output' || dagType === 'end') {
-      return { ...base, template: '{{input}}', dagType };
+      return { ...base, ...schema, template: String((schema as any).template ?? '{{input}}'), dagType };
     }
     if (dagType === 'intent_detection') {
-      return { ...base, template: '请识别以下输入的意图，并输出简洁结果:\n{{input}}', dagType };
+      return { ...base, ...schema, template: '请识别以下输入的意图，并输出简洁结果:\n{{input}}', dagType };
     }
     if (dagType === 'parameter_extract') {
-      return { ...base, template: '请从以下输入中提取关键参数，并输出 JSON:\n{{input}}', dagType };
+      return { ...base, ...schema, template: '请从以下输入中提取关键参数，并输出 JSON:\n{{input}}', dagType };
     }
     if (dagType === 'condition' || dagType === 'multi_branch' || dagType === 'llm_generate' || dagType === 'result_summary') {
-      return { ...base, template: '{{input}}', dagType };
+      return { ...base, ...schema, template: String((schema as any).template ?? '{{input}}'), dagType };
     }
-    return { ...base, dagType };
+    return { ...base, ...schema, dagType };
   }
 
   // DAG节点拖拽
@@ -4328,7 +4857,81 @@ export function useAppController() {
     }
   }
 
-  onMounted(() => { void bootstrapAuth(); });
+  function resetAuthBehavior() {
+    authBehaviorStartedAt.value = Date.now();
+    authBehavior.value = { mouseMoveCount: 0, clickCount: 0, keydownCount: 0, focusCount: 0, blurCount: 0 };
+  }
+
+  function buildAuthBehaviorPayload(): BehaviorPayload {
+    return {
+      duration: Date.now() - authBehaviorStartedAt.value,
+      mouseMoveCount: authBehavior.value.mouseMoveCount,
+      clickCount: authBehavior.value.clickCount,
+      keydownCount: authBehavior.value.keydownCount,
+      focusCount: authBehavior.value.focusCount,
+      blurCount: authBehavior.value.blurCount,
+      screenWidth: window.screen?.width || window.innerWidth,
+      screenHeight: window.screen?.height || window.innerHeight,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+      language: navigator.language || '',
+      userAgent: navigator.userAgent || '',
+      webdriver: Boolean(navigator.webdriver),
+    };
+  }
+
+  async function refreshAuthChallenge() {
+    try {
+      const challenge = await fetchSecurityChallenge(backendBaseUrl.value);
+      authChallengeId.value = challenge.challengeId;
+      resetAuthBehavior();
+    } catch (error) {
+      authError.value = error instanceof Error ? error.message : '初始化安全验证失败';
+    }
+  }
+
+  async function refreshAuthCaptcha() {
+    authCaptchaLoading.value = true;
+    try {
+      const captcha = await fetchSecurityCaptcha(backendBaseUrl.value);
+      authCaptchaId.value = captcha.captchaId;
+      authCaptchaImage.value = captcha.image;
+      authCaptchaCode.value = '';
+      authCaptchaRequired.value = true;
+    } catch (error) {
+      authError.value = error instanceof Error ? error.message : '加载图形验证码失败';
+    } finally {
+      authCaptchaLoading.value = false;
+    }
+  }
+
+  function authSecurityPayload() {
+    return {
+      challengeId: authChallengeId.value,
+      behaviorPayload: buildAuthBehaviorPayload(),
+      captchaId: authCaptchaRequired.value ? authCaptchaId.value : undefined,
+      captchaCode: authCaptchaRequired.value ? authCaptchaCode.value.trim() : undefined,
+    };
+  }
+
+  function bindAuthBehaviorListeners() {
+    window.addEventListener('mousemove', () => { if (isAuthDialogOpen.value) authBehavior.value.mouseMoveCount += 1; });
+    window.addEventListener('click', () => { if (isAuthDialogOpen.value) authBehavior.value.clickCount += 1; });
+    window.addEventListener('keydown', () => { if (isAuthDialogOpen.value) authBehavior.value.keydownCount += 1; });
+    window.addEventListener('focus', () => { if (isAuthDialogOpen.value) authBehavior.value.focusCount += 1; });
+    window.addEventListener('blur', () => { if (isAuthDialogOpen.value) authBehavior.value.blurCount += 1; });
+  }
+
+  watch(isAuthDialogOpen, (open) => {
+    if (open) {
+      authCaptchaRequired.value = false;
+      authCaptchaId.value = '';
+      authCaptchaImage.value = '';
+      authCaptchaCode.value = '';
+      void refreshAuthChallenge();
+    }
+  });
+
+  onMounted(() => { void bootstrapAuth(); bindAuthBehaviorListeners(); });
 
   async function submitAuth() {
     authError.value = '';
@@ -4354,20 +4957,35 @@ export function useAppController() {
         authError.value = '请输入验证码';
         return;
       }
+      if (!authTosAccepted.value) {
+        authError.value = '请先阅读并同意服务条款和个人信息保护政策';
+        return;
+      }
     }
 
     authLoading.value = true;
     try {
+      if (!authChallengeId.value) await refreshAuthChallenge();
+      if (authCaptchaRequired.value && (!authCaptchaId.value || !authCaptchaCode.value.trim())) {
+        authError.value = '请输入图形验证码';
+        authLoading.value = false;
+        return;
+      }
       const invitationCode = authMode.value === 'register' ? authInvitationCode.value.trim() || undefined : undefined;
       const result = authMode.value === 'register'
-        ? await register(username, password, authEmail.value.trim(), authVerificationCode.value.trim(), invitationCode, backendBaseUrl.value)
-        : await login(username, password, backendBaseUrl.value);
+        ? await register(username, password, authEmail.value.trim(), authVerificationCode.value.trim(), invitationCode, authTosAccepted.value, authSecurityPayload(), backendBaseUrl.value)
+        : await login(username, password, authSecurityPayload(), backendBaseUrl.value);
       setStoredToken(result.accessToken);
       authUser.value = result.user;
       authPassword.value = '';
       authEmail.value = '';
       authVerificationCode.value = '';
       authInvitationCode.value = '';
+      authTosAccepted.value = false;
+      authCaptchaRequired.value = false;
+      authCaptchaId.value = '';
+      authCaptchaImage.value = '';
+      authCaptchaCode.value = '';
       authError.value = '';
       authLoading.value = false;
       isAuthDialogOpen.value = false;
@@ -4375,7 +4993,16 @@ export function useAppController() {
       await loadUserData();
       await fetchUserInvitationCode();
     } catch (error) {
-      authError.value = error instanceof Error ? error.message : '登录失败';
+      if (isCaptchaRequiredError(error)) {
+        authCaptchaRequired.value = true;
+        await refreshAuthCaptcha();
+        await refreshAuthChallenge();
+        authError.value = '当前操作需要图形验证码，请输入后重试';
+      } else {
+        authError.value = error instanceof Error ? error.message : '登录失败';
+        if (authCaptchaRequired.value) await refreshAuthCaptcha();
+        await refreshAuthChallenge();
+      }
       authLoading.value = false;
     }
   }
@@ -4384,6 +5011,10 @@ export function useAppController() {
     authError.value = '';
     authEmail.value = '';
     authVerificationCode.value = '';
+    authCaptchaRequired.value = false;
+    authCaptchaId.value = '';
+    authCaptchaImage.value = '';
+    authCaptchaCode.value = '';
     codeCountdown.value = 0;
     if (codeTimer) { clearInterval(codeTimer); codeTimer = null; }
   }
@@ -5214,7 +5845,43 @@ export function useAppController() {
     adminEditUserUsername.value = user.username;
     adminEditUserCredits.value = user.credits;
     adminEditUserRole.value = user.role;
+    adminEditUserEmailVerified.value = Boolean(user.emailVerified);
     adminEditUserDialog.value = true;
+  }
+
+  function openCreateAdminUser() {
+    adminCreateUserForm.value = {
+      username: '',
+      email: '',
+      password: '',
+      role: 'user',
+      credits: 20,
+      emailVerified: true,
+    };
+    adminCreateUserDialog.value = true;
+  }
+
+  async function saveCreateAdminUser() {
+    const form = adminCreateUserForm.value;
+    if (!form.username.trim() || !form.email.trim() || form.password.length < 4) return;
+    adminCreateUserSaving.value = true;
+    try {
+      await apiCreateAdminUser({
+        username: form.username.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        role: form.role,
+        credits: form.credits,
+        emailVerified: form.emailVerified,
+      }, backendBaseUrl.value);
+      adminCreateUserDialog.value = false;
+      await loadAdminUsers();
+      await loadAdminStats();
+    } catch (e: any) {
+      console.error('[admin] create user error:', e);
+    } finally {
+      adminCreateUserSaving.value = false;
+    }
   }
 
   async function saveEditUser() {
@@ -5222,6 +5889,7 @@ export function useAppController() {
       await updateAdminUser(adminEditUserId.value, {
         credits: adminEditUserCredits.value,
         role: adminEditUserRole.value,
+        emailVerified: adminEditUserEmailVerified.value,
       }, backendBaseUrl.value);
       adminEditUserDialog.value = false;
       await loadAdminUsers();
@@ -5745,7 +6413,7 @@ export function useAppController() {
     // For page_models_* settings, parse into array for multi-select
     if (setting.key.startsWith('page_models_')) {
       const val = setting.value.trim();
-      adminEditSettingModels.value = val === '*' ? [] : val.split(',').map((s) => s.trim()).filter(Boolean);
+      adminEditSettingModels.value = val === '*' ? [] : val.split(',').map((s) => s.trim()).filter((model) => model && model !== 'auto');
       adminEditSettingTagFilter.value = '';
       // Ensure models are loaded
       if (models.value.length === 0) loadModels();
@@ -5774,7 +6442,7 @@ export function useAppController() {
     if (adminEditSettingTextMode.value) {
       // Switching FROM text TO multi-select: parse textarea into models array
       const raw = adminEditSettingValue.value.trim();
-      adminEditSettingModels.value = raw === '*' ? [] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+      adminEditSettingModels.value = raw === '*' ? [] : raw.split(',').map((s) => s.trim()).filter((model) => model && model !== 'auto');
     } else {
       // Switching FROM multi-select TO text: join models into textarea
       adminEditSettingValue.value = adminEditSettingModels.value.length > 0
@@ -5791,17 +6459,21 @@ export function useAppController() {
       if (adminEditSettingKey.value.startsWith('page_models_')) {
         if (adminEditSettingTextMode.value) {
           // Text mode: use textarea value directly
-          value = adminEditSettingValue.value.trim() || '*';
+          const raw = adminEditSettingValue.value.trim();
+          value = raw === '*' ? '*' : raw.split(',').map((s) => s.trim()).filter((model) => model && model !== 'auto').join(',') || '*';
         } else {
           // Multi-select mode: join array
-          value = adminEditSettingModels.value.length > 0
-            ? adminEditSettingModels.value.join(',')
+          const realSelected = adminEditSettingModels.value.filter((model) => model && model !== 'auto');
+          value = realSelected.length > 0
+            ? realSelected.join(',')
             : '*';
         }
       }
       // For model_tags, convert map to JSON
       if (adminEditSettingKey.value === 'model_tags') {
-        value = JSON.stringify(adminEditModelTags.value);
+        const { auto, ...rest } = adminEditModelTags.value;
+        void auto;
+        value = JSON.stringify(rest);
       }
       await updateAdminSetting(adminEditSettingKey.value, value, backendBaseUrl.value);
       adminEditSettingDialog.value = false;
@@ -5842,7 +6514,7 @@ export function useAppController() {
 
   async function saveAdminRouterRule() {
     const intent = adminRouterEditIntent.value.trim();
-    const models = adminRouterEditModels.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const models = adminRouterEditModels.value.split(',').map((s) => s.trim()).filter((model) => model && model !== 'auto');
     if (!intent || models.length === 0) return;
     try {
       const token = getStoredToken();
@@ -6292,15 +6964,15 @@ export function useAppController() {
     const filtered = getPageModels('page_models_group');
     if (filtered.length > 0) return filtered;
     // Fallback: models tagged as 'language'
-    return models.value.filter((m) => getModelTags(m.id).includes('language'));
+    return realModels.value.filter((m) => getModelTags(m.id).includes('language'));
   });
 
   function getPageModels(settingKey: string): ModelDescriptor[] {
     const config = pageModelsConfig.value[settingKey];
-    if (!config || config === '*') return models.value;
-    const allowed = config.split(',').map((s) => s.trim()).filter(Boolean);
-    if (allowed.length === 0) return models.value;
-    return models.value.filter((m) => allowed.includes(m.id));
+    if (!config || config === '*') return realModels.value;
+    const allowed = config.split(',').map((s) => s.trim()).filter((model) => model && model !== 'auto');
+    if (allowed.length === 0) return realModels.value;
+    return realModels.value.filter((m) => allowed.includes(m.id));
   }
 
   // Vision-capable models: from page_models_vision setting, fallback to tags
@@ -6308,9 +6980,9 @@ export function useAppController() {
     const config = pageModelsConfig.value['page_models_vision'];
     if (config && config !== '*') {
       const allowed = config.split(',').map((s) => s.trim()).filter(Boolean);
-      return models.value.filter((m) => allowed.includes(m.id));
+      return realModels.value.filter((m) => allowed.includes(m.id));
     }
-    return models.value.filter((m) => getModelTags(m.id).includes('vision'));
+    return realModels.value.filter((m) => getModelTags(m.id).includes('vision'));
   });
   const DRIVING_VISION_MODEL = 'qwen3.7-max';
 
@@ -6338,9 +7010,9 @@ export function useAppController() {
     const config = pageModelsConfig.value['page_models_tts'];
     if (config && config !== '*') {
       const allowed = config.split(',').map((s) => s.trim()).filter(Boolean);
-      return models.value.filter((m) => allowed.includes(m.id));
+      return realModels.value.filter((m) => allowed.includes(m.id));
     }
-    return models.value.filter((m) => getModelTags(m.id).includes('audio'));
+    return realModels.value.filter((m) => getModelTags(m.id).includes('audio'));
   });
 
   /* ---------- Multimodal Page State ---------- */
@@ -6472,12 +7144,6 @@ export function useAppController() {
       }, drivingAiIntervalSec.value * 1000);
     }
   });
-
-  watch(builderBlockConfigs, () => {
-    if (agentBuilderCanvas.value.length > 0) {
-      applyBuilderConfigs();
-    }
-  }, { deep: true });
 
   function supportsDirectImageInput(modelId: string): boolean {
     const normalized = modelId.toLowerCase();
@@ -8304,6 +8970,7 @@ export function useAppController() {
     VideoCamera,
     Coin,
     Upload,
+    MagicStick,
     useDagNodes,
     getModelLogo,
     createId,
@@ -8314,7 +8981,6 @@ export function useAppController() {
     getStoredValue,
     setStoredValue,
     renderMarkdown,
-    MagicStick,
     BASE_URL_KEY,
     THEME_KEY,
     getPreferredTheme,
@@ -8337,8 +9003,14 @@ export function useAppController() {
     authEmail,
     authVerificationCode,
     authInvitationCode,
+    authTosAccepted,
+    authTosDialogOpen,
     authLoading,
     authError,
+    authCaptchaRequired,
+    authCaptchaImage,
+    authCaptchaCode,
+    authCaptchaLoading,
     codeCountdown,
     codeTimer,
     userInvitationCode,
@@ -8365,9 +9037,8 @@ export function useAppController() {
     agentGenerating,
     agentPrompt,
     agentImageUrlInput,
-    agentInvokeMode,
-    agentContextStrategy,
     agentInvokeMaxSteps,
+    agentConversationId,
     agentInvokePanelTab,
     agentImageInputOpen,
     agentLastPrompt,
@@ -8390,13 +9061,12 @@ export function useAppController() {
     agentSlowTraceSteps,
     agentExecutionTraceFlow,
     agentTraceSnapshot,
+    agentUserPreferenceMemories,
+    agentScopedMemories,
+    activeAgentToolResultCards,
     agentTraceDebuggerState,
     agentComparativeReplay,
     agentHarnessMetrics,
-    agentHarnessDatasetTypes,
-    agentHarnessScenarios,
-    activeHarnessRunMetrics,
-    getHarnessExpectedTool,
     skillMarketStats,
     skillMarketRows,
     agentContextSourceSummary,
@@ -8412,6 +9082,8 @@ export function useAppController() {
     availableTools,
     knowledgeBases,
     agentMemories,
+    memoryTypeOptions,
+    memoryProviderInfo,
     settingsMemories,
     settingsMemoryLoading,
     settingsMemorySaving,
@@ -8423,9 +9095,6 @@ export function useAppController() {
     agentVersions,
     agentVersionCompare,
     agentVersionCompareVisible,
-    agentTestSuites,
-    agentTestCases,
-    agentTestRuns,
     marketplaceTemplates,
     builtinAgents,
     agentResourceLoading,
@@ -8459,8 +9128,6 @@ export function useAppController() {
     showTeamCreateDialog,
     showMcpCreateDialog,
     showMcpTestDialog,
-    showTestSuiteCreateDialog,
-    showTestCaseCreateDialog,
     showMarketplacePublishDialog,
     showVersionCreateDialog,
     showVersionPublishDialog,
@@ -8479,8 +9146,6 @@ export function useAppController() {
     mcpSaving,
     mcpTesting,
     versionSaving,
-    testSaving,
-    testRunning,
     marketplaceLoading,
     marketplaceInstalling,
     marketplacePublishing,
@@ -8490,19 +9155,21 @@ export function useAppController() {
     activeTeamId,
     teamInput,
     activeTeamRun,
-    activeTestSuiteId,
-    activeTestRun,
     activeMcpTestServerId,
     agentEvaluations,
     agentStats,
     agentEvaluationLoading,
     agentEvaluationSaving,
+    beginnerAssistTarget,
     evaluationForm,
     generatorForm,
     agentCreateWizardStep,
     agentCreateWizardAdvancedOpen,
     selectedAgentTemplateId,
     agentCreationGoal,
+    beginnerAgentForm,
+    beginnerAgentPlainGuide,
+    beginnerAgentProgress,
     showAgentExportDialog,
     customTools,
     toolCreateDialogVisible,
@@ -8518,6 +9185,7 @@ export function useAppController() {
     dagNodeConfigVisible,
     activeDagNode,
     dagNodeConfig,
+    dagNodeConfigErrors,
     agentForm,
     knowledgeForm,
     knowledgeDocForm,
@@ -8528,19 +9196,11 @@ export function useAppController() {
     editingMemoryId,
     skillForm,
     teamForm,
+    teamTemplates,
     mcpForm,
     mcpServerOptions,
     versionForm,
-    testSuiteForm,
-    testCaseForm,
     marketplaceForm,
-    agentBuilderBlocks,
-    agentBuilderCanvas,
-    agentBuilderDragging,
-    agentBuilderSkillDragging,
-    showBuilderGuide,
-    activeBuilderBlock,
-    builderBlockConfigs,
     agentCreationTemplates,
     workflowCanvasNodes,
     workflowCanvasConnecting,
@@ -8560,6 +9220,7 @@ export function useAppController() {
     apiKeyNewName,
     errorCodes,
     models,
+    realModels,
     selectedModel,
     pageModelsConfig,
     getModelStorageKey,
@@ -8633,6 +9294,10 @@ export function useAppController() {
     adminEditUserCredits,
     adminEditUserRole,
     adminEditUserUsername,
+    adminEditUserEmailVerified,
+    adminCreateUserDialog,
+    adminCreateUserForm,
+    adminCreateUserSaving,
     adminTab,
     adminDailyUsage,
     adminChartDays,
@@ -8707,29 +9372,26 @@ export function useAppController() {
     loadAgentMemories,
     loadAgentEvaluations,
     loadAgentVersions,
-    loadAgentTestSuites,
     loadAgents,
     loadAgentRuns,
     createAgentDraft,
     applyAgentTemplate,
+    applyBeginnerExample,
+    applyBeginnerFormToAgent,
+    generateBeginnerAgentDraft,
+    improveBeginnerText,
     nextAgentWizardStep,
     previousAgentWizardStep,
     saveAgentFromWizard,
     selectAgent,
     selectAgentById,
-    startAgentBuilderDrag,
-    startSkillBuilderDrag,
-    dropAgentBuilderBlock,
-    removeAgentBuilderBlock,
-    clearAgentBuilderCanvas,
-    applyAgentBuilder,
-    applyBuilderConfigs,
     persistAgent,
     saveAgentPublication,
     generateAgentFromRequirement,
     installMarketplaceTemplate,
     installBuiltinAgentFromSpec,
     publishCurrentAgentToMarketplace,
+    deleteMarketplaceTemplate,
     getToolLabelById,
     confirmToolExecutionIfNeeded,
     saveAgent,
@@ -8740,7 +9402,6 @@ export function useAppController() {
     fillAgentPromptExample,
     rerunLastAgentPrompt,
     copyActiveAgentOutput,
-    createTestCaseFromActiveRun,
     selectAgentRun,
     openAgentRunTrace,
     selectAgentTraceStep,
@@ -8756,8 +9417,6 @@ export function useAppController() {
     agentStepTypeLabel,
     agentLifecycleStatusLabel,
     riskLevelLabel,
-    agentInvokeModeLabel,
-    agentContextStrategyLabel,
     teamStrategyLabel,
     agentVersionStatusLabel,
     agentVersionStatusType,
@@ -8817,7 +9476,12 @@ export function useAppController() {
     toggleToolStatus,
     openDagNodeConfig,
     saveDagNodeConfig,
+    getDagNodeConfigGuide,
     createDefaultWorkflow,
+    openTeamCreateDialog,
+    applyTeamTemplate,
+    addTeamFormMember,
+    removeTeamFormMember,
     createTeamFromForm,
     runSelectedTeam,
     createVersionFromForm,
@@ -8826,10 +9490,6 @@ export function useAppController() {
     restoreVersion,
     rollbackVersion,
     compareVersions,
-    createTestSuiteFromForm,
-    createTestCaseFromForm,
-    loadSelectedTestCases,
-    runSelectedTestSuite,
     createMcpServerFromForm,
     testMcpServer,
     openMcpTestDialog,
@@ -8849,6 +9509,7 @@ export function useAppController() {
     bootstrapAuth,
     fetchUserInvitationCode,
     submitAuth,
+    refreshAuthCaptcha,
     onAuthDialogClosed,
     handleSendCode,
     loadUserData,
@@ -8878,6 +9539,8 @@ export function useAppController() {
     loadAdminUsers,
     loadAdminBilling,
     openEditUser,
+    openCreateAdminUser,
+    saveCreateAdminUser,
     saveEditUser,
     loadAdminProviderKeys,
     getAdminProviderKeyMetric,

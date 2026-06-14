@@ -24,6 +24,38 @@ services:
     networks:
       - llmgather-dev-net
 
+  redis:
+    image: redis:7-alpine
+    container_name: llmgather-redis-dev
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "${REDIS_DEV_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - llmgather-dev-net
+
+  langgraph-memory:
+    image: node:22-alpine
+    container_name: llmgather-langgraph-memory-dev
+    working_dir: /app/langgraph
+    command: sh -c "npm install && npx langgraphjs dev --host 0.0.0.0 --port 2024"
+    volumes:
+      - ./langgraph:/app/langgraph
+      - langgraph_node_modules_dev:/app/langgraph/node_modules
+    environment:
+      - LANGGRAPH_ALLOW_BLOCKING=true
+    ports:
+      - "${LANGGRAPH_MEMORY_DEV_PORT:-2024}:2024"
+    networks:
+      - llmgather-dev-net
+
   backend:
     image: node:22-alpine
     container_name: llmgather-backend-dev
@@ -40,9 +72,16 @@ services:
       - MYSQL_HOST=db
       - NODE_ENV=development
       - CODE_RUNNER_URL=http://code-runner:8787/run
+      - REDIS_URL=redis://redis:6379
+      - MEMORY_PROVIDER=langgraph
+      - LANGGRAPH_MEMORY_URL=http://langgraph-memory:2024
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      langgraph-memory:
+        condition: service_started
     networks:
       - llmgather-dev-net
 
@@ -84,4 +123,6 @@ networks:
 
 volumes:
   mysql_dev_data:
+  redis_dev_data:
+  langgraph_node_modules_dev:
   node_modules_dev:

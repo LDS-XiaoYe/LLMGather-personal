@@ -15,6 +15,7 @@ const bind = (target: Record<string, any>, key: string) => vueComputed({
 
 const DataAnalysis = bind(app, 'DataAnalysis');
 const Delete = bind(app, 'Delete');
+const MagicStick = bind(app, 'MagicStick');
 const Plus = bind(app, 'Plus');
 const Promotion = bind(app, 'Promotion');
 const Refresh = bind(app, 'Refresh');
@@ -31,9 +32,8 @@ const agentRunning = bind(app, 'agentRunning');
 const agentGenerating = bind(app, 'agentGenerating');
 const agentPrompt = bind(app, 'agentPrompt');
 const agentImageUrlInput = bind(app, 'agentImageUrlInput');
-const agentInvokeMode = bind(app, 'agentInvokeMode');
-const agentContextStrategy = bind(app, 'agentContextStrategy');
 const agentInvokeMaxSteps = bind(app, 'agentInvokeMaxSteps');
+const agentConversationId = bind(app, 'agentConversationId');
 const agentInvokePanelTab = bind(app, 'agentInvokePanelTab');
 const agentImageInputOpen = bind(app, 'agentImageInputOpen');
 const agentLastPrompt = bind(app, 'agentLastPrompt');
@@ -55,13 +55,10 @@ const agentFailedTraceSteps = bind(app, 'agentFailedTraceSteps');
 const agentSlowTraceSteps = bind(app, 'agentSlowTraceSteps');
 const agentExecutionTraceFlow = bind(app, 'agentExecutionTraceFlow');
 const agentTraceSnapshot = bind(app, 'agentTraceSnapshot');
+const activeAgentToolResultCards = bind(app, 'activeAgentToolResultCards');
 const agentTraceDebuggerState = bind(app, 'agentTraceDebuggerState');
 const agentComparativeReplay = bind(app, 'agentComparativeReplay');
 const agentHarnessMetrics = bind(app, 'agentHarnessMetrics');
-const agentHarnessDatasetTypes = bind(app, 'agentHarnessDatasetTypes');
-const agentHarnessScenarios = bind(app, 'agentHarnessScenarios');
-const activeHarnessRunMetrics = bind(app, 'activeHarnessRunMetrics');
-const getHarnessExpectedTool = bind(app, 'getHarnessExpectedTool');
 const skillMarketStats = bind(app, 'skillMarketStats');
 const skillMarketRows = bind(app, 'skillMarketRows');
 const agentContextSourceSummary = bind(app, 'agentContextSourceSummary');
@@ -75,6 +72,8 @@ const applyWorkflowDagTemplate = bind(app, 'applyWorkflowDagTemplate');
 const availableTools = bind(app, 'availableTools');
 const knowledgeBases = bind(app, 'knowledgeBases');
 const agentMemories = bind(app, 'agentMemories');
+const agentUserPreferenceMemories = bind(app, 'agentUserPreferenceMemories');
+const agentScopedMemories = bind(app, 'agentScopedMemories');
 const availableSkills = bind(app, 'availableSkills');
 const workflows = bind(app, 'workflows');
 const agentTeams = bind(app, 'agentTeams');
@@ -82,9 +81,6 @@ const mcpServers = bind(app, 'mcpServers');
 const agentVersions = bind(app, 'agentVersions');
 const agentVersionCompare = bind(app, 'agentVersionCompare');
 const agentVersionCompareVisible = bind(app, 'agentVersionCompareVisible');
-const agentTestSuites = bind(app, 'agentTestSuites');
-const agentTestCases = bind(app, 'agentTestCases');
-const agentTestRuns = bind(app, 'agentTestRuns');
 const marketplaceTemplates = bind(app, 'marketplaceTemplates');
 const builtinAgents = bind(app, 'builtinAgents');
 const agentResourceLoading = bind(app, 'agentResourceLoading');
@@ -95,8 +91,6 @@ const skillPreviewOpen = bind(app, 'skillPreviewOpen');
 const showTeamCreateDialog = bind(app, 'showTeamCreateDialog');
 const showMcpCreateDialog = bind(app, 'showMcpCreateDialog');
 const showMcpTestDialog = bind(app, 'showMcpTestDialog');
-const showTestSuiteCreateDialog = bind(app, 'showTestSuiteCreateDialog');
-const showTestCaseCreateDialog = bind(app, 'showTestCaseCreateDialog');
 const showMarketplacePublishDialog = bind(app, 'showMarketplacePublishDialog');
 const showVersionCreateDialog = bind(app, 'showVersionCreateDialog');
 const showVersionPublishDialog = bind(app, 'showVersionPublishDialog');
@@ -112,8 +106,6 @@ const teamRunning = bind(app, 'teamRunning');
 const mcpSaving = bind(app, 'mcpSaving');
 const mcpTesting = bind(app, 'mcpTesting');
 const versionSaving = bind(app, 'versionSaving');
-const testSaving = bind(app, 'testSaving');
-const testRunning = bind(app, 'testRunning');
 const marketplaceInstalling = bind(app, 'marketplaceInstalling');
 const marketplacePublishing = bind(app, 'marketplacePublishing');
 const workflowInput = bind(app, 'workflowInput');
@@ -121,19 +113,21 @@ const activeWorkflowRun = bind(app, 'activeWorkflowRun');
 const activeTeamId = bind(app, 'activeTeamId');
 const teamInput = bind(app, 'teamInput');
 const activeTeamRun = bind(app, 'activeTeamRun');
-const activeTestSuiteId = bind(app, 'activeTestSuiteId');
-const activeTestRun = bind(app, 'activeTestRun');
 const activeMcpTestServerId = bind(app, 'activeMcpTestServerId');
 const agentEvaluations = bind(app, 'agentEvaluations');
 const agentStats = bind(app, 'agentStats');
 const agentEvaluationLoading = bind(app, 'agentEvaluationLoading');
 const agentEvaluationSaving = bind(app, 'agentEvaluationSaving');
+const beginnerAssistTarget = bind(app, 'beginnerAssistTarget');
 const evaluationForm = bind(app, 'evaluationForm');
 const generatorForm = bind(app, 'generatorForm');
 const agentCreateWizardStep = bind(app, 'agentCreateWizardStep');
 const agentCreateWizardAdvancedOpen = bind(app, 'agentCreateWizardAdvancedOpen');
 const selectedAgentTemplateId = bind(app, 'selectedAgentTemplateId');
 const agentCreationGoal = bind(app, 'agentCreationGoal');
+const beginnerAgentForm = bind(app, 'beginnerAgentForm');
+const beginnerAgentPlainGuide = bind(app, 'beginnerAgentPlainGuide');
+const beginnerAgentProgress = bind(app, 'beginnerAgentProgress');
 const showAgentExportDialog = bind(app, 'showAgentExportDialog');
 const customTools = bind(app, 'customTools');
 const toolCreateDialogVisible = bind(app, 'toolCreateDialogVisible');
@@ -149,22 +143,18 @@ const toolForm = bind(app, 'toolForm');
 const dagNodeConfigVisible = bind(app, 'dagNodeConfigVisible');
 const activeDagNode = bind(app, 'activeDagNode');
 const dagNodeConfig = bind(app, 'dagNodeConfig');
+const dagNodeConfigErrors = bind(app, 'dagNodeConfigErrors');
 const agentForm = bind(app, 'agentForm');
 const memoryForm = bind(app, 'memoryForm');
+const memoryTypeOptions = bind(app, 'memoryTypeOptions');
 const editingMemoryId = bind(app, 'editingMemoryId');
 const skillForm = bind(app, 'skillForm');
 const teamForm = bind(app, 'teamForm');
+const teamTemplates = bind(app, 'teamTemplates');
 const mcpForm = bind(app, 'mcpForm');
 const mcpServerOptions = bind(app, 'mcpServerOptions');
 const versionForm = bind(app, 'versionForm');
-const testSuiteForm = bind(app, 'testSuiteForm');
-const testCaseForm = bind(app, 'testCaseForm');
 const marketplaceForm = bind(app, 'marketplaceForm');
-const agentBuilderBlocks = bind(app, 'agentBuilderBlocks');
-const agentBuilderCanvas = bind(app, 'agentBuilderCanvas');
-const agentBuilderDragging = bind(app, 'agentBuilderDragging');
-const activeBuilderBlock = bind(app, 'activeBuilderBlock');
-const builderBlockConfigs = bind(app, 'builderBlockConfigs');
 const agentCreationTemplates = bind(app, 'agentCreationTemplates');
 const workflowCanvasNodes = bind(app, 'workflowCanvasNodes');
 const workflowCanvasConnecting = bind(app, 'workflowCanvasConnecting');
@@ -192,32 +182,30 @@ const refreshAgentStudio = bind(app, 'refreshAgentStudio');
 const loadAgentResources = bind(app, 'loadAgentResources');
 const createAgentDraft = bind(app, 'createAgentDraft');
 const applyAgentTemplate = bind(app, 'applyAgentTemplate');
+const applyBeginnerExample = bind(app, 'applyBeginnerExample');
+const applyBeginnerFormToAgent = bind(app, 'applyBeginnerFormToAgent');
+const generateBeginnerAgentDraft = bind(app, 'generateBeginnerAgentDraft');
+const improveBeginnerText = bind(app, 'improveBeginnerText');
 const nextAgentWizardStep = bind(app, 'nextAgentWizardStep');
 const previousAgentWizardStep = bind(app, 'previousAgentWizardStep');
 const saveAgentFromWizard = bind(app, 'saveAgentFromWizard');
-const startAgentBuilderDrag = bind(app, 'startAgentBuilderDrag');
-const startSkillBuilderDrag = bind(app, 'startSkillBuilderDrag');
-const dropAgentBuilderBlock = bind(app, 'dropAgentBuilderBlock');
-const removeAgentBuilderBlock = bind(app, 'removeAgentBuilderBlock');
-const clearAgentBuilderCanvas = bind(app, 'clearAgentBuilderCanvas');
 const saveAgentPublication = bind(app, 'saveAgentPublication');
 const generateAgentFromRequirement = bind(app, 'generateAgentFromRequirement');
 const installMarketplaceTemplate = bind(app, 'installMarketplaceTemplate');
 const installBuiltinAgentFromSpec = bind(app, 'installBuiltinAgentFromSpec');
 const publishCurrentAgentToMarketplace = bind(app, 'publishCurrentAgentToMarketplace');
+const deleteMarketplaceTemplate = bind(app, 'deleteMarketplaceTemplate');
 const saveAgent = bind(app, 'saveAgent');
+const removeAgent = bind(app, 'removeAgent');
 const runCurrentAgent = bind(app, 'runCurrentAgent');
 const stopCurrentAgentRun = bind(app, 'stopCurrentAgentRun');
 const clearAgentPrompt = bind(app, 'clearAgentPrompt');
 const fillAgentPromptExample = bind(app, 'fillAgentPromptExample');
 const rerunLastAgentPrompt = bind(app, 'rerunLastAgentPrompt');
 const copyActiveAgentOutput = bind(app, 'copyActiveAgentOutput');
-const createTestCaseFromActiveRun = bind(app, 'createTestCaseFromActiveRun');
 const selectAgentRun = bind(app, 'selectAgentRun');
 const openAgentRunTrace = bind(app, 'openAgentRunTrace');
 const selectAgentTraceStep = bind(app, 'selectAgentTraceStep');
-const setAgentTraceReplayIndex = bind(app, 'setAgentTraceReplayIndex');
-const toggleAgentTraceReplay = bind(app, 'toggleAgentTraceReplay');
 const pauseAgentTraceReplay = bind(app, 'pauseAgentTraceReplay');
 const resumeAgentTraceReplay = bind(app, 'resumeAgentTraceReplay');
 const stepIntoAgentTrace = bind(app, 'stepIntoAgentTrace');
@@ -228,8 +216,6 @@ const agentRunStatusLabel = bind(app, 'agentRunStatusLabel');
 const agentStepTypeLabel = bind(app, 'agentStepTypeLabel');
 const agentLifecycleStatusLabel = bind(app, 'agentLifecycleStatusLabel');
 const riskLevelLabel = bind(app, 'riskLevelLabel');
-const agentInvokeModeLabel = bind(app, 'agentInvokeModeLabel');
-const agentContextStrategyLabel = bind(app, 'agentContextStrategyLabel');
 const teamStrategyLabel = bind(app, 'teamStrategyLabel');
 const agentVersionStatusLabel = bind(app, 'agentVersionStatusLabel');
 const agentVersionStatusType = bind(app, 'agentVersionStatusType');
@@ -264,7 +250,12 @@ const runToolTest = bind(app, 'runToolTest');
 const toggleToolStatus = bind(app, 'toggleToolStatus');
 const openDagNodeConfig = bind(app, 'openDagNodeConfig');
 const saveDagNodeConfig = bind(app, 'saveDagNodeConfig');
+const getDagNodeConfigGuide = bind(app, 'getDagNodeConfigGuide');
 const createDefaultWorkflow = bind(app, 'createDefaultWorkflow');
+const openTeamCreateDialog = bind(app, 'openTeamCreateDialog');
+const applyTeamTemplate = bind(app, 'applyTeamTemplate');
+const addTeamFormMember = bind(app, 'addTeamFormMember');
+const removeTeamFormMember = bind(app, 'removeTeamFormMember');
 const createTeamFromForm = bind(app, 'createTeamFromForm');
 const runSelectedTeam = bind(app, 'runSelectedTeam');
 const createVersionFromForm = bind(app, 'createVersionFromForm');
@@ -273,9 +264,6 @@ const openVersionPublishDialog = bind(app, 'openVersionPublishDialog');
 const restoreVersion = bind(app, 'restoreVersion');
 const rollbackVersion = bind(app, 'rollbackVersion');
 const compareVersions = bind(app, 'compareVersions');
-const createTestSuiteFromForm = bind(app, 'createTestSuiteFromForm');
-const createTestCaseFromForm = bind(app, 'createTestCaseFromForm');
-const runSelectedTestSuite = bind(app, 'runSelectedTestSuite');
 const createMcpServerFromForm = bind(app, 'createMcpServerFromForm');
 const testMcpServer = bind(app, 'testMcpServer');
 const openMcpTestDialog = bind(app, 'openMcpTestDialog');
@@ -293,6 +281,38 @@ const logout = bind(app, 'logout');
 const switchPage = bind(app, 'switchPage');
 const getModelTags = bind(app, 'getModelTags');
 const chatModels = bind(app, 'chatModels');
+
+function formatTraceDisplayValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return '无';
+  if (Array.isArray(value) && value.length === 0) return '无';
+  if (typeof value !== 'string') return JSON.stringify(value, null, 2);
+  const raw = value.trim();
+  if (!raw) return '无';
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length === 0) return '无';
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const payload = parsed as Record<string, unknown>;
+      if ('result' in payload || 'stdout' in payload || 'logs' in payload) {
+        if (payload.result && typeof payload.result === 'object') return JSON.stringify(payload.result, null, 2);
+        if (typeof payload.stdout === 'string' && payload.stdout.trim()) {
+          try {
+            const stdoutPayload = JSON.parse(payload.stdout.trim());
+            return typeof stdoutPayload === 'string' ? stdoutPayload : JSON.stringify(stdoutPayload, null, 2);
+          } catch {
+            return payload.stdout.trim();
+          }
+        }
+      }
+    }
+    return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+  } catch {
+    return value
+      .replace(/\\r\\n/g, '\n')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '  ');
+  }
+}
 </script>
 
 <template>
@@ -369,6 +389,7 @@ const chatModels = bind(app, 'chatModels');
                   class="agent-page-tabs"
                   v-model="agentPageTab"
                   :options="[
+                    { label: '从零搭建', value: 'starter' },
                     { label: '总览', value: 'overview' },
                     { label: '基础', value: 'basic' },
                     { label: '能力', value: 'capabilities' },
@@ -385,22 +406,202 @@ const chatModels = bind(app, 'chatModels');
             </div>
 
             <div v-if="agentWorkspaceMode === 'develop'" class="agent-page" :class="`agent-mode-${agentPageTab}`">
+            <!-- ========== 从零搭建 Tab ========== -->
+            <el-card v-show="agentPageTab === 'starter'" class="agent-panel agent-starter-panel" shadow="never">
+              <template #header>
+                <div class="agent-panel-head">
+                  <span>从零搭建 Agent</span>
+                  <div class="agent-head-tags">
+                    <el-tag size="small" type="success">新手模式</el-tag>
+
+                  </div>
+                </div>
+              </template>
+
+              <div class="agent-starter-shell">
+                <aside class="agent-starter-rail">
+                  <button
+                    v-for="(label, index) in ['选场景', '说需求', '补能力', '试一下']"
+                    :key="label"
+                    type="button"
+                    class="agent-starter-step"
+                    :class="{ active: agentCreateWizardStep === index, done: beginnerAgentProgress > index }"
+                    @click="agentCreateWizardStep = index"
+                  >
+                    <span>{{ index + 1 }}</span>
+                    <strong>{{ label }}</strong>
+                  </button>
+                </aside>
+
+                <main class="agent-starter-main">
+                  <section v-show="agentCreateWizardStep === 0" class="agent-starter-section">
+                    <div class="agent-starter-title">
+                      <div>
+                        <strong>先选一个最像的场景</strong>
+                        <p>不用选得很准，后面还可以改。模板只是帮你少填几项。</p>
+                      </div>
+                      <el-button :icon="MagicStick" plain @click="applyBeginnerExample(selectedAgentTemplateId)">一键填示例</el-button>
+                    </div>
+                    <div class="agent-template-grid compact">
+                      <button
+                        v-for="template in agentCreationTemplates"
+                        :key="template.id"
+                        type="button"
+                        class="agent-template-card"
+                        :class="{ active: selectedAgentTemplateId === template.id }"
+                        @click="selectedAgentTemplateId = template.id; applyAgentTemplate(template.id); applyBeginnerExample(template.id)"
+                      >
+                        <span class="agent-template-icon">{{ template.name.slice(0, 1) }}</span>
+                        <strong>{{ template.name }}</strong>
+                        <small>{{ template.description }}</small>
+                      </button>
+                    </div>
+                  </section>
+
+                  <section v-show="agentCreateWizardStep === 1" class="agent-starter-section">
+                    <div class="agent-starter-title">
+                      <div>
+                        <strong>你可以用大白话告诉这个 Agent 要帮谁、做什么</strong>
+                        <p>这里不是写代码，也不是写提示词。像交代一个可靠的新同事一样就行。</p>
+                      </div>
+                      <el-button :icon="MagicStick" type="primary" plain :loading="agentGenerating" @click="generateBeginnerAgentDraft()">AI 生成整套草稿</el-button>
+                    </div>
+                    <div class="agent-starter-form-grid agent-starter-brief-grid">
+                      <label class="agent-starter-field">
+                        <span>它主要帮谁？</span>
+                        <el-input v-model="beginnerAgentForm.audience" placeholder="例如：客服同事、运营、我自己、客户" @change="applyBeginnerFormToAgent()" />
+                      </label>
+                      <label class="agent-starter-field wide">
+                        <span>它要帮你做什么？</span>
+                        <el-input v-model="beginnerAgentForm.job" type="textarea" :rows="3" resize="vertical" placeholder="例如：根据产品资料回答客户问题，并整理可直接发送的回复" @change="applyBeginnerFormToAgent()" />
+                        <div class="agent-starter-field-actions">
+                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'goal'" @click="improveBeginnerText('goal')">AI 扩写</el-button>
+                        </div>
+                      </label>
+                      <label class="agent-starter-field">
+                        <span>怎样算做得好？</span>
+                        <el-input v-model="beginnerAgentForm.success" placeholder="例如：回答准确、能给下一步建议、客户能看懂" @change="applyBeginnerFormToAgent()" />
+                        <div class="agent-starter-field-actions">
+                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'success'" @click="improveBeginnerText('success')">AI 补标准</el-button>
+                        </div>
+                      </label>
+                      <label class="agent-starter-field">
+                        <span>说话风格</span>
+                        <el-input v-model="beginnerAgentForm.tone" placeholder="例如：专业但不生硬，少废话" @change="applyBeginnerFormToAgent()" />
+                      </label>
+                      <label class="agent-starter-field wide">
+                        <span>哪些事不要做？</span>
+                        <el-input v-model="beginnerAgentForm.avoid" placeholder="例如：不要编造政策，不确定时先问我" @change="applyBeginnerFormToAgent()" />
+                        <div class="agent-starter-field-actions">
+                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'avoid'" @click="improveBeginnerText('avoid')">AI 补边界</el-button>
+                        </div>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section v-show="agentCreateWizardStep === 2" class="agent-starter-section">
+                    <div class="agent-starter-title">
+                      <div>
+                        <strong>给它加能力，可跳过</strong>
+                        <p>知识库像资料夹，工具像计算器或执行器，技能像已经打包好的专门能力。</p>
+                      </div>
+                      <el-button :icon="MagicStick" plain :loading="agentGenerating" @click="generateBeginnerAgentDraft()">AI 按需求推荐</el-button>
+                    </div>
+                    <div class="agent-starter-ability-grid">
+                      <div>
+                        <span>知识库</span>
+                        <small>让 Agent 按你的资料回答。</small>
+                        <el-select v-model="agentForm.knowledgeBaseIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="可不选" style="width:100%">
+                          <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
+                        </el-select>
+                      </div>
+                      <div>
+                        <span>工具</span>
+                        <small>让 Agent 计算、处理文本或执行动作。</small>
+                        <el-select v-model="agentForm.toolIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="可不选" style="width:100%">
+                          <el-option v-for="tool in availableTools" :key="tool.id" :label="tool.displayName" :value="tool.id" />
+                        </el-select>
+                      </div>
+                      <div>
+                        <span>技能</span>
+                        <small>让 Agent 做研究、分析、代码等专门任务。</small>
+                        <el-select v-model="agentForm.skillIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="可不选" style="width:100%">
+                          <el-option v-for="skill in availableSkills" :key="skill.id" :label="skill.name" :value="skill.id" />
+                        </el-select>
+                      </div>
+                      <div class="agent-starter-memory">
+                        <span>长期记忆</span>
+                        <small>开启后，它能记住偏好和背景。涉及隐私的场景可以关闭。</small>
+                        <el-switch v-model="agentForm.memoryEnabled" active-text="开启" inactive-text="关闭" />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section v-show="agentCreateWizardStep === 3" class="agent-starter-section">
+                    <div class="agent-starter-title">
+                      <div>
+                        <strong>最后试一句</strong>
+                        <p>保存后会进入调用页，用这句话检查它是不是按你的想法工作。</p>
+                      </div>
+                      <el-button :icon="MagicStick" type="primary" plain :loading="beginnerAssistTarget === 'sample'" @click="improveBeginnerText('sample')">AI 填试用问题</el-button>
+                    </div>
+                    <div class="agent-starter-final">
+                      <label>
+                        <span>Agent 名称</span>
+                        <el-input v-model="agentForm.name" maxlength="80" show-word-limit placeholder="例如：产品客服 Agent" />
+                      </label>
+                      <label>
+                        <span>模型</span>
+                        <el-select v-model="agentForm.model" placeholder="选择模型" filterable style="width:100%">
+                          <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id" />
+                        </el-select>
+                      </label>
+                      <label class="wide">
+                        <span>试运行输入</span>
+                        <el-input v-model="agentPrompt" type="textarea" :rows="4" resize="vertical" placeholder="例如：客户问退款规则，请给一段可以直接发送的回复。" />
+                      </label>
+                    </div>
+                  </section>
+
+                  <div class="agent-starter-actions">
+                    <el-button @click="createAgentDraft" :icon="Plus">重新开始</el-button>
+                    <el-button :disabled="agentCreateWizardStep === 0" @click="previousAgentWizardStep()">上一步</el-button>
+                    <el-button v-if="agentCreateWizardStep < 3" type="primary" @click="agentCreateWizardStep === 1 ? (applyBeginnerFormToAgent(), nextAgentWizardStep()) : nextAgentWizardStep()">下一步</el-button>
+                    <template v-else>
+                      <el-button type="primary" :loading="agentSaving" @click="applyBeginnerFormToAgent(); saveAgentFromWizard(false)">保存草稿</el-button>
+                      <el-button type="success" :loading="agentSaving" @click="applyBeginnerFormToAgent(); saveAgentFromWizard(true)">保存并去试用</el-button>
+                    </template>
+                  </div>
+                </main>
+
+                <aside class="agent-starter-guide">
+                  <div class="agent-guide-box">
+                    <span>现在这个 Agent</span>
+                    <strong>{{ beginnerAgentPlainGuide.title }}</strong>
+                    <p>{{ beginnerAgentPlainGuide.does }}</p>
+                  </div>
+                  <div class="agent-guide-box">
+                    <span>它会怎么做</span>
+                    <p>{{ beginnerAgentPlainGuide.abilities }}</p>
+                  </div>
+                  <div class="agent-guide-box">
+                    <span>你怎么用</span>
+                    <p>{{ beginnerAgentPlainGuide.howToUse }}</p>
+                  </div>
+                  <div class="agent-guide-box">
+                    <span>它不会乱来</span>
+                    <p>{{ beginnerAgentPlainGuide.safety }}</p>
+                  </div>
+                </aside>
+              </div>
+            </el-card>
+
             <!-- ========== 总览 Tab ========== -->
             <el-card v-show="agentPageTab === 'overview'" class="agent-panel agent-overview-panel" shadow="never">
               <template #header>
                 <div class="agent-panel-head">
                   <span>Agent 总览</span>
                   <div class="agent-head-tags">
-                    <el-button size="small" type="primary" plain :disabled="!agentForm.id" @click="exportAgentAsJson()">导出 JSON 包</el-button>
-                    <el-dropdown @command="(cmd: string) => cmd === 'md' ? exportAgentAsMarkdown() : exportAgentAsJson()">
-                      <el-button size="small" :disabled="!agentForm.id">更多</el-button>
-                      <template #dropdown>
-                        <el-dropdown-menu>
-                          <el-dropdown-item command="json">导出 JSON 包</el-dropdown-item>
-                          <el-dropdown-item command="md">导出说明文档</el-dropdown-item>
-                        </el-dropdown-menu>
-                      </template>
-                    </el-dropdown>
                     <el-button size="small" text :loading="agentResourceLoading" @click="loadAgentResources()">刷新</el-button>
                   </div>
                 </div>
@@ -470,7 +671,7 @@ const chatModels = bind(app, 'chatModels');
                   </el-select>
                   <el-button size="small" :loading="versionSaving" @click="compareVersions()">对比版本</el-button>
                 </div>
-                <el-dialog v-model="showVersionCreateDialog" title="创建版本快照" width="520px" :close-on-click-modal="false">
+                <el-dialog v-model="showVersionCreateDialog" title="创建版本快照" width="520px" :close-on-click-modal="false" append-to-body>
                   <el-form label-position="top">
                     <el-form-item label="版本标签">
                       <el-input v-model="versionForm.label" placeholder="例如 release-1，留空则自动生成" maxlength="120" />
@@ -484,7 +685,7 @@ const chatModels = bind(app, 'chatModels');
                     <el-button type="primary" :loading="versionSaving" :disabled="!agentForm.id" @click="createVersionFromForm()">创建</el-button>
                   </template>
                 </el-dialog>
-                <el-dialog v-model="showVersionPublishDialog" title="发布版本" width="560px" :close-on-click-modal="false">
+                <el-dialog v-model="showVersionPublishDialog" title="发布版本" width="560px" :close-on-click-modal="false" append-to-body>
                   <el-form label-position="top">
                     <el-form-item label="发布方式">
                       <el-segmented v-model="versionForm.releaseMode" :options="[
@@ -493,7 +694,7 @@ const chatModels = bind(app, 'chatModels');
                       ]" />
                     </el-form-item>
                     <el-form-item v-if="versionForm.releaseMode === 'canary'" label="灰度流量">
-                      <el-slider v-model="versionForm.trafficPercent" :min="1" :max="99" show-input />
+                      <el-input-number v-model="versionForm.trafficPercent" :min="1" :max="99" :step="1" style="width:100%" />
                     </el-form-item>
                     <el-form-item v-if="!versionForm.targetVersionId" label="版本标签">
                       <el-input v-model="versionForm.label" placeholder="留空则创建新的发布版本" maxlength="120" />
@@ -507,7 +708,7 @@ const chatModels = bind(app, 'chatModels');
                     <el-button type="primary" :loading="versionSaving" :disabled="!agentForm.id" @click="publishVersionFromForm()">确认发布</el-button>
                   </template>
                 </el-dialog>
-                <el-dialog v-model="agentVersionCompareVisible" title="版本对比" width="760px">
+                <el-dialog v-model="agentVersionCompareVisible" title="版本对比" width="760px" append-to-body>
                   <el-table :data="agentVersionCompare?.changes || []" empty-text="两个版本没有关键差异" style="width:100%">
                     <el-table-column label="字段" prop="field" width="140" />
                     <el-table-column label="基准版本" min-width="240">
@@ -594,259 +795,139 @@ const chatModels = bind(app, 'chatModels');
             <el-card v-show="agentPageTab === 'basic'" class="agent-panel agent-basic-panel" shadow="never">
               <template #header>
                 <div class="agent-panel-head">
-                  <span>基础配置</span>
-                  <el-tag size="small" :type="agentForm.status === 'active' ? 'success' : 'info'">
-                    {{ agentLifecycleStatusLabel(agentForm.status) }}
-                  </el-tag>
+                  <span>专业配置</span>
+                  <div class="agent-head-tags">
+                    <el-tag size="small" :type="agentForm.status === 'active' ? 'success' : 'info'">{{ agentLifecycleStatusLabel(agentForm.status) }}</el-tag>
+                    <el-tag size="small" type="info">子 Agent {{ agentForm.subAgentIds.length }}</el-tag>
+                  </div>
                 </div>
               </template>
 
-              <div class="agent-create-console">
-                <div class="agent-create-hero">
-                  <div>
-                    <div class="agent-section-title">目标驱动 Agent 创建</div>
-                    <p>先定义目标和成功标准，再选择能力、验证表现，最后发布为可回滚版本。</p>
-                  </div>
-                  <el-steps :active="agentCreateWizardStep" simple finish-status="success">
-                    <el-step title="场景" />
-                    <el-step title="目标" />
-                    <el-step title="能力" />
-                    <el-step title="验证" />
-                  </el-steps>
-                </div>
-
-                <div v-show="agentCreateWizardStep === 0" class="agent-template-grid">
-                  <button
-                    v-for="template in agentCreationTemplates"
-                    :key="template.id"
-                    type="button"
-                    class="agent-template-card"
-                    :class="{ active: selectedAgentTemplateId === template.id }"
-                    @click="selectedAgentTemplateId = template.id; applyAgentTemplate(template.id)"
-                  >
-                    <span class="agent-template-icon">{{ template.name.slice(0, 1) }}</span>
-                    <strong>{{ template.name }}</strong>
-                    <small>{{ template.description }}</small>
-                  </button>
-                </div>
-
-                <div v-show="agentCreateWizardStep === 1" class="agent-create-grid">
-                  <div class="agent-create-main">
-                    <div class="agent-section-title">描述目标与成功标准</div>
-                    <el-input
-                      v-model="agentCreationGoal"
-                      type="textarea"
-                      :rows="5"
-                      resize="vertical"
-                      maxlength="1000"
-                      show-word-limit
-                      placeholder="这个 Agent 要完成什么目标？怎样算成功？例如：基于产品知识库回答客户问题，命中率稳定，答案后给出处理建议。"
-                    />
-                    <div class="agent-generator-inline">
-                      <el-input
-                        v-model="generatorForm.requirement"
-                        type="textarea"
-                        :rows="3"
-                        resize="vertical"
-                        maxlength="4000"
-                        placeholder="也可以一句话生成完整草稿。"
-                      />
-                      <el-button
-                        type="primary"
-                        plain
-                        :loading="agentGenerating"
-                        :disabled="!generatorForm.requirement.trim()"
-                        @click="generateAgentFromRequirement()"
-                      >
-                        AI 生成草稿
-                      </el-button>
+              <div class="agent-pro-config">
+                <section class="agent-pro-section">
+                  <div class="agent-section-title">身份与运行</div>
+                  <el-form label-position="top" class="agent-pro-form">
+                    <div class="agent-pro-grid">
+                      <el-form-item label="名称">
+                        <el-input v-model="agentForm.name" maxlength="80" show-word-limit placeholder="例如：产品客服 Agent" />
+                      </el-form-item>
+                      <el-form-item label="模型">
+                        <el-select v-model="agentForm.model" placeholder="选择模型" filterable style="width:100%">
+                          <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id">
+                            <span>{{ model.id }}</span>
+                            <el-tag v-if="getModelTags(model.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
+                          </el-option>
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="状态">
+                        <el-segmented
+                          v-model="agentForm.status"
+                          :options="[
+                            { label: '启用', value: 'active' },
+                            { label: '归档', value: 'archived' },
+                          ]"
+                        />
+                      </el-form-item>
+                      <el-form-item label="长期记忆">
+                        <el-switch v-model="agentForm.memoryEnabled" active-text="开启" inactive-text="关闭" />
+                      </el-form-item>
                     </div>
-                  </div>
-                  <el-form label-position="top" class="agent-create-side">
-                    <el-form-item label="名称">
-                      <el-input v-model="agentForm.name" maxlength="80" show-word-limit placeholder="例如：产品客服 Agent" />
-                    </el-form-item>
-                    <el-form-item label="模型">
-                      <el-select v-model="agentForm.model" placeholder="选择模型" filterable style="width:100%">
-                        <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id">
-                          <span>{{ model.id }}</span>
-                          <el-tag v-if="getModelTags(model.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
-                        </el-option>
-                      </el-select>
-                    </el-form-item>
                     <el-form-item label="描述">
-                      <el-input v-model="agentForm.description" maxlength="500" show-word-limit placeholder="适合处理什么任务" />
+                      <el-input v-model="agentForm.description" maxlength="500" show-word-limit placeholder="这个 Agent 适合处理什么任务" />
                     </el-form-item>
-                  </el-form>
-                </div>
-
-                <div v-show="agentCreateWizardStep === 2" class="agent-create-grid">
-                  <div class="agent-create-main">
-                    <div class="agent-section-title">选择能力</div>
-                    <div class="agent-capability-picks">
-                      <div>
-                        <span>工具</span>
-                        <el-select v-model="agentForm.toolIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择工具" style="width:100%">
-                          <el-option v-for="tool in availableTools" :key="tool.id" :label="tool.displayName" :value="tool.id" />
-                        </el-select>
-                      </div>
-                      <div>
-                        <span>技能</span>
-                        <el-select v-model="agentForm.skillIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择技能" style="width:100%">
-                          <el-option v-for="skill in availableSkills" :key="skill.id" :label="skill.name" :value="skill.id" />
-                        </el-select>
-                      </div>
-                      <div>
-                        <span>知识库</span>
-                        <el-select v-model="agentForm.knowledgeBaseIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择知识库" style="width:100%">
-                          <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
-                        </el-select>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="agent-create-side">
-                    <div class="agent-setting-row">
-                      <span>长期记忆</span>
-                      <el-switch v-model="agentForm.memoryEnabled" active-text="启用" inactive-text="关闭" />
-                    </div>
-                    <div class="agent-form-grid">
+                    <div class="agent-pro-grid compact">
                       <el-form-item label="温度">
-                        <el-slider v-model="agentForm.temperature" :min="0" :max="2" :step="0.1" show-input />
+                        <el-input-number v-model="agentForm.temperature" :min="0" :max="2" :step="0.1" :precision="1" style="width:100%" />
                       </el-form-item>
                       <el-form-item label="最大 Token">
                         <el-input-number v-model="agentForm.maxTokens" :min="1" :max="32000" :step="256" style="width:100%" />
                       </el-form-item>
                     </div>
-                    <el-form-item label="状态">
-                      <el-segmented
-                        v-model="agentForm.status"
-                        :options="[
-                          { label: '启用', value: 'active' },
-                          { label: '归档', value: 'archived' },
-                        ]"
-                      />
-                    </el-form-item>
-                  </div>
-                </div>
+                  </el-form>
+                </section>
 
-                <div v-show="agentCreateWizardStep === 3" class="agent-create-grid">
-                  <div class="agent-create-main">
-                    <div class="agent-section-title">验证与发布准备</div>
-                    <div class="agent-preview-card">
-                      <div class="agent-preview-title">
-                        <strong>{{ agentForm.name || '未命名 Agent' }}</strong>
-                        <el-tag size="small" :type="agentForm.model ? 'success' : 'warning'">{{ agentForm.model || '未选模型' }}</el-tag>
+                <section class="agent-pro-section">
+                  <div class="agent-section-title">
+                    <span>Sub-Agent 编排</span>
+                    <el-tag size="small" type="info">无感自动委派</el-tag>
+                  </div>
+                  <div class="agent-harness-note">
+                    Harness 会让模型在同一轮里自主选择普通 Tool、子 Agent 或直接回答；子 Agent 只处理被明确拆出的子任务。
+                  </div>
+                  <el-select
+                    v-model="agentForm.subAgentIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="选择可被当前 Agent 调用的子 Agent"
+                    style="width:100%"
+                  >
+                    <el-option
+                      v-for="agent in agents.filter((item:any) => item.id !== agentForm.id && item.status === 'active')"
+                      :key="agent.id"
+                      :label="agent.name"
+                      :value="agent.id"
+                    >
+                      <span>{{ agent.name }}</span>
+                      <el-text type="info" size="small" style="margin-left:8px">{{ agent.description || agent.model }}</el-text>
+                    </el-option>
+                  </el-select>
+                  <div v-if="agentForm.subAgentIds.length" class="agent-subagent-list">
+                    <div v-for="subAgentId in agentForm.subAgentIds" :key="subAgentId" class="agent-subagent-item">
+                      <div>
+                        <strong>{{ agents.find((item:any) => item.id === subAgentId)?.name || subAgentId }}</strong>
+                        <span>{{ agents.find((item:any) => item.id === subAgentId)?.description || '已绑定为子 Agent' }}</span>
                       </div>
-                      <p>{{ agentForm.description || '暂无描述' }}</p>
-                      <div class="agent-preview-tags">
-                        <el-tag size="small">工具 {{ agentForm.toolIds.length }}</el-tag>
-                        <el-tag size="small" type="success">技能 {{ agentForm.skillIds.length }}</el-tag>
-                        <el-tag size="small" type="warning">RAG {{ agentForm.knowledgeBaseIds.length }}</el-tag>
-                        <el-tag size="small" :type="agentForm.memoryEnabled ? 'primary' : 'info'">记忆 {{ agentForm.memoryEnabled ? '开启' : '关闭' }}</el-tag>
-                      </div>
-                      <pre class="agent-step-meta">{{ agentForm.systemPrompt }}</pre>
+                      <el-button size="small" text type="danger" @click="agentForm.subAgentIds = agentForm.subAgentIds.filter((id:any) => id !== subAgentId)">移除</el-button>
                     </div>
                   </div>
-                  <div class="agent-create-side">
-                    <el-alert
-                      type="info"
-                      :closable="false"
-                      title="保存后先试运行；确认目标达成后到发布页创建稳定或灰度版本。"
-                    />
-                    <el-input
-                      v-model="agentPrompt"
-                      type="textarea"
-                      :rows="4"
-                      resize="vertical"
-                      placeholder="保存后立即试运行的输入"
-                    />
+                </section>
+
+                <section class="agent-pro-section">
+                  <div class="agent-section-title">能力契约</div>
+                  <div class="agent-contract-grid">
+                    <div class="agent-contract-item">
+                      <strong>Tool</strong>
+                      <span>可执行动作，有输入结构、超时、风险和真实运行结果。</span>
+                      <el-tag size="small" type="warning">已选 {{ agentForm.toolIds.length }}</el-tag>
+                    </div>
+                    <div class="agent-contract-item">
+                      <strong>Skill</strong>
+                      <span>工作方法和步骤，会注入提示词，不会自己执行外部动作。</span>
+                      <el-tag size="small" type="success">已选 {{ agentForm.skillIds.length }}</el-tag>
+                    </div>
+                    <div class="agent-contract-item">
+                      <strong>Knowledge</strong>
+                      <span>检索资料来源，适合产品文档、FAQ、项目知识。</span>
+                      <el-tag size="small" type="primary">已选 {{ agentForm.knowledgeBaseIds.length }}</el-tag>
+                    </div>
+                    <div class="agent-contract-item">
+                      <strong>Memory</strong>
+                      <span>长期上下文，用户偏好会作为全局画像给所有 Agent 使用。</span>
+                      <el-tag size="small" :type="agentForm.memoryEnabled ? 'success' : 'info'">{{ agentForm.memoryEnabled ? '开启' : '关闭' }}</el-tag>
+                    </div>
                   </div>
-                </div>
+                </section>
+
+                <section class="agent-pro-section">
+                  <div class="agent-section-title">提示词与安全边界</div>
+                  <el-input
+                    v-model="agentForm.systemPrompt"
+                    type="textarea"
+                    :rows="10"
+                    resize="vertical"
+                    maxlength="12000"
+                    show-word-limit
+                    placeholder="写清楚角色、任务边界、输出格式、失败时怎么处理。"
+                  />
+                </section>
 
                 <div class="agent-create-actions">
                   <el-button @click="createAgentDraft" :icon="Plus">新草稿</el-button>
-                  <el-button :disabled="agentCreateWizardStep === 0" @click="previousAgentWizardStep()">上一步</el-button>
-                  <el-button v-if="agentCreateWizardStep < 3" type="primary" @click="nextAgentWizardStep()">下一步</el-button>
-                  <template v-else>
-                    <el-button type="primary" :loading="agentSaving" @click="saveAgentFromWizard(false)">保存草稿</el-button>
-                    <el-button type="success" :loading="agentSaving" @click="saveAgentFromWizard(true)">保存并试运行</el-button>
-                  </template>
+                  <el-button type="primary" :loading="agentSaving" @click="saveAgent()">保存配置</el-button>
                 </div>
               </div>
-
-              <el-collapse v-model="agentCreateWizardAdvancedOpen" class="agent-advanced-builder">
-                <el-collapse-item title="高级：组件构建器和完整提示词" name="builder">
-                  <div class="agent-builder">
-                    <div class="agent-builder-head">
-                      <div class="builder-title">
-                        <span>拖拽制作 Agent</span>
-                      </div>
-                      <div class="agent-builder-actions">
-                        <el-button size="small" text @click="clearAgentBuilderCanvas()">清空</el-button>
-                        <el-button size="small" type="primary" plain @click="applyBuilderConfigs()">应用组件配置</el-button>
-                      </div>
-                    </div>
-
-                    <div class="agent-builder-body">
-                      <div class="agent-builder-palette">
-                        <div class="palette-section">
-                          <div class="palette-section-title">组件</div>
-                          <div class="palette-items">
-                            <div
-                              v-for="block in agentBuilderBlocks"
-                              :key="block.type"
-                              class="builder-block"
-                              draggable="true"
-                              @dragstart="startAgentBuilderDrag(block)"
-                            >
-                              <span class="block-icon">{{ block.icon }}</span>
-                              <span class="block-name">{{ block.title }}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div
-                        class="agent-builder-canvas"
-                        :class="{ dragging: Boolean(agentBuilderDragging) }"
-                        @dragover.prevent
-                        @drop.prevent="dropAgentBuilderBlock()"
-                      >
-                        <template v-if="agentBuilderCanvas.length > 0">
-                          <div class="canvas-header">
-                            <span class="canvas-title">已选组件</span>
-                            <span class="canvas-count">{{ agentBuilderCanvas.length }} 个</span>
-                          </div>
-                          <div class="canvas-items">
-                            <div
-                              v-for="block in agentBuilderCanvas"
-                              :key="block.type"
-                              class="canvas-item"
-                              :class="{ expanded: activeBuilderBlock === block.type }"
-                              @click="activeBuilderBlock = activeBuilderBlock === block.type ? null : block.type"
-                            >
-                              <div class="canvas-item-header">
-                                <span class="item-icon">{{ block.icon }}</span>
-                                <span class="item-name">{{ block.title }}</span>
-                                <el-button size="small" text :icon="Delete" @click.stop="removeAgentBuilderBlock(block.type)" />
-                              </div>
-                            </div>
-                          </div>
-                        </template>
-                        <div v-else class="canvas-empty">
-                          <el-icon size="42" color="#c0c4cc"><Plus /></el-icon>
-                          <span>拖拽组件到这里</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <el-form label-position="top" class="agent-form">
-                    <el-form-item label="系统提示词">
-                      <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="8" resize="vertical" />
-                    </el-form-item>
-                  </el-form>
-                </el-collapse-item>
-              </el-collapse>
             </el-card>
 
             <!-- ========== 能力 Tab ========== -->
@@ -861,6 +942,13 @@ const chatModels = bind(app, 'chatModels');
                   </div>
                 </div>
               </template>
+
+              <div class="agent-capability-primer">
+                <div><strong>Tool</strong><span>真实执行动作，返回可追踪结果。</span></div>
+                <div><strong>Skill</strong><span>工作方法，注入提示词。</span></div>
+                <div><strong>Knowledge</strong><span>检索资料，不负责执行。</span></div>
+                <div><strong>Memory</strong><span>长期上下文，偏好可跨 Agent 使用。</span></div>
+              </div>
 
               <div class="agent-capabilities-grid">
                 <div class="agent-cap-section">
@@ -884,19 +972,6 @@ const chatModels = bind(app, 'chatModels');
                       <el-text type="info" size="small" style="margin-left:8px">{{ tool.name }}</el-text>
                     </el-option>
                   </el-select>
-                  <div v-if="agentForm.toolIds.length" class="tool-permission-list">
-                    <div v-for="toolId in agentForm.toolIds" :key="toolId" class="tool-permission-item">
-                      <span>{{ availableTools.find((tool) => tool.id === toolId)?.displayName || toolId }}</span>
-                      <el-segmented
-                        v-model="agentForm.toolPermissions[toolId]"
-                        :options="[
-                          { label: '自动', value: 'auto' },
-                          { label: '确认', value: 'confirm' },
-                          { label: '禁用', value: 'disabled' },
-                        ]"
-                      />
-                    </div>
-                  </div>
                 </div>
 
                 <div class="agent-cap-section">
@@ -985,7 +1060,24 @@ const chatModels = bind(app, 'chatModels');
                       写入记忆
                     </el-button>
                   </div>
-                  <div v-for="memory in agentMemories" :key="memory.id" class="agent-resource-item">
+                  <div class="agent-memory-group-title">用户偏好 Memory</div>
+                  <div v-for="memory in agentUserPreferenceMemories" :key="memory.id" class="agent-resource-item">
+                    <div class="agent-resource-title">
+                      <div>
+                        <el-tag size="small" type="success">用户偏好</el-tag>
+                        <span style="margin-left:6px">重要性 {{ memory.importance }}</span>
+                      </div>
+                      <div>
+                        <el-button size="small" text @click="startEditAgentMemory(memory)">编辑</el-button>
+                        <el-button size="small" text type="danger" @click="deleteAgentMemory(memory)">删除</el-button>
+                      </div>
+                    </div>
+                    <div class="agent-resource-content">{{ memory.content }}</div>
+                  </div>
+                  <el-empty v-if="agentUserPreferenceMemories.length === 0" description="暂无用户偏好" :image-size="56" />
+
+                  <div class="agent-memory-group-title">当前 Agent 专属记忆</div>
+                  <div v-for="memory in agentScopedMemories" :key="memory.id" class="agent-resource-item">
                     <div class="agent-resource-title">
                       <div>
                         <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
@@ -998,7 +1090,7 @@ const chatModels = bind(app, 'chatModels');
                     </div>
                     <div class="agent-resource-content">{{ memory.content }}</div>
                   </div>
-                  <el-empty v-if="agentMemories.length === 0" description="暂无记忆" :image-size="72" />
+                  <el-empty v-if="agentScopedMemories.length === 0" description="暂无 Agent 专属记忆" :image-size="56" />
                   <el-dialog
                     v-model="showMemoryCreateDialog"
                     :title="editingMemoryId ? '编辑长期记忆' : '写入长期记忆'"
@@ -1007,11 +1099,35 @@ const chatModels = bind(app, 'chatModels');
                     @closed="resetMemoryEditor()"
                   >
                     <el-form label-position="top">
+                      <el-form-item label="记忆范围">
+                        <el-segmented
+                          v-model="memoryForm.scope"
+                          :disabled="Boolean(editingMemoryId)"
+                          :options="[
+                            { label: '用户偏好', value: 'user_profile' },
+                            { label: '当前 Agent', value: 'agent' },
+                          ]"
+                        />
+                      </el-form-item>
                       <el-form-item label="记忆内容" required>
                         <el-input v-model="memoryForm.content" type="textarea" :rows="4" resize="vertical" placeholder="写入一条长期记忆" />
                       </el-form-item>
+                      <el-form-item v-if="memoryForm.scope === 'agent'" label="记忆类型">
+                        <el-select v-model="memoryForm.memoryType" style="width:100%">
+                          <el-option v-for="item in memoryTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+                        </el-select>
+                      </el-form-item>
                       <el-form-item label="重要性">
-                        <el-slider v-model="memoryForm.importance" :min="1" :max="5" :step="1" show-stops />
+                        <el-segmented
+                          v-model="memoryForm.importance"
+                          :options="[
+                            { label: '1', value: 1 },
+                            { label: '2', value: 2 },
+                            { label: '3', value: 3 },
+                            { label: '4', value: 4 },
+                            { label: '5', value: 5 },
+                          ]"
+                        />
                       </el-form-item>
                     </el-form>
                     <template #footer>
@@ -1019,7 +1135,7 @@ const chatModels = bind(app, 'chatModels');
                       <el-button
                         type="primary"
                         :loading="memorySaving"
-                        :disabled="!memoryForm.content.trim() || !agentForm.id"
+                        :disabled="!memoryForm.content.trim() || (memoryForm.scope === 'agent' && !agentForm.id)"
                         @click="saveAgentMemory()"
                       >
                         {{ editingMemoryId ? '保存' : '写入' }}
@@ -1089,7 +1205,19 @@ const chatModels = bind(app, 'chatModels');
                 <div class="agent-adv-section agent-team-section">
                   <div class="agent-section-title">
                     <span>团队协作</span>
-                    <el-button size="small" type="primary" plain @click="showTeamCreateDialog = true">创建团队</el-button>
+                    <el-button size="small" type="primary" plain @click="openTeamCreateDialog()">创建团队</el-button>
+                  </div>
+                  <div class="agent-team-template-row">
+                    <button
+                      v-for="template in teamTemplates"
+                      :key="template.id"
+                      type="button"
+                      class="agent-team-template"
+                      @click="applyTeamTemplate(template.id); showTeamCreateDialog = true"
+                    >
+                      <strong>{{ template.name }}</strong>
+                      <span>{{ template.description }}</span>
+                    </button>
                   </div>
                   <div class="agent-team-runbar">
                     <el-select v-model="activeTeamId" placeholder="选择 Agent 团队" filterable>
@@ -1118,6 +1246,16 @@ const chatModels = bind(app, 'chatModels');
                       <el-tag size="small" :type="agentRunTagType(activeTeamRun.status)">{{ agentRunStatusLabel(activeTeamRun.status) }}</el-tag>
                     </div>
                     <div class="agent-resource-content">{{ activeTeamRun.output || activeTeamRun.error }}</div>
+                    <div v-if="activeTeamRun.memberOutputs?.length" class="agent-team-run-timeline">
+                      <div v-for="(member, index) in activeTeamRun.memberOutputs" :key="member.runId || index" class="agent-team-run-step">
+                        <div class="agent-team-run-step-head">
+                          <strong>{{ index + 1 }}. {{ member.role || agents.find((agent:any) => agent.id === member.agentId)?.name || member.agentId }}</strong>
+                          <el-tag size="small" :type="agentRunTagType(member.status)">{{ agentRunStatusLabel(member.status) }}</el-tag>
+                        </div>
+                        <small>{{ agents.find((agent:any) => agent.id === member.agentId)?.name || member.agentId }} · Run {{ member.runId }}</small>
+                        <div class="agent-resource-content compact">{{ member.output || member.error || '暂无输出' }}</div>
+                      </div>
+                    </div>
                   </div>
                   <el-empty v-if="agentTeams.length === 0" description="暂无 Agent 团队" :image-size="72" />
                 </div>
@@ -1144,22 +1282,30 @@ const chatModels = bind(app, 'chatModels');
                       />
                     </el-form-item>
                     <el-form-item label="协作 Agent">
-                      <el-select
-                        v-model="teamForm.memberIds"
-                        multiple
-                        filterable
-                        collapse-tags
-                        placeholder="选择协作 Agent"
-                        style="width:100%"
-                      >
-                        <el-option
-                          v-for="agent in agents"
-                          :key="agent.id"
-                          :label="agent.name"
-                          :value="agent.id"
-                          :disabled="agent.id === agentForm.id"
-                        />
-                      </el-select>
+                      <div class="agent-team-member-editor">
+                        <div v-for="(member, index) in teamForm.members" :key="index" class="agent-team-member-row">
+                          <el-select v-model="member.agentId" filterable placeholder="选择 Agent" style="width: 220px">
+                            <el-option
+                              v-for="agent in agents"
+                              :key="agent.id"
+                              :label="agent.name"
+                              :value="agent.id"
+                              :disabled="teamForm.members.some((item:any, itemIndex:number) => itemIndex !== index && item.agentId === agent.id)"
+                            />
+                          </el-select>
+                          <el-input v-model="member.role" placeholder="角色，例如：质量评审 Agent" maxlength="80" />
+                          <el-button text type="danger" @click="removeTeamFormMember(index)">移除</el-button>
+                          <el-input
+                            v-model="member.inputTemplate"
+                            class="agent-team-template-input"
+                            type="textarea"
+                            :rows="3"
+                            resize="vertical"
+                            :placeholder="'输入模板，可用 {{originalInput}}、{{previousOutput}}、{{allOutputs}}、{{role}}'"
+                          />
+                        </div>
+                        <el-button size="small" plain @click="addTeamFormMember()">添加成员</el-button>
+                      </div>
                     </el-form-item>
                   </el-form>
                   <template #footer>
@@ -1167,7 +1313,7 @@ const chatModels = bind(app, 'chatModels');
                     <el-button
                       type="primary"
                       :loading="teamCreating"
-                      :disabled="!agentForm.id && teamForm.memberIds.length === 0"
+                      :disabled="teamForm.members.filter((member:any) => member.agentId).length === 0 && !agentForm.id"
                       @click="createTeamFromForm()"
                     >
                       创建
@@ -1238,7 +1384,10 @@ const chatModels = bind(app, 'chatModels');
                               @dragstart="startDagNodeDrag(node)"
                             >
                               <span class="dag-node-icon">{{ node.icon }}</span>
-                              <span class="dag-node-label">{{ node.label }}</span>
+                              <span class="dag-node-copy">
+                                <strong>{{ node.label }}</strong>
+                                <small>{{ node.description }}</small>
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1291,7 +1440,7 @@ const chatModels = bind(app, 'chatModels');
                               <el-button size="small" text @click="connectWorkflowNode(node.id)">
                                 {{ workflowCanvasConnecting === node.id ? '取消' : workflowCanvasConnecting ? '设为目标' : '连线' }}
                               </el-button>
-                              <el-button size="small" text @click="openDagNodeConfig(node)">配置</el-button>
+                              <el-button size="small" text @click="openDagNodeConfig(node)">配置/检查</el-button>
                               <el-button size="small" text type="danger" @click="removeWorkflowCanvasNode(node.id)">删除</el-button>
                             </div>
                           </div>
@@ -1326,7 +1475,7 @@ const chatModels = bind(app, 'chatModels');
                   </div>
                 </div>
 
-                <el-dialog v-model="dagNodeConfigVisible" title="节点配置" width="600px" :close-on-click-modal="false">
+                <el-dialog v-model="dagNodeConfigVisible" title="节点配置与检查" width="860px" :close-on-click-modal="false">
                   <template v-if="activeDagNode">
                     <div class="dag-node-config-header">
                       <span class="config-node-icon">{{ getDagNodeInfo(activeDagNode.type)?.icon }}</span>
@@ -1336,22 +1485,44 @@ const chatModels = bind(app, 'chatModels');
                       </div>
                     </div>
                     <el-divider />
-                    <el-form label-position="top">
-                      <el-form-item label="节点名称">
-                        <el-input v-model="activeDagNode.name" placeholder="节点名称" />
-                      </el-form-item>
+                    <div class="dag-config-layout">
+                      <el-form label-position="top" class="dag-config-form">
+                        <el-form-item label="节点名称">
+                          <el-input v-model="activeDagNode.name" placeholder="例如：判断问题类型" />
+                          <div class="dag-field-help">给自己看的名字，会显示在画布节点上。</div>
+                        </el-form-item>
                       
                       <template v-if="activeDagNode.type === 'intent_detection'">
                         <el-form-item label="使用模型">
                           <el-select v-model="dagNodeConfig.model" placeholder="选择模型" style="width:100%">
                             <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id" />
                           </el-select>
+                          <div class="dag-field-help">用于判断用户输入属于哪个意图。建议选当前 Agent 使用的同类模型。</div>
                         </el-form-item>
                         <el-form-item label="意图分类列表">
-                          <el-input v-model="dagNodeConfig.intentsStr" type="textarea" :rows="3" placeholder="每行一个意图" />
+                          <el-input v-model="dagNodeConfig.intentsStr" type="textarea" :rows="3" placeholder="售前咨询&#10;订单查询&#10;退款申请" />
+                          <div class="dag-field-help">一行一个分类名，后续可以连接到分类/分支节点。</div>
                         </el-form-item>
                         <el-form-item label="置信度阈值">
-                          <el-slider v-model="dagNodeConfig.threshold" :min="0" :max="1" :step="0.1" show-input />
+                          <el-input-number v-model="dagNodeConfig.threshold" :min="0" :max="1" :step="0.1" :precision="1" style="width:100%" />
+                          <div class="dag-field-help">越高越谨慎；不确定时可以先用 0.6。</div>
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="activeDagNode.type === 'parameter_extract'">
+                        <el-form-item label="使用模型">
+                          <el-select v-model="dagNodeConfig.model" placeholder="选择模型" style="width:100%">
+                            <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id" />
+                          </el-select>
+                          <div class="dag-field-help">用于从文本里提取字段。</div>
+                        </el-form-item>
+                        <el-form-item label="要提取的字段">
+                          <el-input v-model="dagNodeConfig.paramsText" type="textarea" :rows="3" placeholder="orderId&#10;phone&#10;dateRange" />
+                          <div class="dag-field-help">一行一个字段名。建议用英文或拼音，便于后续节点引用。</div>
+                        </el-form-item>
+                        <el-form-item label="提取提示词">
+                          <el-input v-model="dagNodeConfig.template" type="textarea" :rows="4" placeholder="请从以下文本提取字段，输出 JSON。如果没有找到，字段值为空字符串。&#10;文本：{{input}}" />
+                          <div class="dag-field-help">写清楚输出格式，通常要求模型输出 JSON。</div>
                         </el-form-item>
                       </template>
 
@@ -1360,12 +1531,13 @@ const chatModels = bind(app, 'chatModels');
                           <el-select v-model="dagNodeConfig.kbIds" multiple placeholder="选择知识库" style="width:100%">
                             <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
                           </el-select>
+                          <div class="dag-field-help">至少选一个。没有知识库时，这个节点无法正常检索。</div>
                         </el-form-item>
                         <el-form-item label="Top K">
                           <el-input-number v-model="dagNodeConfig.topK" :min="1" :max="20" />
                         </el-form-item>
                         <el-form-item label="相似度阈值">
-                          <el-slider v-model="dagNodeConfig.threshold" :min="0" :max="1" :step="0.1" show-input />
+                          <el-input-number v-model="dagNodeConfig.threshold" :min="0" :max="1" :step="0.1" :precision="1" style="width:100%" />
                         </el-form-item>
                         <el-form-item label="启用 Rerank">
                           <el-switch v-model="dagNodeConfig.rerank" />
@@ -1377,6 +1549,11 @@ const chatModels = bind(app, 'chatModels');
                           <el-select v-model="dagNodeConfig.toolId" placeholder="选择工具" style="width:100%">
                             <el-option v-for="tool in [...availableTools, ...customTools]" :key="tool.id" :label="tool.displayName || tool.name" :value="tool.id" />
                           </el-select>
+                          <div class="dag-field-help">比如文本统计、计算器、当前时间，或你自己创建的工具。</div>
+                        </el-form-item>
+                        <el-form-item label="入参映射 JSON">
+                          <el-input v-model="dagNodeConfig.argsText" type="textarea" :rows="5" placeholder="{ &quot;text&quot;: &quot;{{input}}&quot; }" />
+                          <div class="dag-field-help">必须是 JSON 对象。常用 {{input}} 代表上一节点结果。</div>
                         </el-form-item>
                         <el-form-item label="超时时间(秒)">
                           <el-input-number v-model="dagNodeConfig.timeout" :min="1" :max="300" />
@@ -1395,6 +1572,9 @@ const chatModels = bind(app, 'chatModels');
                             <el-option v-for="skill in availableSkills" :key="skill.id" :label="skill.name" :value="skill.id" />
                           </el-select>
                         </el-form-item>
+                        <el-form-item label="输入模板">
+                          <el-input v-model="dagNodeConfig.input" type="textarea" :rows="4" placeholder="{{input}}" />
+                        </el-form-item>
                       </template>
 
                       <template v-if="activeDagNode.type === 'agent_call'">
@@ -1402,6 +1582,12 @@ const chatModels = bind(app, 'chatModels');
                           <el-select v-model="dagNodeConfig.agentId" placeholder="选择 Agent" style="width:100%">
                             <el-option v-for="a in agents" :key="a.id" :label="a.name" :value="a.id" />
                           </el-select>
+                        </el-form-item>
+                        <el-form-item label="输入模板">
+                          <el-input v-model="dagNodeConfig.input" type="textarea" :rows="4" placeholder="{{input}}" />
+                        </el-form-item>
+                        <el-form-item label="等待返回结果">
+                          <el-switch v-model="dagNodeConfig.waitForResult" />
                         </el-form-item>
                       </template>
 
@@ -1412,7 +1598,7 @@ const chatModels = bind(app, 'chatModels');
                           </el-select>
                         </el-form-item>
                         <el-form-item label="温度">
-                          <el-slider v-model="dagNodeConfig.temperature" :min="0" :max="2" :step="0.1" show-input />
+                          <el-input-number v-model="dagNodeConfig.temperature" :min="0" :max="2" :step="0.1" :precision="1" style="width:100%" />
                         </el-form-item>
                         <el-form-item label="最大 Token">
                           <el-input-number v-model="dagNodeConfig.maxTokens" :min="100" :max="8000" :step="100" />
@@ -1422,6 +1608,50 @@ const chatModels = bind(app, 'chatModels');
                       <template v-if="activeDagNode.type === 'prompt_builder'">
                         <el-form-item label="提示词模板">
                           <el-input v-model="dagNodeConfig.template" type="textarea" :rows="6" placeholder="使用 {{variable}} 作为变量占位符" />
+                          <div class="dag-field-help">写给模型看的完整指令。用 {{input}} 引用上游内容。</div>
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="activeDagNode.type === 'template_transform'">
+                        <el-form-item label="转换模板">
+                          <el-input v-model="dagNodeConfig.template" type="textarea" :rows="6" placeholder="例如：处理后的内容：{{input}}" />
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="activeDagNode.type === 'variable_assigner'">
+                        <el-form-item label="变量定义 JSON">
+                          <el-input v-model="dagNodeConfig.variablesText" type="textarea" :rows="7" placeholder="{ &quot;query&quot;: &quot;{{input}}&quot;, &quot;source&quot;: &quot;workflow&quot; }" />
+                          <div class="dag-field-help">必须是 JSON 对象，值可以写固定文本或 {{input}}。</div>
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="activeDagNode.type === 'http_request'">
+                        <el-form-item label="请求方法">
+                          <el-select v-model="dagNodeConfig.method" style="width:100%">
+                            <el-option label="GET" value="GET" />
+                            <el-option label="POST" value="POST" />
+                            <el-option label="PUT" value="PUT" />
+                            <el-option label="PATCH" value="PATCH" />
+                            <el-option label="DELETE" value="DELETE" />
+                          </el-select>
+                        </el-form-item>
+                        <el-form-item label="请求地址">
+                          <el-input v-model="dagNodeConfig.url" placeholder="https://api.example.com/search?q={{input}}" />
+                          <div class="dag-field-help">必须以 http:// 或 https:// 开头。可以用 {{input}} 拼接上游输入。</div>
+                        </el-form-item>
+                        <el-form-item label="请求头 JSON">
+                          <el-input v-model="dagNodeConfig.headersText" type="textarea" :rows="4" placeholder="{ &quot;Authorization&quot;: &quot;Bearer xxx&quot; }" />
+                          <div class="dag-field-help">必须是 JSON 对象。没有请求头就填 {}。</div>
+                        </el-form-item>
+                        <el-form-item label="请求体模板">
+                          <el-input v-model="dagNodeConfig.body" type="textarea" :rows="5" placeholder="{ &quot;query&quot;: &quot;{{input}}&quot; }" />
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="activeDagNode.type === 'code'">
+                        <el-form-item label="JavaScript 代码">
+                          <el-input v-model="dagNodeConfig.code" type="textarea" :rows="8" placeholder="return input.input;" />
+                          <div class="dag-field-help">需要 return 一个结果。可读取 input.input 或上游传入字段。</div>
                         </el-form-item>
                       </template>
 
@@ -1438,9 +1668,32 @@ const chatModels = bind(app, 'chatModels');
                         </el-form-item>
                       </template>
 
-                      <template v-if="activeDagNode.type === 'condition'">
+                      <template v-if="activeDagNode.type === 'condition' || activeDagNode.type === 'if_else'">
                         <el-form-item label="条件表达式">
-                          <el-input v-model="dagNodeConfig.expression" placeholder="例如: intent === 'order_query'" />
+                          <el-input v-model="dagNodeConfig.expression" placeholder="例如：订单、退款、{{input}} 中会匹配的关键词" />
+                          <div class="dag-field-help">写一个关键词或判断说明；命中走 true，未命中走 false。</div>
+                        </el-form-item>
+                        <el-form-item label="命中分支输出模板">
+                          <el-input v-model="dagNodeConfig.trueTemplate" type="textarea" :rows="4" placeholder="{{input}}" />
+                        </el-form-item>
+                        <el-form-item label="未命中分支输出模板">
+                          <el-input v-model="dagNodeConfig.falseTemplate" type="textarea" :rows="4" placeholder="{{input}}" />
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="activeDagNode.type === 'question_classifier' || activeDagNode.type === 'multi_branch'">
+                        <el-form-item label="分类分支">
+                          <el-input v-model="dagNodeConfig.branchesText" type="textarea" :rows="6" placeholder="售前咨询=价格&#10;订单查询=订单&#10;售后退款=退款" />
+                          <div class="dag-field-help">一行一个分支，格式：分支名=关键词。关键词为空可当默认分支。</div>
+                        </el-form-item>
+                        <el-form-item label="分类提示词">
+                          <el-input v-model="dagNodeConfig.template" type="textarea" :rows="4" placeholder="按分支关键词判断用户问题：{{input}}" />
+                        </el-form-item>
+                      </template>
+
+                      <template v-if="['output', 'end', 'result_summary'].includes(activeDagNode.type)">
+                        <el-form-item label="输出模板">
+                          <el-input v-model="dagNodeConfig.template" type="textarea" :rows="5" placeholder="{{input}}" />
                         </el-form-item>
                       </template>
 
@@ -1452,26 +1705,51 @@ const chatModels = bind(app, 'chatModels');
                           <el-input-number v-model="dagNodeConfig.timeout" :min="30" :max="3600" />
                         </el-form-item>
                       </template>
-                    </el-form>
+                      </el-form>
+                      <aside class="dag-config-guide">
+                        <div class="dag-guide-card">
+                          <span>什么时候用</span>
+                          <p>{{ getDagNodeConfigGuide(activeDagNode.type).use }}</p>
+                        </div>
+                        <div class="dag-guide-card">
+                          <span>怎么填</span>
+                          <ul>
+                            <li v-for="tip in getDagNodeConfigGuide(activeDagNode.type).tips" :key="tip">{{ tip }}</li>
+                          </ul>
+                        </div>
+                        <div class="dag-guide-card">
+                          <span>示例</span>
+                          <pre>{{ getDagNodeConfigGuide(activeDagNode.type).example }}</pre>
+                        </div>
+                        <div class="dag-guide-card" :class="{ ok: dagNodeConfigErrors.length === 0, error: dagNodeConfigErrors.length > 0 }">
+                          <span>配置检查</span>
+                          <template v-if="dagNodeConfigErrors.length === 0">
+                            <p>当前配置看起来可以保存。</p>
+                          </template>
+                          <ul v-else>
+                            <li v-for="error in dagNodeConfigErrors" :key="error">{{ error }}</li>
+                          </ul>
+                        </div>
+                      </aside>
+                    </div>
                   </template>
                   <template #footer>
                     <el-button @click="dagNodeConfigVisible = false">取消</el-button>
-                    <el-button type="primary" @click="saveDagNodeConfig()">保存配置</el-button>
+                    <el-button type="primary" @click="saveDagNodeConfig()">检查并保存</el-button>
                   </template>
                 </el-dialog>
             </el-card>
 
             <!-- ========== 集成 Tab ========== -->
-            <el-card v-show="agentPageTab === 'integration'" class="agent-panel agent-integration-panel" shadow="never">
-              <template #header>
-                <div class="agent-panel-head">
-                  <span>集成</span>
-                  <div class="agent-head-tags">
-                    <el-tag size="small" type="info">MCP {{ mcpServers.length }}</el-tag>
-                    <el-tag size="small" type="info">测试集 {{ agentTestSuites.length }}</el-tag>
-                  </div>
-                </div>
-              </template>
+	            <el-card v-show="agentPageTab === 'integration'" class="agent-panel agent-integration-panel" shadow="never">
+	              <template #header>
+	                <div class="agent-panel-head">
+	                  <span>集成</span>
+	                  <div class="agent-head-tags">
+	                    <el-tag size="small" type="info">MCP {{ mcpServers.length }}</el-tag>
+	                  </div>
+	                </div>
+	              </template>
 
               <div class="agent-integration-grid">
                 <div class="agent-adv-section">
@@ -1483,107 +1761,13 @@ const chatModels = bind(app, 'chatModels');
                     <div class="agent-resource-title">
                       <span>{{ server.name }}</span>
                       <el-tag size="small" :type="server.lastStatus === 'ok' ? 'success' : 'info'">{{ server.lastStatus }}</el-tag>
-                    </div>
-                    <div class="agent-resource-meta">{{ server.serverType }} · {{ server.enabled ? '已启用' : '已禁用' }}</div>
-                    <el-button size="small" text :loading="mcpTesting && activeMcpTestServerId === server.id" @click="openMcpTestDialog(server.id)">测试</el-button>
-                  </div>
-                  <el-empty v-if="mcpServers.length === 0" description="暂无 MCP 服务" :image-size="72" />
-                </div>
-
-                <div class="agent-adv-section">
-                  <div class="agent-section-title">
-                    <span>测试集</span>
-                    <el-button size="small" type="primary" plain :disabled="!agentForm.id" @click="showTestSuiteCreateDialog = true">创建测试集</el-button>
-                  </div>
-                  <el-select v-model="activeTestSuiteId" placeholder="选择测试集" filterable style="width:100%">
-                    <el-option v-for="suite in agentTestSuites" :key="suite.id" :label="`${suite.name} (${suite.caseCount})`" :value="suite.id" />
-                  </el-select>
-                  <div class="harness-dataset-grid">
-                    <div v-for="dataset in agentHarnessDatasetTypes" :key="dataset.id" class="harness-dataset-card">
-                      <span>{{ dataset.label }}</span>
-                      <strong>{{ dataset.count }}</strong>
-                    </div>
-                  </div>
-                  <div class="harness-scenario-strip">
-                    <el-tag v-for="scenario in agentHarnessScenarios" :key="scenario.id" size="small" :type="scenario.count ? 'success' : 'info'">
-                      {{ scenario.label }} · {{ scenario.count }}
-                    </el-tag>
-                  </div>
-                  <div class="agent-test-eval-controls">
-                    <el-segmented
-                      v-model="evaluationForm.mode"
-                      :options="[
-                        { label: '混合', value: 'hybrid' },
-                        { label: '规则', value: 'rules' },
-                        { label: 'LLM', value: 'llm' },
-                      ]"
-                    />
-                    <el-select v-model="evaluationForm.judgeModel" placeholder="评审模型" clearable filterable>
-                      <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id" />
-                    </el-select>
-                  </div>
-                  <div class="agent-run-actions">
-                    <el-button
-                      type="primary"
-                      plain
-                      :loading="testSaving"
-                      :disabled="!activeTestSuiteId"
-                      @click="showTestCaseCreateDialog = true"
-                    >
-                      添加用例
-                    </el-button>
-                    <el-button
-                      type="primary"
-                      :loading="testRunning"
-                      :disabled="!activeTestSuiteId || agentTestCases.length === 0"
-                      @click="runSelectedTestSuite()"
-                    >
-                      运行回归
-                    </el-button>
-                  </div>
-                  <div v-if="activeTestRun" class="agent-resource-item">
-                    <div class="agent-resource-title">回归结果</div>
-                    <div class="harness-run-metrics">
-                      <div><span>成功率</span><strong>{{ activeHarnessRunMetrics.successRate }}%</strong></div>
-                      <div><span>准确率</span><strong>{{ activeHarnessRunMetrics.accuracy }}</strong></div>
-                      <div><span>成本</span><strong>¥{{ activeHarnessRunMetrics.cost.toFixed(4) }}</strong></div>
-                      <div><span>延迟</span><strong>{{ activeHarnessRunMetrics.latency }} ms</strong></div>
-                    </div>
-                    <div class="agent-run-meta">
-                      <el-tag size="small" :type="agentRunTagType(activeTestRun.status)">{{ activeTestRun.status }}</el-tag>
-                      <el-tag size="small" type="info">平均 {{ activeTestRun.summary?.averageScore ?? 0 }}</el-tag>
-                      <el-tag size="small" type="success">通过 {{ activeTestRun.summary?.passed ?? 0 }}</el-tag>
-                      <el-tag size="small" type="danger">失败 {{ activeTestRun.summary?.failed ?? 0 }}</el-tag>
-                    </div>
-                    <div v-for="result in activeTestRun.caseResults || []" :key="`${activeTestRun.id}-${result.caseId}`" class="agent-test-result-row">
-                      <span>{{ result.caseId }}</span>
-                      <el-tag size="small" :type="agentEvalTagType(result.grade)">{{ result.score }}/100</el-tag>
-                      <el-button size="small" text type="primary" @click="openAgentRunTrace(String(result.runId || ''))">追踪</el-button>
-                    </div>
-                  </div>
-                  <div v-if="agentTestRuns.length > 0" class="agent-resource-item">
-                    <div class="agent-resource-title">最近回归</div>
-                    <div v-for="testRun in agentTestRuns" :key="testRun.id" class="agent-test-result-row">
-                      <span>{{ formatAgentDate(testRun.createdAt) }}</span>
-                      <el-tag size="small" :type="agentRunTagType(testRun.status)">{{ agentRunStatusLabel(testRun.status) }}</el-tag>
-                      <span>{{ testRun.summary?.averageScore ?? 0 }}/100</span>
-                    </div>
-                  </div>
-                  <div v-for="testCase in agentTestCases" :key="testCase.id" class="agent-resource-item">
-                    <div class="agent-resource-title">
-                      <span>{{ testCase.name }}</span>
-                      <el-tag size="small" type="info">测试用例</el-tag>
-                    </div>
-                    <div class="harness-case-schema">
-                      <div><strong>输入</strong><span>{{ testCase.input }}</span></div>
-                      <div><strong>期望输出</strong><span>{{ testCase.expectedOutput || '未设置' }}</span></div>
-                      <div><strong>期望工具</strong><span>{{ getHarnessExpectedTool(testCase) }}</span></div>
-                      <div><strong>期望行为</strong><span>{{ testCase.rubric || '未设置' }}</span></div>
-                    </div>
-                  </div>
-                </div>
-
-              </div>
+	                    </div>
+	                    <div class="agent-resource-meta">{{ server.serverType }} · {{ server.enabled ? '已启用' : '已禁用' }}</div>
+	                    <el-button size="small" text :loading="mcpTesting && activeMcpTestServerId === server.id" @click="openMcpTestDialog(server.id)">测试</el-button>
+	                  </div>
+	                  <el-empty v-if="mcpServers.length === 0" description="暂无 MCP 服务" :image-size="72" />
+	                </div>
+	              </div>
               <el-dialog v-model="showMcpCreateDialog" title="添加 MCP 服务" width="560px" :close-on-click-modal="false">
                 <el-form label-position="top">
                   <el-form-item label="服务类型">
@@ -1633,55 +1817,7 @@ const chatModels = bind(app, 'chatModels');
                   </el-button>
                 </template>
               </el-dialog>
-              <el-dialog v-model="showTestSuiteCreateDialog" title="创建测试集" width="560px" :close-on-click-modal="false">
-                <el-form label-position="top">
-                  <el-form-item label="测试集名称">
-                    <el-input v-model="testSuiteForm.name" placeholder="例如：客服回复回归集" maxlength="120" />
-                  </el-form-item>
-                  <el-form-item label="描述">
-                    <el-input v-model="testSuiteForm.description" type="textarea" :rows="3" resize="vertical" placeholder="数据集：手动 / 生产 / 合成；覆盖 RAG、工具调用、代码任务、浏览器任务、多 Agent、客户支持等场景" />
-                  </el-form-item>
-                </el-form>
-                <template #footer>
-                  <el-button @click="showTestSuiteCreateDialog = false">取消</el-button>
-                  <el-button
-                    type="primary"
-                    :loading="testSaving"
-                    :disabled="!agentForm.id || !testSuiteForm.name.trim()"
-                    @click="createTestSuiteFromForm()"
-                  >
-                    创建
-                  </el-button>
-                </template>
-              </el-dialog>
-              <el-dialog v-model="showTestCaseCreateDialog" title="添加测试用例" width="640px" :close-on-click-modal="false">
-                <el-form label-position="top">
-                  <el-form-item label="用例名称">
-                    <el-input v-model="testCaseForm.name" placeholder="例如：订单状态查询" maxlength="120" />
-                  </el-form-item>
-                  <el-form-item label="测试输入">
-                    <el-input v-model="testCaseForm.input" type="textarea" :rows="3" resize="vertical" placeholder="输入给 Agent 的问题或任务" />
-                  </el-form-item>
-                  <el-form-item label="期望输出">
-                    <el-input v-model="testCaseForm.expectedOutput" type="textarea" :rows="3" resize="vertical" placeholder="期望包含的回答或结果" />
-                  </el-form-item>
-                  <el-form-item label="评分规则 / 期望工具 / 期望行为">
-                    <el-input v-model="testCaseForm.rubric" type="textarea" :rows="4" resize="vertical" placeholder="场景：工具调用&#10;expected_tool: calculator&#10;expected_behavior: 必须调用工具并解释结果" />
-                  </el-form-item>
-                </el-form>
-                <template #footer>
-                  <el-button @click="showTestCaseCreateDialog = false">取消</el-button>
-                  <el-button
-                    type="primary"
-                    :loading="testSaving"
-                    :disabled="!activeTestSuiteId || !testCaseForm.name.trim() || !testCaseForm.input.trim()"
-                    @click="createTestCaseFromForm()"
-                  >
-                    添加
-                  </el-button>
-                </template>
-              </el-dialog>
-            </el-card>
+	            </el-card>
 
             <!-- ========== 发布 Tab ========== -->
             <el-card v-show="agentPageTab === 'publish'" class="agent-panel agent-publish-panel" shadow="never">
@@ -1704,14 +1840,24 @@ const chatModels = bind(app, 'chatModels');
                           <strong>公开发布与 API 调用</strong>
                           <p>开启后可通过公开地址或 API Key 调用当前 Agent。</p>
                         </div>
-                        <el-button
-                          type="primary"
-                          :loading="agentPublishing"
-                          :disabled="!agentForm.id"
-                          @click="saveAgentPublication()"
-                        >
-                          保存发布配置
-                        </el-button>
+                        <div class="agent-inline-actions">
+                          <el-button
+                            type="primary"
+                            :loading="agentPublishing"
+                            :disabled="!agentForm.id"
+                            @click="saveAgentPublication()"
+                          >
+                            保存发布配置
+                          </el-button>
+                          <el-button
+                            type="danger"
+                            plain
+                            :disabled="!agentForm.id"
+                            @click="removeAgent(agentForm)"
+                          >
+                            删除 Agent
+                          </el-button>
+                        </div>
                       </div>
                       <div class="agent-form-grid">
                         <el-form label-position="top">
@@ -1955,9 +2101,9 @@ const chatModels = bind(app, 'chatModels');
                       <el-descriptions-item label="类型">{{ activeTool.type === 'builtin' ? '平台内置' : '自定义' }}</el-descriptions-item>
                       <el-descriptions-item label="运行环境">{{ activeTool.runtime }}</el-descriptions-item>
                       <el-descriptions-item label="风险等级">{{ riskLevelLabel(activeTool.riskLevel) }}</el-descriptions-item>
-                      <el-descriptions-item label="版本">v{{ activeTool.version }}</el-descriptions-item>
-                      <el-descriptions-item label="超时时间">{{ activeTool.timeout }}秒</el-descriptions-item>
-                      <el-descriptions-item label="调用次数">{{ activeTool.callCount }}</el-descriptions-item>
+                      <el-descriptions-item label="版本">v{{ activeTool.version || '1' }}</el-descriptions-item>
+                      <el-descriptions-item label="超时时间">{{ activeTool.timeout || 30 }}秒</el-descriptions-item>
+                      <el-descriptions-item label="调用次数">{{ activeTool.callCount ?? 0 }}</el-descriptions-item>
                     </el-descriptions>
                     <div class="tool-config-section">
                       <div class="section-title">输入结构</div>
@@ -1967,6 +2113,10 @@ const chatModels = bind(app, 'chatModels');
                       <div class="section-title">输出结构</div>
                       <pre class="agent-step-meta">{{ JSON.stringify(activeTool.outputSchema, null, 2) }}</pre>
                     </div>
+                    <div v-if="activeTool.code" class="tool-config-section">
+                      <div class="section-title">执行代码</div>
+                      <pre class="agent-step-meta tool-code-preview">{{ activeTool.code }}</pre>
+                    </div>
                     <div class="tool-config-section">
                       <div class="section-title">权限声明</div>
                       <div>
@@ -1975,7 +2125,7 @@ const chatModels = bind(app, 'chatModels');
                         <el-tag v-if="activeTool.permissions?.fileRead" size="small" type="info">文件读取</el-tag>
                         <el-tag v-if="activeTool.permissions?.fileWrite" size="small" type="danger">文件写入</el-tag>
                         <el-tag v-if="activeTool.permissions?.externalRequest" size="small" type="warning">外部请求</el-tag>
-                        <span v-if="!activeTool.permissions" style="color: #9ca3af; font-size: 12px;">无特殊权限声明</span>
+                        <span v-if="!Object.values(activeTool.permissions || {}).some(Boolean)" style="color: #9ca3af; font-size: 12px;">无特殊权限声明</span>
                       </div>
                     </div>
                     <div v-if="activeTool.exampleInput" class="tool-config-section">
@@ -2087,9 +2237,14 @@ const chatModels = bind(app, 'chatModels');
                         <el-tag v-for="tool in (template.toolNames || []).slice(0, 3)" :key="tool" size="small" type="warning">{{ tool }}</el-tag>
                         <el-tag v-for="skill in (template.skillNames || []).slice(0, 3)" :key="skill" size="small" type="success">{{ skill }}</el-tag>
                       </div>
-                      <el-button type="primary" plain size="small" :loading="marketplaceInstalling" @click="installMarketplaceTemplate(template)">
-                        安装模板
-                      </el-button>
+                      <div class="agent-inline-actions">
+                        <el-button type="primary" plain size="small" :loading="marketplaceInstalling" @click="installMarketplaceTemplate(template)">
+                          安装模板
+                        </el-button>
+                        <el-button v-if="template.source === 'custom'" type="danger" plain size="small" @click="deleteMarketplaceTemplate(template)">
+                          删除
+                        </el-button>
+                      </div>
                     </div>
                     <el-empty v-if="marketplaceTemplates.length === 0" description="暂无模板" :image-size="72" />
                   </div>
@@ -2267,29 +2422,7 @@ const chatModels = bind(app, 'chatModels');
                       <el-tag size="small" type="info">{{ agentForm.knowledgeBaseIds.length }} KB</el-tag>
                       <el-tag size="small" type="info">{{ agentForm.skillIds.length }} 技能</el-tag>
                       <el-tag size="small" :type="agentForm.memoryEnabled ? 'success' : 'info'">记忆</el-tag>
-                    </div>
-                    <div class="agent-run-settings-compact">
-                      <label>
-                        <span>模式</span>
-                        <el-segmented
-                          v-model="agentInvokeMode"
-                          size="small"
-                          :options="[
-                            { label: '标准', value: 'standard' },
-                            { label: '反思', value: 'reflective' },
-                            { label: '快速', value: 'fast' },
-                          ]"
-                        />
-                      </label>
-                      <label>
-                        <span>上下文</span>
-                        <el-select v-model="agentContextStrategy" size="small">
-                          <el-option label="均衡" value="balanced" />
-                          <el-option label="知识优先" value="knowledge_first" />
-                          <el-option label="记忆优先" value="memory_first" />
-                          <el-option label="最小上下文" value="minimal" />
-                        </el-select>
-                      </label>
+                      <el-tag size="small" :type="agentConversationId ? 'success' : 'info'">连续会话</el-tag>
                     </div>
                   </section>
 
@@ -2335,19 +2468,20 @@ const chatModels = bind(app, 'chatModels');
                       />
                       <div class="agent-run-actions">
                         <div class="agent-run-config-summary">
-                          <el-tag size="small" type="info">{{ agentInvokeModeLabel(agentInvokeMode) }}</el-tag>
-                          <el-tag size="small" type="info">{{ agentContextStrategyLabel(agentContextStrategy) }}</el-tag>
+                          <el-tag size="small" type="info">模型自主选择工具</el-tag>
                           <el-tag size="small" type="info">{{ agentInvokeMaxSteps }} 步</el-tag>
                         </div>
-                        <el-button
-                          type="primary"
-                          :icon="Promotion"
-                          :loading="agentRunning"
-                          :disabled="!agentPrompt.trim() || !agentForm.model"
-                          @click="runCurrentAgent()"
-                        >
-                          运行 Agent
-                        </el-button>
+                        <div class="agent-run-primary-actions">
+                          <el-button
+                            type="primary"
+                            :icon="Promotion"
+                            :loading="agentRunning"
+                            :disabled="!agentPrompt.trim() || !agentForm.model"
+                            @click="runCurrentAgent()"
+                          >
+                            运行 Agent
+                          </el-button>
+                        </div>
                       </div>
                     </section>
 
@@ -2363,11 +2497,10 @@ const chatModels = bind(app, 'chatModels');
                             <span>{{ formatAgentDate(activeAgentRun.createdAt) }}</span>
                           </div>
                         </div>
-                        <div class="agent-output-actions">
-                          <el-button size="small" plain :disabled="!activeAgentRun?.output" @click="copyActiveAgentOutput()">复制输出</el-button>
-                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun" @click="showEvaluationDialog = true">评测</el-button>
-                          <el-button size="small" plain :disabled="!activeAgentRun?.output" @click="createTestCaseFromActiveRun()">创建用例</el-button>
-                        </div>
+	                        <div class="agent-output-actions">
+	                          <el-button size="small" plain :disabled="!activeAgentRun?.output" @click="copyActiveAgentOutput()">复制输出</el-button>
+	                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun" @click="showEvaluationDialog = true">评测</el-button>
+	                        </div>
                       </div>
                       <el-alert
                         v-if="activeAgentRun?.error"
@@ -2377,10 +2510,34 @@ const chatModels = bind(app, 'chatModels');
                         :title="activeAgentRun.error"
                       />
                       <div v-if="activeAgentRun?.output" class="agent-output-render markdown-content" v-html="renderMarkdown(activeAgentRun.output)"></div>
-                      <div v-else class="agent-output-empty">
+                      <div v-if="activeAgentToolResultCards.length" class="agent-tool-results-panel">
+                        <div class="agent-section-title">工具运行结果</div>
+                        <div v-for="toolResult in activeAgentToolResultCards" :key="toolResult.id" class="agent-tool-result-card">
+                          <div class="agent-resource-title">
+                            <span>{{ toolResult.name }}</span>
+                            <div class="agent-inline-actions">
+                              <el-tag v-if="toolResult.deterministic" size="small" type="success">代码计算</el-tag>
+                              <el-tag size="small" :type="agentRunTagType(toolResult.status)">{{ agentRunStatusLabel(toolResult.status) }}</el-tag>
+                              <el-tag size="small" type="info">{{ toolResult.latencyMs }} ms</el-tag>
+                            </div>
+                          </div>
+                          <div class="agent-tool-io-grid">
+                            <div>
+                              <span>输入</span>
+                              <pre>{{ formatTraceDisplayValue(toolResult.input) }}</pre>
+                            </div>
+                            <div>
+                              <span>输出</span>
+                              <pre>{{ formatTraceDisplayValue(toolResult.output) }}</pre>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div v-if="!activeAgentRun?.output && !activeAgentToolResultCards.length" class="agent-output-empty">
                         <el-empty description="运行 Agent 后，这里会显示流式输出。" :image-size="96" />
                       </div>
                     </section>
+
                   </main>
 
                   <aside class="agent-invoke-inspector">
@@ -2400,33 +2557,7 @@ const chatModels = bind(app, 'chatModels');
                       </div>
                     </div>
                     <el-tabs v-model="agentInvokePanelTab" stretch>
-                      <el-tab-pane label="诊断" name="diagnosis">
-                        <div class="agent-diagnosis-grid">
-                          <div class="agent-diagnosis-item">
-                            <strong>{{ activeAgentRun?.steps.length || 0 }}</strong>
-                            <span>步骤</span>
-                          </div>
-                          <div class="agent-diagnosis-item">
-                            <strong>{{ activeAgentRun?.totalTokens || 0 }}</strong>
-                            <span>Token</span>
-                          </div>
-                          <div class="agent-diagnosis-item">
-                            <strong>{{ activeAgentRun?.latencyMs || 0 }}</strong>
-                            <span>ms</span>
-                          </div>
-                        </div>
-                        <div class="agent-diagnosis-actions">
-                          <el-button
-                            size="small"
-                            type="primary"
-                            plain
-                            :loading="agentImprovementLoading"
-                            :disabled="!agentForm.id"
-                            @click="generateCurrentAgentImprovementSuggestions()"
-                          >
-                            生成优化建议
-                          </el-button>
-                        </div>
+                      <el-tab-pane label="追踪" name="trace">
                         <el-alert
                           v-if="activeAgentRun?.error"
                           type="error"
@@ -2486,24 +2617,7 @@ const chatModels = bind(app, 'chatModels');
                             <ul><li v-for="item in agentImprovementSuggestions.testSuggestions" :key="item">{{ item }}</li></ul>
                           </div>
                         </div>
-                        <template v-if="activeAgentTraceStep">
-                          <div class="agent-step-head">
-                            <strong>{{ activeAgentTraceStep.name }}</strong>
-                            <div>
-                              <el-tag size="small" :type="agentRunTagType(activeAgentTraceStep.status)">{{ agentRunStatusLabel(activeAgentTraceStep.status) }}</el-tag>
-                              <el-tag size="small" type="info">{{ agentStepTypeLabel(activeAgentTraceStep.stepType) }}</el-tag>
-                            </div>
-                          </div>
-                          <div class="agent-step-meta-line">
-                            <span>{{ formatAgentDate(activeAgentTraceStep.startedAt) }}</span>
-                            <span>{{ activeAgentTraceStep.latencyMs }} ms</span>
-                          </div>
-                          <el-alert v-if="activeAgentTraceStep.error" type="error" :closable="false" show-icon :title="activeAgentTraceStep.error" />
-                        </template>
-                        <el-empty v-else description="暂无诊断信息" :image-size="72" />
-                      </el-tab-pane>
-
-                      <el-tab-pane label="追踪" name="trace">
+                        <el-divider />
                         <div class="agent-trace-metrics">
                           <div>
                             <span>成本</span>
@@ -2529,12 +2643,13 @@ const chatModels = bind(app, 'chatModels');
                             :key="stage.id"
                             type="button"
                             class="execution-trace-node"
-                            :class="[stage.status, { active: activeAgentTraceStep?.id === stage.step?.id }]"
+                            :class="[stage.status, { active: activeAgentTraceStep?.id === stage.step?.id, current: stage.current }]"
                             @click="stage.step && selectAgentTraceStep(stage.step.id)"
                           >
                             <span>{{ stage.label }}</span>
                             <strong>{{ stage.title }}</strong>
                             <small>{{ stage.latencyMs }} ms · {{ agentRunStatusLabel(stage.status) }}</small>
+                            <em v-if="stage.current">当前阶段</em>
                             <p>{{ stage.detail }}</p>
                           </button>
                         </div>
@@ -2545,15 +2660,6 @@ const chatModels = bind(app, 'chatModels');
                           <el-button size="small" :disabled="!agentTraceDebuggerState.canStepInto" @click="stepIntoAgentTrace()">进入步骤</el-button>
                           <el-button size="small" :disabled="!agentTraceDebuggerState.canStepOver" @click="stepOverAgentTrace()">跳过步骤</el-button>
                           <el-button size="small" type="warning" plain :disabled="!agentTraceDebuggerState.canRestartFromNode" @click="restartAgentFromTraceNode()">从当前步骤重启</el-button>
-                          <el-slider
-                            class="agent-trace-slider"
-                            :model-value="agentTraceReplayIndex"
-                            :min="0"
-                            :max="agentTraceReplayMax"
-                            :step="1"
-                            :show-tooltip="false"
-                            @update:model-value="setAgentTraceReplayIndex"
-                          />
                           <span>{{ agentTraceReplayIndex + 1 }} / {{ activeAgentRun?.steps.length || 1 }}</span>
                         </div>
 
@@ -2590,11 +2696,20 @@ const chatModels = bind(app, 'chatModels');
                             </div>
                             <div class="snapshot-block">
                               <strong>工具输入 / 输出</strong>
-                              <pre>{{ JSON.stringify({ input: agentTraceSnapshot.toolInput, output: agentTraceSnapshot.toolOutput }, null, 2) }}</pre>
+                              <div class="agent-tool-io-grid">
+                                <div>
+                                  <span>输入</span>
+                                  <pre>{{ formatTraceDisplayValue(agentTraceSnapshot.toolInput) }}</pre>
+                                </div>
+                                <div>
+                                  <span>输出</span>
+                                  <pre>{{ formatTraceDisplayValue(agentTraceSnapshot.toolOutput) }}</pre>
+                                </div>
+                              </div>
                             </div>
                             <div class="snapshot-block">
                               <strong>记忆状态</strong>
-                              <pre>{{ JSON.stringify(agentTraceSnapshot.memoryState, null, 2) }}</pre>
+                              <pre>{{ formatTraceDisplayValue(agentTraceSnapshot.memoryState) }}</pre>
                             </div>
                           </div>
                         </div>
@@ -2619,6 +2734,38 @@ const chatModels = bind(app, 'chatModels');
                               <pre>{{ JSON.stringify(agentComparativeReplay.workflowDiff, null, 2) }}</pre>
                             </div>
                           </div>
+                        </div>
+
+                        <div class="agent-step-inspector compact">
+                          <div class="agent-section-title">步骤检查器</div>
+                          <template v-if="activeAgentTraceStep">
+                            <div class="agent-step-head">
+                              <strong>{{ activeAgentTraceStep.name }}</strong>
+                              <div>
+                                <el-tag size="small" :type="agentRunTagType(activeAgentTraceStep.status)">{{ agentRunStatusLabel(activeAgentTraceStep.status) }}</el-tag>
+                                <el-tag size="small" type="info">{{ agentStepTypeLabel(activeAgentTraceStep.stepType) }}</el-tag>
+                              </div>
+                            </div>
+                            <div class="agent-step-meta-line">
+                              <span>{{ formatAgentDate(activeAgentTraceStep.startedAt) }}</span>
+                              <span>{{ activeAgentTraceStep.latencyMs }} ms</span>
+                            </div>
+                            <el-alert v-if="activeAgentTraceStep.error" type="error" :closable="false" show-icon :title="activeAgentTraceStep.error" />
+                            <div class="agent-inspector-section">
+                              <strong>输入</strong>
+                              <pre class="agent-step-meta">{{ activeAgentTraceStep.input || '无' }}</pre>
+                            </div>
+                            <div class="agent-inspector-section">
+                              <strong>输出</strong>
+                              <pre class="agent-step-meta">{{ activeAgentTraceStep.output || '无' }}</pre>
+                            </div>
+                            <div v-if="formatStepMetadata(activeAgentTraceStep.metadata)" class="agent-inspector-section">
+                              <strong>元数据</strong>
+                              <pre class="agent-step-meta">{{ formatStepMetadata(activeAgentTraceStep.metadata) }}</pre>
+                            </div>
+                            <el-button size="small" plain @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
+                          </template>
+                          <el-empty v-else description="暂无步骤" :image-size="72" />
                         </div>
 
                         <el-empty v-if="!agentTraceStageGroups.length" description="暂无追踪节点" :image-size="72" />
@@ -2656,34 +2803,7 @@ const chatModels = bind(app, 'chatModels');
                         </el-scrollbar>
                       </el-tab-pane>
 
-                      <el-tab-pane label="API" name="api">
-                        <div class="agent-resource-item">
-                          <div class="agent-resource-title">集中 API 文档</div>
-                          <p>Agent 调用、公开调用、版本、测试集、优化建议、工具、知识库、记忆、工作流和团队的接口示例都集中在 API 用法页维护。</p>
-                        </div>
-                        <el-button size="small" type="primary" plain @click="switchPage('api')">查看完整 API 用法</el-button>
-                      </el-tab-pane>
                     </el-tabs>
-
-                    <div class="agent-step-inspector compact">
-                      <div class="agent-section-title">步骤检查器</div>
-                      <template v-if="activeAgentTraceStep">
-                        <div class="agent-inspector-section">
-                          <strong>输入</strong>
-                          <pre class="agent-step-meta">{{ activeAgentTraceStep.input || '无' }}</pre>
-                        </div>
-                        <div class="agent-inspector-section">
-                          <strong>输出</strong>
-                          <pre class="agent-step-meta">{{ activeAgentTraceStep.output || '无' }}</pre>
-                        </div>
-                        <div v-if="formatStepMetadata(activeAgentTraceStep.metadata)" class="agent-inspector-section">
-                          <strong>元数据</strong>
-                          <pre class="agent-step-meta">{{ formatStepMetadata(activeAgentTraceStep.metadata) }}</pre>
-                        </div>
-                        <el-button size="small" plain @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
-                      </template>
-                      <el-empty v-else description="暂无步骤" :image-size="72" />
-                    </div>
                   </aside>
                 </div>
               </el-card>

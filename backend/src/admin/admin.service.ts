@@ -42,6 +42,7 @@ export interface AdminUserRow {
   id: string;
   username: string;
   email: string | null;
+  emailVerified: boolean;
   role: string;
   credits: number;
   totalSpent: number;
@@ -137,7 +138,7 @@ export class AdminService {
 
     params.push(String(pageSize), String(offset));
     const rows = await db.prepare(
-      `SELECT u.id, u.username, u.email, u.role, u.credits, u.total_spent as totalSpent,
+      `SELECT u.id, u.username, u.email, u.email_verified as emailVerified, u.role, u.credits, u.total_spent as totalSpent,
               u.created_at as createdAt, u.invitation_code as invitationCode,
               COALESCE(bc.req_count, 0) as requestCount
        FROM users u
@@ -145,7 +146,7 @@ export class AdminService {
        ${whereClause}
        ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
     ).all(...params) as Array<{
-      id: string; username: string; email: string | null; role: string;
+      id: string; username: string; email: string | null; emailVerified: number | string | boolean; role: string;
       credits: number; totalSpent: number; createdAt: string;
       invitationCode: string; requestCount: number;
     }>;
@@ -155,6 +156,7 @@ export class AdminService {
         id: r.id,
         username: r.username,
         email: r.email || null,
+        emailVerified: Number(r.emailVerified ?? 0) === 1 || r.emailVerified === true,
         role: r.role || 'user',
         credits: Number(r.credits),
         totalSpent: Number(r.totalSpent),
@@ -166,11 +168,21 @@ export class AdminService {
     };
   }
 
-  async updateUser(userId: string, updates: { credits?: number; role?: string }): Promise<AdminUserRow> {
+  async createUser(input: { username: string; password: string; email: string; role?: string; credits?: number; emailVerified?: boolean }): Promise<AdminUserRow> {
+    const role = input.role === 'admin' ? 'admin' : 'user';
+    const user = await this.usersService.createUser(input.username, input.password, input.email, undefined, {
+      role,
+      credits: input.credits,
+      emailVerified: input.emailVerified ?? true,
+    });
+    return this.getAdminUserRow(user.id);
+  }
+
+  async updateUser(userId: string, updates: { credits?: number; role?: string; emailVerified?: boolean }): Promise<AdminUserRow> {
     const db = this.databaseService.connection;
 
     const user = await db.prepare(
-      'SELECT id, username, email, role, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE id = ?',
+      'SELECT id, username, email, email_verified as emailVerified, role, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE id = ?',
     ).get(userId) as unknown as AdminUserRow | undefined;
 
     if (!user) throw new NotFoundException('用户不存在');
@@ -186,10 +198,14 @@ export class AdminService {
       await db.prepare('UPDATE users SET role = ? WHERE id = ?')
         .run(updates.role, userId);
     }
+    if (updates.emailVerified !== undefined) {
+      await db.prepare('UPDATE users SET email_verified = ? WHERE id = ?')
+        .run(updates.emailVerified ? 1 : 0, userId);
+    }
 
     // Re-fetch with request count
     const updated = await db.prepare(
-      `SELECT u.id, u.username, u.email, u.role, u.credits, u.total_spent as totalSpent,
+      `SELECT u.id, u.username, u.email, u.email_verified as emailVerified, u.role, u.credits, u.total_spent as totalSpent,
               u.created_at as createdAt, u.invitation_code as invitationCode,
               COALESCE(bc.req_count, 0) as requestCount
        FROM users u
@@ -199,11 +215,34 @@ export class AdminService {
 
     return {
       ...updated,
+      emailVerified: Number(updated.emailVerified ?? 0) === 1 || updated.emailVerified === true,
       role: updated.role || 'user',
       credits: Number(updated.credits),
       totalSpent: Number(updated.totalSpent),
       requestCount: Number(updated.requestCount),
       invitationCode: updated.invitationCode || '',
+    };
+  }
+
+  private async getAdminUserRow(userId: string): Promise<AdminUserRow> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT u.id, u.username, u.email, u.email_verified as emailVerified, u.role, u.credits, u.total_spent as totalSpent,
+              u.created_at as createdAt, u.invitation_code as invitationCode,
+              COALESCE(bc.req_count, 0) as requestCount
+       FROM users u
+       LEFT JOIN (SELECT user_id, COUNT(*) as req_count FROM billing_ledger GROUP BY user_id) bc ON bc.user_id = u.id
+       WHERE u.id = ?`,
+    ).get(userId) as (AdminUserRow & { emailVerified: number | string | boolean }) | undefined;
+    if (!row) throw new NotFoundException('用户不存在');
+    return {
+      ...row,
+      email: row.email || null,
+      emailVerified: Number(row.emailVerified ?? 0) === 1 || row.emailVerified === true,
+      role: row.role || 'user',
+      credits: Number(row.credits),
+      totalSpent: Number(row.totalSpent),
+      requestCount: Number(row.requestCount),
+      invitationCode: row.invitationCode || '',
     };
   }
 
@@ -214,6 +253,7 @@ export class AdminService {
   ): Promise<{ data: AdminBillingRow[]; total: number }> {
     const db = this.databaseService.connection;
     const offset = (page - 1) * pageSize;
+    const modelProviderMap = await this.buildModelProviderMap();
 
     const conditions: string[] = [];
     const params: (string | number)[] = [];
@@ -266,6 +306,7 @@ export class AdminService {
     return {
       data: rows.map((r) => ({
         ...r,
+        providerName: r.providerName || modelProviderMap.get(r.model) || '',
         promptTokens: Number(r.promptTokens),
         completionTokens: Number(r.completionTokens),
         totalTokens: Number(r.totalTokens),
@@ -401,6 +442,7 @@ export class AdminService {
     filters?: { username?: string; model?: string; provider?: string; fromDate?: string; toDate?: string },
   ): Promise<string> {
     const db = this.databaseService.connection;
+    const modelProviderMap = await this.buildModelProviderMap();
 
     const conditions: string[] = [];
     const params: (string | number)[] = [];
@@ -432,9 +474,10 @@ export class AdminService {
     }>;
 
     const header = 'ID,用户,模型,请求类型,Provider,Provider Key,Key 前缀,审计元数据,输入Token,输出Token,总Token,费用,时间';
-    const csvRows = rows.map((r) =>
-      [r.id, r.username, r.model, r.requestType, r.providerName || '', r.providerKeyName || '', r.providerKeyPrefix || '', JSON.stringify(r.auditMetadata || ''), r.promptTokens, r.completionTokens, r.totalTokens, Number(r.cost).toFixed(6), r.createdAt].join(','),
-    );
+    const csvRows = rows.map((r) => {
+      const providerName = r.providerName || modelProviderMap.get(r.model) || '';
+      return [r.id, r.username, r.model, r.requestType, providerName, r.providerKeyName || '', r.providerKeyPrefix || '', JSON.stringify(r.auditMetadata || ''), r.promptTokens, r.completionTokens, r.totalTokens, Number(r.cost).toFixed(6), r.createdAt].join(',');
+    });
 
     // Add BOM for Excel UTF-8 compatibility
     return '﻿' + [header, ...csvRows].join('\n');
@@ -673,6 +716,9 @@ export class AdminService {
       } catch {
         return value;
       }
+    }
+    if (key === 'router_classifier_model' && value.trim() === 'auto') {
+      return 'qwen-plus';
     }
     return value;
   }

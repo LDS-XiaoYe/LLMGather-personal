@@ -58,8 +58,14 @@ const authPassword = bind(app, 'authPassword');
 const authEmail = bind(app, 'authEmail');
 const authVerificationCode = bind(app, 'authVerificationCode');
 const authInvitationCode = bind(app, 'authInvitationCode');
+const authTosAccepted = bind(app, 'authTosAccepted');
+const authTosDialogOpen = bind(app, 'authTosDialogOpen');
 const authLoading = bind(app, 'authLoading');
 const authError = bind(app, 'authError');
+const authCaptchaRequired = bind(app, 'authCaptchaRequired');
+const authCaptchaImage = bind(app, 'authCaptchaImage');
+const authCaptchaCode = bind(app, 'authCaptchaCode');
+const authCaptchaLoading = bind(app, 'authCaptchaLoading');
 const codeCountdown = bind(app, 'codeCountdown');
 const rechargeDialogVisible = bind(app, 'rechargeDialogVisible');
 const rechargeAmount = bind(app, 'rechargeAmount');
@@ -75,6 +81,8 @@ const settingsMemories = bind(app, 'settingsMemories');
 const settingsMemoryLoading = bind(app, 'settingsMemoryLoading');
 const settingsMemorySaving = bind(app, 'settingsMemorySaving');
 const settingsMemoryForm = bind(app, 'settingsMemoryForm');
+const memoryTypeOptions = bind(app, 'memoryTypeOptions');
+const memoryProviderInfo = bind(app, 'memoryProviderInfo');
 const sessions = bind(app, 'sessions');
 const activeSessionId = bind(app, 'activeSessionId');
 const pageMode = bind(app, 'pageMode');
@@ -88,6 +96,7 @@ const createSettingsMemory = bind(app, 'createSettingsMemory');
 const deleteSettingsMemory = bind(app, 'deleteSettingsMemory');
 const forgetAllSettingsMemories = bind(app, 'forgetAllSettingsMemories');
 const submitAuth = bind(app, 'submitAuth');
+const refreshAuthCaptcha = bind(app, 'refreshAuthCaptcha');
 const onAuthDialogClosed = bind(app, 'onAuthDialogClosed');
 const handleSendCode = bind(app, 'handleSendCode');
 const submitRecharge = bind(app, 'submitRecharge');
@@ -144,10 +153,6 @@ const switchPage = bind(app, 'switchPage');
           <el-menu-item index="collab">
             <el-icon><TrendCharts /></el-icon>
             <span>协同推理</span>
-          </el-menu-item>
-          <el-menu-item index="vision">
-            <el-icon><Monitor /></el-icon>
-            <span>视觉理解</span>
           </el-menu-item>
           <el-menu-item index="tts">
             <el-icon><Headset /></el-icon>
@@ -360,6 +365,9 @@ const switchPage = bind(app, 'switchPage');
         <div class="settings-section-head">
           <strong>记忆管理</strong>
           <div>
+            <el-tag v-if="memoryProviderInfo" size="small" type="info" style="margin-right:8px">
+              {{ memoryProviderInfo.active === 'langgraph' ? 'LangGraph Memory' : '本地记忆' }}
+            </el-tag>
             <el-button size="small" :loading="settingsMemoryLoading" @click="loadSettingsMemories()">刷新</el-button>
             <el-button size="small" type="danger" plain :disabled="!settingsMemories.length" @click="forgetAllSettingsMemories()">忘记所有</el-button>
           </div>
@@ -370,11 +378,8 @@ const switchPage = bind(app, 'switchPage');
             <el-input v-model="settingsMemoryForm.content" type="textarea" :rows="3" placeholder="写入一条长期记忆" />
           </el-form-item>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-            <el-select v-model="settingsMemoryForm.memoryType" size="small" style="width:110px">
-              <el-option label="事实" value="fact" />
-              <el-option label="偏好" value="preference" />
-              <el-option label="流程" value="procedure" />
-              <el-option label="片段" value="episode" />
+            <el-select v-model="settingsMemoryForm.memoryType" size="small" style="width:130px">
+              <el-option v-for="item in memoryTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-input-number v-model="settingsMemoryForm.importance" size="small" :min="1" :max="5" />
             <el-button size="small" type="primary" :loading="settingsMemorySaving" :disabled="!settingsMemoryForm.content.trim()" @click="createSettingsMemory()">新增</el-button>
@@ -428,11 +433,45 @@ const switchPage = bind(app, 'switchPage');
         <el-form-item v-if="authMode === 'register'" label="邀请码（选填）">
           <el-input v-model="authInvitationCode" placeholder="填写邀请码，双方都可获得额度" maxlength="6" />
         </el-form-item>
+        <el-form-item v-if="authMode === 'register'">
+          <el-checkbox v-model="authTosAccepted">
+            我已阅读并同意
+            <el-button link type="primary" @click.stop="authTosDialogOpen = true">服务条款和个人信息保护政策</el-button>
+          </el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="authCaptchaRequired" label="图形验证码">
+          <div style="display:flex;gap:8px;width:100%;align-items:center;">
+            <el-input v-model="authCaptchaCode" placeholder="输入图形验证码" maxlength="8" style="flex:1;" @keyup.enter="submitAuth()" />
+            <button type="button" class="captcha-image-button" :disabled="authCaptchaLoading" @click="refreshAuthCaptcha()">
+              <img v-if="authCaptchaImage" :src="authCaptchaImage" alt="图形验证码" />
+              <span v-else>刷新</span>
+            </button>
+          </div>
+        </el-form-item>
 
         <el-alert v-if="authError" type="error" show-icon :closable="false" :title="authError" />
       </el-form>
       <template #footer>
-        <el-button type="primary" :loading="authLoading" @click="submitAuth()">{{ authMode === 'register' ? '注册并登录' : '登录' }}</el-button>
+        <el-button type="primary" :loading="authLoading" :disabled="authMode === 'register' && !authTosAccepted" @click="submitAuth()">{{ authMode === 'register' ? '注册并登录' : '登录' }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="authTosDialogOpen" title="服务条款和个人信息保护政策" width="680px">
+      <div class="tos-content">
+        <h4>服务条款</h4>
+        <p>你需要对账号下的使用行为负责，不得使用本平台生成、传播违法、侵权、欺诈、恶意攻击、绕过安全限制或明显损害他人权益的内容。</p>
+        <p>平台提供模型调用、Agent、工具、知识库和工作流等能力。AI 输出可能不准确，你需要自行判断结果是否适合用于生产、医疗、法律、金融等高风险场景。</p>
+        <p>平台可能根据资源消耗、模型价格和滥用风险调整额度、限流、功能可用性或服务策略。</p>
+        <h4>个人信息保护政策</h4>
+        <p>注册和登录会处理用户名、邮箱、验证码、安全挑战、基础行为数据、IP 和 User-Agent，用于身份认证、风控、防刷和安全审计。</p>
+        <p>你在聊天、Agent、知识库、文件库和工具调用中提交的内容会用于提供对应功能，并可能产生运行记录、追踪日志、计费明细和必要的错误日志。</p>
+        <p>为实现模型调用、计费、风控、故障排查、额度管理和功能优化，平台会在必要范围内保存和使用上述信息，不会将你的个人信息用于与平台服务无关的目的。</p>
+        <p>你可以在平台内访问、更正、删除可管理的数据；因安全审计、交易记录、计费结算、合规要求或争议处理需要保留的记录，会按系统策略和适用规则保存。</p>
+        <p>请不要上传无权处理的敏感个人信息、密钥、商业机密或违法内容。涉及他人个人信息时，你应确保已获得合法授权。</p>
+      </div>
+      <template #footer>
+        <el-button @click="authTosDialogOpen = false">关闭</el-button>
+        <el-button type="primary" @click="authTosAccepted = true; authTosDialogOpen = false">同意并继续</el-button>
       </template>
     </el-dialog>
 

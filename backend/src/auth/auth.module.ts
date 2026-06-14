@@ -8,9 +8,11 @@ import { JwtService } from './jwt.service';
 import { UsersService } from './users.service';
 import { EmailService } from './email.service';
 import { VerificationCodeService } from './verification-code.service';
+import { SecurityModule } from '../security/security.module';
 
 @Module({
   controllers: [AuthController, BillingController],
+  imports: [SecurityModule],
   providers: [AuthService, UsersService, JwtService, JwtAuthGuard, BillingService, EmailService, VerificationCodeService],
   exports: [UsersService, JwtService, JwtAuthGuard, BillingService],
 })

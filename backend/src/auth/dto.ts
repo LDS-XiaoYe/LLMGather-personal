@@ -1,4 +1,5 @@
-import { IsEmail, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { BehaviorPayload } from '../security/security.types';
 
 export class RegisterDto {
   @IsString()
@@ -24,6 +25,25 @@ export class RegisterDto {
   @MinLength(6)
   @MaxLength(6)
   invitationCode?: string;
+
+  @IsOptional()
+  @IsString()
+  challengeId?: string;
+
+  @IsOptional()
+  @IsObject()
+  behaviorPayload?: BehaviorPayload;
+
+  @IsOptional()
+  @IsString()
+  captchaId?: string;
+
+  @IsOptional()
+  @IsString()
+  captchaCode?: string;
+
+  @IsBoolean()
+  tosAccepted!: boolean;
 }
 
 export class LoginDto {
@@ -34,6 +54,22 @@ export class LoginDto {
   @IsString()
   @MaxLength(128)
   password!: string;
+
+  @IsOptional()
+  @IsString()
+  challengeId?: string;
+
+  @IsOptional()
+  @IsObject()
+  behaviorPayload?: BehaviorPayload;
+
+  @IsOptional()
+  @IsString()
+  captchaId?: string;
+
+  @IsOptional()
+  @IsString()
+  captchaCode?: string;
 }
 
 export class TopUpDto {

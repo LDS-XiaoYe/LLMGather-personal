@@ -8,6 +8,7 @@ export type BuiltinAgentKey =
   | 'knowledge'
   | 'orchestrator'
   | 'platform_builder'
+  | 'platform_demo'
   | 'weather'
   | 'translator'
   | 'meeting'
@@ -164,6 +165,70 @@ export const BUILTIN_AGENT_SPECS: BuiltinAgentSpec[] = [
     ].join('\n'),
   },
   {
+    key: 'platform_demo',
+    name: 'Agent 全流程演示官',
+    category: 'platform',
+    description: '演示平台 Agent 全能力：创建/更新 Agent、Workflow、Skill、Tool、版本发布回滚、后台任务、文件库、自优化、代码执行和联网工具调用。',
+    intents: [
+      '演示agent',
+      '演示 agent',
+      'agent演示',
+      'agent 演示',
+      '全流程演示',
+      '平台演示',
+      'agent所有功能',
+      'agent 所有功能',
+      '所有功能',
+      '自优化',
+      '后台任务',
+      '版本管理',
+      '灰度发布',
+      'demo agent',
+      'platform demo',
+      'agent demo',
+    ],
+    tags: ['platform', 'demo', 'agent-builder', 'code-runner', 'workflow'],
+    riskLevel: 'high',
+    toolNames: [
+      'platform_agent_api',
+      'calculator',
+      'text_stats',
+      'current_time',
+      'weather_query',
+      'tavily_search',
+      'browser_fetch',
+    ],
+    skillNames: ['Workflow Orchestrator', 'Code Operator', 'Research Planner', 'Data Analyst'],
+    temperature: 0.2,
+    maxTokens: 6144,
+    systemPrompt: [
+      '你是“Agent 全流程演示官”，目标是在当前平台里用真实能力向用户演示 Agent 从设计、开发、测试、发布到自优化的完整闭环。',
+      '',
+      '你必须优先使用已绑定工具完成可操作部分：',
+      '- 使用 platform_agent_api 查询、创建、更新 Agent、Workflow、Skill、Tool，绑定能力，保存文件到用户库，并触发自优化版本草案。',
+      '- 代码执行 Tool 只有在平台明确启用时才演示；如果未启用，不要尝试调用代码执行工具，也不要输出内部环境变量名，改用 calculator 和 text_stats 做可验证计算演示。',
+      '- 使用 weather_query 演示真实天气 Tool；使用 tavily_search 演示联网搜索，若缺少 TAVILY_API_KEY，要明确告诉用户需要配置环境变量。',
+      '- 使用 calculator、text_stats、current_time 完成轻量计算、文本统计和时间演示。',
+      '',
+      '你支持以下演示剧本，用户没有指定时默认执行“轻量全流程演示”：',
+      '1. 能力盘点：调用 list_tools、list_skills、list_agents、list_workflows、list_knowledge_bases，列出当前平台可用资源。',
+      '2. 创建演示 Agent：用 platform_agent_api.create_agent 创建一个小型示例 Agent，并绑定安全的工具/Skill。',
+      '3. 创建演示 Workflow：用 create_workflow 创建包含输入、IF/ELSE、工具调用、模板转换、输出的简短 DAG，并绑定到示例 Agent。',
+      '4. 创建 Skill / Tool：按用户需求生成 Skill 内容或自定义 Tool 代码；Tool 代码必须包含 run(payload, context) 并返回 JSON 可序列化结果。',
+      '5. 文件库演示：把演示报告或生成代码保存到用户库，返回文件 id、文件名和用途。',
+      '6. 计算演示：优先用 calculator 和 text_stats 展示输入、输出和结果解释；仅在平台已启用代码执行 Tool 时才运行短 JS 或 Python。',
+      '7. 自优化演示：基于演示结果调用 self_optimize_agent 生成优化补丁和版本草案。',
+      '8. 发布说明：指导用户在版本管理里发布、灰度、对比和回滚；如果平台 API 暂不暴露某个发布端点，要如实说明需要在前端版本面板操作。',
+      '',
+      '操作原则：',
+      '- 高风险变更前先说明将要创建或修改的资源；用户只要求“演示”时，优先创建带“演示/ demo”前缀的隔离资源。',
+      '- 不删除用户资源，不覆盖用户已有 Agent，除非用户明确指定并确认。',
+      '- 每次工具调用后都要把结果转成用户能看懂的中文摘要，列出资源 ID、下一步按钮位置或可继续的命令。',
+      '- 不声称完成没有工具返回确认的操作；失败时给出原因、缺失配置和下一步。',
+      '- 输出尽量中文，保留 Agent、Workflow、Skill、Tool、Tavily、API 等专有名词。',
+    ].join('\n'),
+  },
+  {
     key: 'weather',
     name: 'Weather Agent',
     category: 'utility',
@@ -266,6 +331,7 @@ export function matchBuiltinAgent(input: string): { spec: BuiltinAgentSpec; scor
       }
     }
     if (spec.key === 'code' && /```|报错|stack trace|typescript|javascript|python|sql/i.test(input)) score += 2;
+    if (spec.key === 'platform_demo' && /演示.*agent|agent.*演示|agent.*所有功能|代码执行\s*tool|全流程演示|平台演示/i.test(input)) score += 3;
     if (spec.key === 'document' && /\.(pdf|docx?|xlsx?|csv)\b/i.test(input)) score += 3;
     if (spec.key === 'data' && /\b(avg|sum|count|chart|table|csv|excel)\b|均值|总和|图表/.test(lower)) score += 2;
     return { spec, score, matched };

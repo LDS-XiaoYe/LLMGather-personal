@@ -27,6 +27,7 @@ const UserFilled = bind(app, 'UserFilled');
 const Coin = bind(app, 'Coin');
 const formatTime = bind(app, 'formatTime');
 const models = bind(app, 'models');
+const realModels = bind(app, 'realModels');
 const adminStats = bind(app, 'adminStats');
 const adminUsers = bind(app, 'adminUsers');
 const adminUsersTotal = bind(app, 'adminUsersTotal');
@@ -42,6 +43,10 @@ const adminEditUserDialog = bind(app, 'adminEditUserDialog');
 const adminEditUserCredits = bind(app, 'adminEditUserCredits');
 const adminEditUserRole = bind(app, 'adminEditUserRole');
 const adminEditUserUsername = bind(app, 'adminEditUserUsername');
+const adminEditUserEmailVerified = bind(app, 'adminEditUserEmailVerified');
+const adminCreateUserDialog = bind(app, 'adminCreateUserDialog');
+const adminCreateUserForm = bind(app, 'adminCreateUserForm');
+const adminCreateUserSaving = bind(app, 'adminCreateUserSaving');
 const adminTab = bind(app, 'adminTab');
 const adminDailyUsage = bind(app, 'adminDailyUsage');
 const adminChartDays = bind(app, 'adminChartDays');
@@ -89,6 +94,8 @@ const loadAdminStats = bind(app, 'loadAdminStats');
 const loadAdminUsers = bind(app, 'loadAdminUsers');
 const loadAdminBilling = bind(app, 'loadAdminBilling');
 const openEditUser = bind(app, 'openEditUser');
+const openCreateAdminUser = bind(app, 'openCreateAdminUser');
+const saveCreateAdminUser = bind(app, 'saveCreateAdminUser');
 const saveEditUser = bind(app, 'saveEditUser');
 const loadAdminProviderKeys = bind(app, 'loadAdminProviderKeys');
 const getAdminProviderKeyMetric = bind(app, 'getAdminProviderKeyMetric');
@@ -269,11 +276,19 @@ const getModelTags = bind(app, 'getModelTags');
               <div class="admin-toolbar">
                 <el-input v-model="adminUsersSearch" placeholder="搜索用户名或邮箱" clearable :prefix-icon="Search" style="width: 260px" @keyup.enter="adminUsersPage = 1; loadAdminUsers()" @clear="adminUsersPage = 1; loadAdminUsers()" />
                 <el-button type="primary" plain @click="adminUsersPage = 1; loadAdminUsers()">搜索</el-button>
+                <el-button type="primary" :icon="Plus" @click="openCreateAdminUser()">创建用户</el-button>
               </div>
               <el-table :data="adminUsers" stripe size="small" class="admin-table" v-loading="adminUsers.length === 0 && adminUsersTotal === 0">
                 <el-table-column prop="username" label="用户名" min-width="100" />
                 <el-table-column prop="email" label="邮箱" min-width="160">
                   <template #default="{ row }">{{ row.email || '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="emailVerified" label="邮箱验证" width="90" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="row.emailVerified ? 'success' : 'warning'" size="small">
+                      {{ row.emailVerified ? '已验证' : '未验证' }}
+                    </el-tag>
+                  </template>
                 </el-table-column>
                 <el-table-column prop="role" label="角色" width="70">
                   <template #default="{ row }">
@@ -513,7 +528,7 @@ const getModelTags = bind(app, 'getModelTags');
             </el-tab-pane>
 
             <!-- Model → Tier Mapping Tab -->
-            <el-tab-pane label="定价映射" name="modeltiers">
+            <el-tab-pane label="定价" name="modeltiers">
               <el-alert v-if="Object.keys(adminModelTiers.tiers).length === 0" type="warning" show-icon :closable="false"
                 title="还没有定价档位，请先点击「新增定价档位」创建至少一个档位" style="margin-bottom:16px" />
 
@@ -623,7 +638,7 @@ const getModelTags = bind(app, 'getModelTags');
             </el-tab-pane>
 
             <!-- Page Settings Tab -->
-            <el-tab-pane label="页面配置" name="settings">
+            <el-tab-pane label="系统配置" name="settings">
               <el-table :data="adminSettings.filter((s: any) => s.key !== 'model_tier_mapping')" stripe size="small" class="admin-table">
                 <el-table-column prop="description" label="配置" min-width="250" />
                 <el-table-column prop="value" label="值" min-width="300">
@@ -700,10 +715,44 @@ const getModelTags = bind(app, 'getModelTags');
                   <el-option label="管理员 (admin)" value="admin" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="邮箱验证">
+                <el-switch v-model="adminEditUserEmailVerified" active-text="已验证" inactive-text="未验证" />
+              </el-form-item>
             </el-form>
             <template #footer>
               <el-button @click="adminEditUserDialog = false">取消</el-button>
               <el-button type="primary" @click="saveEditUser()">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Create User Dialog -->
+          <el-dialog v-model="adminCreateUserDialog" title="创建用户" width="480px">
+            <el-form label-position="top">
+              <el-form-item label="用户名">
+                <el-input v-model="adminCreateUserForm.username" placeholder="请输入用户名" />
+              </el-form-item>
+              <el-form-item label="邮箱">
+                <el-input v-model="adminCreateUserForm.email" placeholder="请输入邮箱" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="adminCreateUserForm.password" type="password" show-password placeholder="至少 4 位" />
+              </el-form-item>
+              <el-form-item label="余额 (元)">
+                <el-input-number v-model="adminCreateUserForm.credits" :min="0" :precision="4" :step="1" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="角色">
+                <el-select v-model="adminCreateUserForm.role" style="width: 100%">
+                  <el-option label="普通用户 (user)" value="user" />
+                  <el-option label="管理员 (admin)" value="admin" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="邮箱验证">
+                <el-switch v-model="adminCreateUserForm.emailVerified" active-text="已验证" inactive-text="未验证" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="adminCreateUserDialog = false">取消</el-button>
+              <el-button type="primary" :loading="adminCreateUserSaving" @click="saveCreateAdminUser()">创建</el-button>
             </template>
           </el-dialog>
 
@@ -810,7 +859,7 @@ const getModelTags = bind(app, 'getModelTags');
               <el-form-item :label="adminEditSettingDesc">
                 <!-- Model tags editor -->
                 <template v-if="adminEditSettingKey === 'model_tags'">
-                  <el-table :data="models" stripe size="small" max-height="400" style="width:100%">
+                  <el-table :data="realModels" stripe size="small" max-height="400" style="width:100%">
                     <el-table-column prop="id" label="模型" min-width="200" />
                     <el-table-column label="语言" width="70" align="center">
                       <template #default="{ row }">

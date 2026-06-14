@@ -22,9 +22,11 @@ export interface ToolDefinition {
   runtime: string;
   riskLevel: 'low' | 'medium' | 'high';
   code?: string;
+  version: number;
   timeoutMs: number;
   retries: number;
   enabled: boolean;
+  callCount: number;
   permissionLevel?: 'auto' | 'confirm' | 'disabled';
 }
 
@@ -53,9 +55,11 @@ type ToolRow = {
   runtime?: string;
   riskLevel?: string;
   code?: string;
+  version?: number | string;
   timeoutMs?: number | string;
   retries?: number | string;
   enabled: number | string;
+  callCount?: number | string;
   permissionLevel?: string;
 };
 
@@ -71,7 +75,8 @@ export class ToolsService {
       `SELECT id, user_id as userId, name, display_name as displayName, description,
               category, schema_json as schemaJson, output_schema_json as outputSchemaJson,
               permissions_json as permissionsJson, implementation_type as implementationType,
-              runtime, risk_level as riskLevel, code, timeout_ms as timeoutMs, retries, enabled
+              runtime, risk_level as riskLevel, code, version, timeout_ms as timeoutMs, retries, enabled,
+              COALESCE((SELECT COUNT(*) FROM tool_invocations ti WHERE ti.tool_id = tools.id), 0) as callCount
        FROM tools
        WHERE enabled = 1 AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
        ORDER BY user_id IS NULL DESC, display_name ASC`,
@@ -84,7 +89,8 @@ export class ToolsService {
       `SELECT id, user_id as userId, name, display_name as displayName, description,
               category, schema_json as schemaJson, output_schema_json as outputSchemaJson,
               permissions_json as permissionsJson, implementation_type as implementationType,
-              runtime, risk_level as riskLevel, code, timeout_ms as timeoutMs, retries, enabled
+              runtime, risk_level as riskLevel, code, version, timeout_ms as timeoutMs, retries, enabled,
+              COALESCE((SELECT COUNT(*) FROM tool_invocations ti WHERE ti.tool_id = tools.id), 0) as callCount
        FROM tools
        WHERE id = ? AND enabled = 1 AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
        LIMIT 1`,
@@ -98,7 +104,8 @@ export class ToolsService {
       `SELECT t.id, t.user_id as userId, t.name, t.display_name as displayName, t.description,
               t.category, t.schema_json as schemaJson, t.output_schema_json as outputSchemaJson,
               t.permissions_json as permissionsJson, t.implementation_type as implementationType,
-              t.runtime, t.risk_level as riskLevel, t.code, t.timeout_ms as timeoutMs, t.retries, t.enabled,
+              t.runtime, t.risk_level as riskLevel, t.code, t.version, t.timeout_ms as timeoutMs, t.retries, t.enabled,
+              COALESCE((SELECT COUNT(*) FROM tool_invocations ti WHERE ti.tool_id = t.id), 0) as callCount,
               at.permission_level as permissionLevel
        FROM agent_tools at
        JOIN tools t ON t.id = at.tool_id
@@ -146,7 +153,7 @@ export class ToolsService {
       `UPDATE tools
        SET name = ?, display_name = ?, description = ?, category = ?, schema_json = ?, output_schema_json = ?,
            permissions_json = ?, runtime = ?, risk_level = ?, code = ?, timeout_ms = ?, retries = ?,
-           enabled = ?, updated_at = ?
+           enabled = ?, version = version + 1, updated_at = ?
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
     ).run(
       dto.name ? this.normalizeToolName(dto.name) : current.name,
@@ -264,41 +271,11 @@ export class ToolsService {
     runId: string,
     input: string,
   ): Promise<ToolInvocationResult[]> {
-    const tools = await this.getAgentTools(userId, agentId);
-    const results: ToolInvocationResult[] = [];
-    const lower = input.toLowerCase();
-
-    for (const tool of tools) {
-      if (tool.permissionLevel === 'disabled') continue;
-      if (tool.name === 'current_time' && /时间|日期|今天|现在|current\s*time|date/i.test(input)) {
-        results.push(await this.invoke(userId, tool.id, { timezone: 'Asia/Shanghai' }, { agentId, runId }));
-      }
-
-      if (tool.name === 'uuid' && /uuid|唯一id|唯一标识/i.test(input)) {
-        results.push(await this.invoke(userId, tool.id, {}, { agentId, runId }));
-      }
-
-      if (tool.name === 'text_stats' && /字数|字符|词数|统计|text\s*stats/i.test(input)) {
-        results.push(await this.invoke(userId, tool.id, { text: input }, { agentId, runId }));
-      }
-
-      if (tool.name === 'calculator' && (/计算|算一下|calculate/.test(input) || lower.includes('math'))) {
-        const expression = this.extractExpression(input);
-        if (expression) {
-          results.push(await this.invoke(userId, tool.id, { expression }, { agentId, runId }));
-        }
-      }
-
-      if (tool.name === 'javascript_runner' && /代码|执行.*js|javascript|run\s*code|code\s*run/i.test(input)) {
-        if (process.env.ENABLE_CODE_RUNNER_TOOLS !== 'true') continue;
-        const code = this.extractCodeBlock(input) || this.extractInlineCodeRequest(input);
-        if (code) {
-          results.push(await this.invoke(userId, tool.id, { code }, { agentId, runId }));
-        }
-      }
-    }
-
-    return results;
+    void userId;
+    void agentId;
+    void runId;
+    void input;
+    return [];
   }
 
   private async resolveTool(userId: string, toolIdOrName: string): Promise<ToolDefinition> {
@@ -306,7 +283,8 @@ export class ToolsService {
       `SELECT id, user_id as userId, name, display_name as displayName, description,
               category, schema_json as schemaJson, output_schema_json as outputSchemaJson,
               permissions_json as permissionsJson, implementation_type as implementationType,
-              runtime, risk_level as riskLevel, code, timeout_ms as timeoutMs, retries, enabled
+              runtime, risk_level as riskLevel, code, version, timeout_ms as timeoutMs, retries, enabled,
+              COALESCE((SELECT COUNT(*) FROM tool_invocations ti WHERE ti.tool_id = tools.id), 0) as callCount
        FROM tools
        WHERE enabled = 1 AND deleted_at IS NULL AND (id = ? OR name = ?) AND (user_id IS NULL OR user_id = ?)
        ORDER BY user_id IS NULL DESC
@@ -331,11 +309,7 @@ export class ToolsService {
     }
 
     if (name === 'text_stats') {
-      const text = typeof args.text === 'string' ? args.text : '';
-      const cjk = [...text].filter((ch) => /[\u3400-\u9fff]/.test(ch)).length;
-      const words = (text.match(/[A-Za-z0-9_]+/g) ?? []).length;
-      const lines = text ? text.split(/\r?\n/).length : 0;
-      return JSON.stringify({ chars: [...text].length, cjkChars: cjk, englishWords: words, lines }, null, 2);
+      return this.runTextStatsWithPython(args);
     }
 
     if (name === 'calculator') {
@@ -383,6 +357,10 @@ export class ToolsService {
       return this.fetchWebPage(args);
     }
 
+    if (name === 'tavily_search') {
+      return this.tavilySearch(args);
+    }
+
     if (name === 'weather_query') {
       return this.queryWeather(args);
     }
@@ -411,6 +389,26 @@ export class ToolsService {
         return JSON.stringify(await this.platformCreateWorkflow(userId, this.recordArg(args.workflow, 'workflow')), null, 2);
       case 'bind_workflow_to_agent':
         return JSON.stringify(await this.platformBindWorkflow(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.workflowId, 'workflowId')), null, 2);
+      case 'list_agent_tasks':
+        return JSON.stringify(await this.platformListAgentTasks(userId, this.stringArg(args.agentId, 'agentId')), null, 2);
+      case 'create_agent_task':
+        return JSON.stringify(await this.platformCreateAgentTask(userId, this.stringArg(args.agentId, 'agentId'), this.recordArg(args.task, 'task')), null, 2);
+      case 'list_agent_versions':
+        return JSON.stringify(await this.platformListAgentVersions(userId, this.stringArg(args.agentId, 'agentId')), null, 2);
+      case 'create_agent_version':
+        return JSON.stringify(await this.platformCreateAgentVersion(userId, this.stringArg(args.agentId, 'agentId'), this.recordArg(args.version, 'version')), null, 2);
+      case 'publish_agent_version':
+        return JSON.stringify(await this.platformPublishAgentVersion(userId, this.stringArg(args.agentId, 'agentId'), this.recordArg(args.version, 'version')), null, 2);
+      case 'compare_agent_versions':
+        return JSON.stringify(await this.platformCompareAgentVersions(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.leftVersionId, 'leftVersionId'), this.stringArg(args.rightVersionId, 'rightVersionId')), null, 2);
+      case 'restore_agent_version':
+        return JSON.stringify(await this.platformRestoreAgentVersion(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.versionId, 'versionId')), null, 2);
+      case 'rollback_agent_version':
+        return JSON.stringify(await this.platformRollbackAgentVersion(userId, this.stringArg(args.agentId, 'agentId'), this.stringArg(args.versionId, 'versionId')), null, 2);
+      case 'save_file_to_user_library':
+        return JSON.stringify(await this.platformSaveUserLibraryFile(userId, this.recordArg(args.file, 'file')), null, 2);
+      case 'self_optimize_agent':
+        return JSON.stringify(await this.platformSelfOptimizeAgent(userId, this.stringArg(args.agentId, 'agentId'), this.recordArg(args.optimization, 'optimization')), null, 2);
       case 'create_skill':
         return JSON.stringify(await this.platformCreateSkill(userId, this.recordArg(args.skill, 'skill')), null, 2);
       case 'update_skill':
@@ -528,6 +526,54 @@ export class ToolsService {
     }, null, 2);
   }
 
+  private async tavilySearch(args: Record<string, unknown>): Promise<string> {
+    const apiKey = process.env.TAVILY_API_KEY?.trim();
+    if (!apiKey) throw new BadRequestException('请先配置 TAVILY_API_KEY 环境变量');
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    if (!query) throw new BadRequestException('Tavily 搜索 query 不能为空');
+    const searchDepth = args.searchDepth === 'advanced' ? 'advanced' : 'basic';
+    const maxResults = this.numberArg(args.maxResults, 5, 1, 10);
+    const payload = {
+      api_key: apiKey,
+      query,
+      search_depth: searchDepth,
+      max_results: maxResults,
+      include_answer: args.includeAnswer === false ? false : true,
+      include_raw_content: args.includeRawContent === true,
+    };
+
+    const response = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent': 'LLMGather-TavilyTool/1.0',
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(12000),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new BadRequestException(`Tavily 搜索失败: ${response.status} ${text.slice(0, 300)}`);
+    try {
+      const data = JSON.parse(text) as Record<string, unknown>;
+      const results = Array.isArray(data.results) ? data.results.map((item: any) => ({
+        title: item.title,
+        url: item.url,
+        content: typeof item.content === 'string' ? item.content.slice(0, 2000) : item.content,
+        score: item.score,
+        rawContent: args.includeRawContent === true && typeof item.raw_content === 'string' ? item.raw_content.slice(0, 4000) : undefined,
+      })) : [];
+      return JSON.stringify({
+        provider: 'Tavily',
+        query,
+        answer: data.answer,
+        results,
+      }, null, 2);
+    } catch {
+      throw new BadRequestException('Tavily 返回了无效 JSON');
+    }
+  }
+
   private async fetchJson(url: URL): Promise<unknown> {
     const response = await fetch(url, {
       headers: { 'User-Agent': 'LLMGather-WeatherTool/1.0' },
@@ -595,13 +641,14 @@ export class ToolsService {
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
     ).get(agentId, userId) as Record<string, unknown> | undefined;
     if (!agent) throw new NotFoundException('Agent 不存在');
-    const [toolIds, skillIds, knowledgeBaseIds, workflowIds] = await Promise.all([
+    const [toolIds, skillIds, knowledgeBaseIds, workflowIds, subAgentIds] = await Promise.all([
       this.platformBindingIds('agent_tools', 'tool_id', userId, agentId),
       this.platformBindingIds('agent_skill_bindings', 'skill_id', userId, agentId),
       this.platformBindingIds('agent_knowledge_bases', 'kb_id', userId, agentId),
       this.platformBindingIds('agent_workflows', 'workflow_id', userId, agentId),
+      this.platformBindingIds('agent_sub_agents', 'sub_agent_id', userId, agentId),
     ]);
-    return { ...agent, toolIds, skillIds, knowledgeBaseIds, workflowIds };
+    return { ...agent, toolIds, skillIds, knowledgeBaseIds, workflowIds, subAgentIds };
   }
 
   private async platformCreateAgent(userId: string, agent: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -702,6 +749,207 @@ export class ToolsService {
        VALUES (?, ?, ?, ?)`,
     ).run(agentId, workflowId, userId, this.databaseService.now());
     return { agentId, workflowId, bound: true };
+  }
+
+  private async platformListAgentTasks(userId: string, agentId: string): Promise<Array<Record<string, unknown>>> {
+    await this.platformGetAgent(userId, agentId);
+    return await this.databaseService.connection.prepare(
+      `SELECT id, agent_id as agentId, run_id as runId, status, input, output, error,
+              options_json as optionsJson, created_at as createdAt, started_at as startedAt,
+              completed_at as completedAt, updated_at as updatedAt
+       FROM agent_tasks
+       WHERE user_id = ? AND agent_id = ?
+       ORDER BY created_at DESC
+       LIMIT 50`,
+    ).all(userId, agentId) as Array<Record<string, unknown>>;
+  }
+
+  private async platformCreateAgentTask(userId: string, agentId: string, task: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.platformGetAgent(userId, agentId);
+    const input = this.trimmed(task.input, '').slice(0, 20000);
+    if (!input) throw new BadRequestException('task.input 不能为空');
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    const options = {
+      input,
+      mode: this.trimmed(task.mode, 'fast'),
+      maxSteps: this.numberArg(task.maxSteps, 6, 1, 20),
+      createdBy: 'platform_agent_api',
+    };
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_tasks (id, agent_id, user_id, run_id, status, input, output, error, options_json, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 'queued', ?, '', '', ?, ?, ?)`,
+    ).run(id, agentId, userId, input, JSON.stringify(options), now, now);
+    return { id, agentId, status: 'queued', input, options, createdAt: now, note: '任务已持久化，可通过 /agents/:id/tasks 接口跟踪。' };
+  }
+
+  private async platformListAgentVersions(userId: string, agentId: string): Promise<Array<Record<string, unknown>>> {
+    await this.platformGetAgent(userId, agentId);
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT id, agent_id as agentId, version_number as versionNumber, label, status,
+              traffic_percent as trafficPercent, notes, snapshot_json as snapshotJson,
+              published_at as publishedAt, rolled_back_at as rolledBackAt, created_at as createdAt
+       FROM agent_versions
+       WHERE agent_id = ? AND user_id = ?
+       ORDER BY version_number DESC`,
+    ).all(agentId, userId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({ ...row, snapshot: this.parseRecord(row.snapshotJson), snapshotJson: undefined }));
+  }
+
+  private async platformCreateAgentVersion(userId: string, agentId: string, version: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const agent = await this.platformGetAgent(userId, agentId);
+    const row = await this.databaseService.connection.prepare(
+      'SELECT COALESCE(MAX(version_number), 0) + 1 as nextVersion FROM agent_versions WHERE agent_id = ? AND user_id = ?',
+    ).get(agentId, userId) as { nextVersion?: number | string } | undefined;
+    const versionNumber = Number(row?.nextVersion ?? 1);
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    const label = this.trimmed(version.label, `v${versionNumber}`).slice(0, 120);
+    const notes = this.trimmed(version.notes, '').slice(0, 2000);
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, status, traffic_percent, notes, snapshot_json, created_at)
+       VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)`,
+    ).run(id, agentId, userId, versionNumber, label, notes, JSON.stringify(agent), now);
+    return { id, agentId, versionNumber, label, status: 'draft', trafficPercent: 0, notes, snapshot: agent, createdAt: now };
+  }
+
+  private async platformPublishAgentVersion(userId: string, agentId: string, version: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const agent = await this.platformGetAgent(userId, agentId);
+    let versionId = typeof version.versionId === 'string' ? version.versionId.trim() : '';
+    if (!versionId) {
+      const created = await this.platformCreateAgentVersion(userId, agentId, version);
+      versionId = String(created.id);
+    }
+    const releaseMode = version.releaseMode === 'canary' ? 'canary' : 'stable';
+    const trafficPercent = releaseMode === 'canary' ? this.numberArg(version.trafficPercent, 10, 1, 99) : 100;
+    const now = this.databaseService.now();
+    if (releaseMode === 'stable') {
+      await this.databaseService.connection.prepare(
+        `UPDATE agent_versions
+         SET status = CASE WHEN status IN ('released', 'canary') THEN 'superseded' ELSE status END,
+             traffic_percent = CASE WHEN status = 'canary' THEN 0 ELSE traffic_percent END
+         WHERE agent_id = ? AND user_id = ? AND id <> ?`,
+      ).run(agentId, userId, versionId);
+    }
+    await this.databaseService.connection.prepare(
+      `UPDATE agent_versions
+       SET status = ?, traffic_percent = ?, notes = COALESCE(NULLIF(?, ''), notes), published_at = ?, rolled_back_at = NULL
+       WHERE id = ? AND agent_id = ? AND user_id = ?`,
+    ).run(releaseMode === 'canary' ? 'canary' : 'released', trafficPercent, this.trimmed(version.notes, ''), now, versionId, agentId, userId);
+    const publicSlug = this.normalizeSlug(this.trimmed(version.publicSlug, String(agent.publicSlug || agent.name || agentId)));
+    await this.databaseService.connection.prepare(
+      `UPDATE agents SET published = ?, api_enabled = ?, public_slug = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(version.published === false ? 0 : 1, version.apiEnabled === false ? 0 : 1, publicSlug, now, agentId, userId);
+    return { agent: await this.platformGetAgent(userId, agentId), version: await this.platformGetAgentVersion(userId, agentId, versionId) };
+  }
+
+  private async platformCompareAgentVersions(userId: string, agentId: string, leftId: string, rightId: string): Promise<Record<string, unknown>> {
+    const left = await this.platformGetAgentVersion(userId, agentId, leftId);
+    const right = await this.platformGetAgentVersion(userId, agentId, rightId);
+    const leftSnapshot = left.snapshot as Record<string, unknown>;
+    const rightSnapshot = right.snapshot as Record<string, unknown>;
+    const fields = ['name', 'description', 'model', 'systemPrompt', 'temperature', 'maxTokens', 'memoryEnabled', 'toolIds', 'knowledgeBaseIds', 'skillIds', 'workflowIds', 'subAgentIds', 'status'];
+    const changes = fields
+      .map((field) => ({ field, left: leftSnapshot[field], right: rightSnapshot[field], changed: JSON.stringify(leftSnapshot[field] ?? null) !== JSON.stringify(rightSnapshot[field] ?? null) }))
+      .filter((item) => item.changed);
+    return { left, right, changes };
+  }
+
+  private async platformRestoreAgentVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
+    const version = await this.platformGetAgentVersion(userId, agentId, versionId);
+    const snapshot = version.snapshot as Record<string, unknown>;
+    return this.platformUpdateAgent(userId, agentId, snapshot);
+  }
+
+  private async platformRollbackAgentVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
+    const restored = await this.platformRestoreAgentVersion(userId, agentId, versionId);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `UPDATE agent_versions
+       SET status = CASE WHEN id = ? THEN 'released' WHEN status IN ('released', 'canary') THEN 'rolled_back' ELSE status END,
+           traffic_percent = CASE WHEN id = ? THEN 100 ELSE 0 END,
+           published_at = CASE WHEN id = ? THEN ? ELSE published_at END,
+           rolled_back_at = CASE WHEN id = ? THEN NULL WHEN status IN ('released', 'canary') THEN ? ELSE rolled_back_at END
+       WHERE agent_id = ? AND user_id = ?`,
+    ).run(versionId, versionId, versionId, now, versionId, now, agentId, userId);
+    await this.databaseService.connection.prepare(
+      `UPDATE agents SET published = 1, api_enabled = 1, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    ).run(now, agentId, userId);
+    return { agent: restored, version: await this.platformGetAgentVersion(userId, agentId, versionId) };
+  }
+
+  private async platformGetAgentVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
+    const row = await this.databaseService.connection.prepare(
+      `SELECT id, agent_id as agentId, version_number as versionNumber, label, status,
+              traffic_percent as trafficPercent, notes, snapshot_json as snapshotJson,
+              published_at as publishedAt, rolled_back_at as rolledBackAt, created_at as createdAt
+       FROM agent_versions
+       WHERE id = ? AND agent_id = ? AND user_id = ?
+       LIMIT 1`,
+    ).get(versionId, agentId, userId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundException('Agent 版本不存在');
+    return {
+      id: row.id,
+      agentId: row.agentId,
+      versionNumber: Number(row.versionNumber ?? 0),
+      label: row.label,
+      status: row.status,
+      trafficPercent: Number(row.trafficPercent ?? 0),
+      notes: row.notes || '',
+      snapshot: this.parseRecord(row.snapshotJson),
+      publishedAt: row.publishedAt || null,
+      rolledBackAt: row.rolledBackAt || null,
+      createdAt: row.createdAt,
+    };
+  }
+
+  private async platformSaveUserLibraryFile(userId: string, file: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const filename = this.trimmed(file.filename, '').slice(0, 191);
+    const content = this.trimmed(file.content, '');
+    if (!filename) throw new BadRequestException('file.filename 不能为空');
+    if (!content) throw new BadRequestException('file.content 不能为空');
+    const id = randomUUID();
+    const now = this.databaseService.now();
+    const mimeType = this.trimmed(file.mimeType, 'text/plain').slice(0, 128);
+    const source = this.trimmed(file.source, 'agent_generated').slice(0, 32);
+    const fileBase64 = `data:${mimeType};base64,${Buffer.from(content, 'utf-8').toString('base64')}`;
+    await this.databaseService.connection.prepare(
+      `INSERT INTO user_library_files
+       (id, user_id, filename, file_type, mime_type, source, kb_status, file_size, file_base64, parsed_content, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'not_added', ?, ?, ?, ?, ?)`,
+    ).run(id, userId, filename, this.fileTypeFromName(filename), mimeType, source, Buffer.byteLength(content, 'utf-8'), fileBase64, content.slice(0, 200000), now, now);
+    return { id, filename, mimeType, source, fileSize: Buffer.byteLength(content, 'utf-8'), createdAt: now };
+  }
+
+  private async platformSelfOptimizeAgent(userId: string, agentId: string, optimization: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const current = await this.platformGetAgent(userId, agentId);
+    const goal = this.trimmed(optimization.goal, '').slice(0, 1000);
+    const findings = Array.isArray(optimization.findings) ? optimization.findings.map(String).filter(Boolean).slice(0, 8) : [];
+    const promptPatch = this.trimmed(optimization.systemPromptPatch, '').slice(0, 4000);
+    const newPrompt = promptPatch
+      ? `${String(current.systemPrompt || '').trim()}\n\n# 自优化补丁\n目标：${goal || '提升任务完成质量'}\n${findings.map((item) => `- ${item}`).join('\n')}\n\n${promptPatch}`.trim()
+      : String(current.systemPrompt || '');
+    const updated = await this.platformUpdateAgent(userId, agentId, {
+      systemPrompt: newPrompt,
+      temperature: optimization.temperature,
+      maxTokens: optimization.maxTokens,
+      toolIds: optimization.toolIds,
+      skillIds: optimization.skillIds,
+      knowledgeBaseIds: optimization.knowledgeBaseIds,
+      workflowIds: optimization.workflowIds,
+      subAgentIds: optimization.subAgentIds,
+    });
+    const versionId = randomUUID();
+    const row = await this.databaseService.connection.prepare(
+      'SELECT COALESCE(MAX(version_number), 0) + 1 as nextVersion FROM agent_versions WHERE agent_id = ? AND user_id = ?',
+    ).get(agentId, userId) as { nextVersion?: number | string } | undefined;
+    const versionNumber = Number(row?.nextVersion ?? 1);
+    const now = this.databaseService.now();
+    await this.databaseService.connection.prepare(
+      `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, status, traffic_percent, notes, snapshot_json, created_at)
+       VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)`,
+    ).run(versionId, agentId, userId, versionNumber, this.trimmed(optimization.label, `self-opt-${versionNumber}`).slice(0, 120), goal || 'Agent 自优化生成的版本', JSON.stringify(updated), now);
+    return { agent: updated, version: { id: versionId, versionNumber, label: this.trimmed(optimization.label, `self-opt-${versionNumber}`), createdAt: now } };
   }
 
   private async platformCreateSkill(userId: string, skill: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -891,6 +1139,9 @@ export class ToolsService {
     if (Array.isArray(source.workflowIds)) {
       await this.replaceSimpleBindings(userId, agentId, 'agent_workflows', 'workflow_id', source.workflowIds.map(String));
     }
+    if (Array.isArray(source.subAgentIds)) {
+      await this.replaceSimpleBindings(userId, agentId, 'agent_sub_agents', 'sub_agent_id', source.subAgentIds.map(String).filter((id) => id !== agentId));
+    }
   }
 
   private async replaceSimpleBindings(userId: string, agentId: string, table: string, column: string, ids: string[]): Promise<void> {
@@ -932,6 +1183,28 @@ export class ToolsService {
 
   private trimmed(value: unknown, fallback: string): string {
     return typeof value === 'string' ? value.trim() : fallback;
+  }
+
+  private normalizeSlug(value: string): string {
+    const slug = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5_-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80);
+    return slug || `agent-${randomUUID().slice(0, 8)}`;
+  }
+
+  private fileTypeFromName(filename: string): string {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    if (['doc', 'docx'].includes(ext)) return 'word';
+    if (ext === 'pdf') return 'pdf';
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return 'excel';
+    if (['md', 'markdown'].includes(ext)) return 'markdown';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+    if (['txt', 'json'].includes(ext)) return 'text';
+    return ext || 'text';
   }
 
   private optionalRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1102,6 +1375,52 @@ export class ToolsService {
     return this.runContainerCode(args, 'python');
   }
 
+  private async runTextStatsWithPython(args: Record<string, unknown>): Promise<string> {
+    const text = typeof args.text === 'string' ? args.text : '';
+    const code = [
+      'import json',
+      'import re',
+      '',
+      'text = input.get("text", "")',
+      'if text is None:',
+      '    text = ""',
+      'text = str(text)',
+      '',
+      'result = {',
+      '    "chars": len(text),',
+      '    "cjkChars": sum(1 for ch in text if "\\u3400" <= ch <= "\\u9fff"),',
+      '    "englishWords": len(re.findall(r"[A-Za-z0-9_]+", text)),',
+      '    "lines": 0 if text == "" else len(re.split(r"\\r?\\n", text)),',
+      '}',
+      'print(json.dumps(result, ensure_ascii=False))',
+    ].join('\n');
+    const raw = await this.runContainerCode({ code, input: { text } }, 'python');
+    try {
+      const payload = JSON.parse(raw) as { result?: unknown; stdout?: unknown };
+      if (payload && typeof payload.result === 'object' && payload.result !== null) {
+        return JSON.stringify(payload.result, null, 2);
+      }
+      if (typeof payload.stdout === 'string' && payload.stdout.trim()) {
+        const stdoutPayload = JSON.parse(payload.stdout.trim()) as unknown;
+        if (stdoutPayload && typeof stdoutPayload === 'object') {
+          return JSON.stringify(stdoutPayload, null, 2);
+        }
+      }
+    } catch {
+      // Return a clean tool result instead of leaking the code-runner wrapper to Agent traces.
+    }
+    return JSON.stringify(this.calculateTextStats(text), null, 2);
+  }
+
+  private calculateTextStats(text: string): Record<string, number> {
+    return {
+      chars: Array.from(text).length,
+      cjkChars: Array.from(text).filter((ch) => ch >= '\u3400' && ch <= '\u9fff').length,
+      englishWords: (text.match(/[A-Za-z0-9_]+/g) ?? []).length,
+      lines: text === '' ? 0 : text.split(/\r?\n/).length,
+    };
+  }
+
   private async fetchWebPage(args: Record<string, unknown>): Promise<string> {
     const url = typeof args.url === 'string' ? args.url.trim() : '';
     const safeUrl = await this.assertSafeFetchUrl(url);
@@ -1203,21 +1522,6 @@ export class ToolsService {
     return true;
   }
 
-  private extractExpression(input: string): string {
-    const matches = input.match(/[0-9][0-9+\-*/%.^()\s]{2,}[0-9)]/g);
-    return matches?.[0]?.trim() ?? '';
-  }
-
-  private extractCodeBlock(input: string): string {
-    const match = input.match(/```(?:javascript|js|ts|code)?\s*([\s\S]*?)```/i);
-    return match?.[1]?.trim() ?? '';
-  }
-
-  private extractInlineCodeRequest(input: string): string {
-    const marker = input.match(/(?:执行|运行|run)\s*(?:这段|以下)?\s*(?:javascript|js|代码|code)[:：]\s*([\s\S]+)/i);
-    return marker?.[1]?.trim() ?? '';
-  }
-
   private stringifyValue(value: unknown): string {
     if (typeof value === 'string') return value;
     try {
@@ -1256,9 +1560,11 @@ export class ToolsService {
       runtime: row.runtime || (row.userId ? 'python' : 'builtin'),
       riskLevel,
       code: row.userId ? row.code || '' : undefined,
+      version: Math.max(1, Number(row.version ?? 1) || 1),
       timeoutMs: Number(row.timeoutMs ?? 30000),
       retries: Number(row.retries ?? 0),
       enabled: Number(row.enabled) === 1,
+      callCount: Number(row.callCount ?? 0) || 0,
       permissionLevel: ['auto', 'confirm', 'disabled'].includes(row.permissionLevel || '') ? row.permissionLevel as ToolDefinition['permissionLevel'] : 'auto',
     };
   }

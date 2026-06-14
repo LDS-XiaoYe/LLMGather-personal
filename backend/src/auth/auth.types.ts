@@ -2,6 +2,7 @@ export interface AuthUser {
   id: string;
   username: string;
   email: string | null;
+  emailVerified?: boolean | number | string;
   role: string;
   credits: number;
   totalSpent: number;
@@ -26,6 +27,7 @@ export interface StoredUser {
   id: string;
   username: string;
   email: string | null;
+  emailVerified?: boolean | number | string;
   role: string;
   passwordHash: string;
   salt: string;

@@ -47,7 +47,7 @@ describe('UsersService', () => {
       expect(result.role).toBe('admin'); // first user becomes admin
       expect(result.credits).toBeGreaterThan(0);
       expect(result.totalSpent).toBe(0);
-      expect(dbPrepareMock).toHaveBeenCalledTimes(3); // check username + count + insert
+      expect(dbPrepareMock).toHaveBeenCalledTimes(4); // check username + count + invitation code + insert
     });
   });
 

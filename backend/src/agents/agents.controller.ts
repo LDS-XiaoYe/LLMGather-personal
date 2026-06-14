@@ -9,6 +9,7 @@ import {
   CreateAgentMarketplaceTemplateDto,
   CreateAgentTestCaseDto,
   CreateAgentTestSuiteDto,
+  CreateAgentTaskDto,
   CreateAgentVersionDto,
   EvaluateAgentRunDto,
   GenerateAgentImprovementSuggestionsDto,
@@ -75,6 +76,15 @@ export class AgentsController {
     return { data: await this.agentsService.createMarketplaceTemplate(user.id, payload) };
   }
 
+  @Delete('marketplace/templates/:id')
+  async deleteMarketplaceTemplate(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') templateId: string,
+  ) {
+    await this.agentsService.deleteMarketplaceTemplate(user.id, templateId);
+    return { data: { ok: true } };
+  }
+
   @Post('marketplace/install')
   async installMarketplaceTemplate(
     @CurrentUser() user: AuthenticatedRequestUser,
@@ -89,6 +99,14 @@ export class AgentsController {
     @Param('runId') runId: string,
   ) {
     return { data: await this.agentsService.getRun(user.id, runId) };
+  }
+
+  @Get('tasks/:taskId')
+  async getTask(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('taskId') taskId: string,
+  ) {
+    return { data: await this.agentsService.getTask(user.id, taskId) };
   }
 
   @Post('runs/:runId/evaluations')
@@ -175,6 +193,23 @@ export class AgentsController {
     @Param('id') id: string,
   ) {
     return { data: await this.agentsService.listRuns(user.id, id) };
+  }
+
+  @Get(':id/tasks')
+  async listTasks(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+  ) {
+    return { data: await this.agentsService.listTasks(user.id, id) };
+  }
+
+  @Post(':id/tasks')
+  async createTask(
+    @CurrentUser() user: AuthenticatedRequestUser,
+    @Param('id') id: string,
+    @Body() payload: CreateAgentTaskDto,
+  ) {
+    return { data: await this.agentsService.createTask(user.id, id, payload) };
   }
 
   @Get(':id/evaluations')

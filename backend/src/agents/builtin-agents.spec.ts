@@ -11,6 +11,14 @@ describe('builtin agents', () => {
       'document',
       'knowledge',
       'orchestrator',
+      'platform_builder',
+      'platform_demo',
+      'weather',
+      'translator',
+      'meeting',
+      'travel',
+      'product_manager',
+      'finance',
     ]);
   });
 
@@ -22,5 +30,6 @@ describe('builtin agents', () => {
   it('matches common user intents to builtin agents', () => {
     expect(matchBuiltinAgent('帮我调试这段 TypeScript 报错')?.spec.key).toBe('code');
     expect(matchBuiltinAgent('请把这份资料整理成知识库条目')?.spec.key).toBe('knowledge');
+    expect(matchBuiltinAgent('帮我演示 agent 所有功能和代码执行 tool')?.spec.key).toBe('platform_demo');
   });
 });

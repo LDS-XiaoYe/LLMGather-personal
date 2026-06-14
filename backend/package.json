@@ -29,6 +29,7 @@
     "mysql2": "^3.22.2",
     "nodemailer": "^7.0.3",
     "pdf-parse": "^2.4.5",
+    "redis": "^4.7.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "xlsx": "^0.18.5"

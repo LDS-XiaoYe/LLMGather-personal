@@ -76,18 +76,53 @@ export class AdminController {
     return this.adminService.listUsers(p, ps, search);
   }
 
-  /** PATCH /v1/admin/users/:id — update user (credits, role) */
+  /** POST /v1/admin/users — create a user from admin console */
+  @Post('users')
+  @HttpCode(HttpStatus.CREATED)
+  async createUser(
+    @Body() body: { username?: string; password?: string; email?: string; role?: string; credits?: number; emailVerified?: boolean },
+  ) {
+    const username = body.username?.trim();
+    const email = body.email?.trim();
+    if (!username) throw new BadRequestException('用户名不能为空');
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException('请输入有效邮箱');
+    }
+    if (!body.password || body.password.length < 4) {
+      throw new BadRequestException('密码长度至少 4 位');
+    }
+    if (body.role !== undefined && !['admin', 'user'].includes(body.role)) {
+      throw new BadRequestException('角色仅支持 admin 或 user');
+    }
+    if (body.credits !== undefined && (typeof body.credits !== 'number' || body.credits < 0)) {
+      throw new BadRequestException('credits 必须为非负数');
+    }
+    const user = await this.adminService.createUser({
+      username,
+      password: body.password,
+      email,
+      role: body.role,
+      credits: body.credits,
+      emailVerified: body.emailVerified,
+    });
+    return { data: user };
+  }
+
+  /** PATCH /v1/admin/users/:id — update user (credits, role, email verification) */
   @Patch('users/:id')
   @HttpCode(HttpStatus.OK)
   async updateUser(
     @Param('id') userId: string,
-    @Body() body: { credits?: number; role?: string },
+    @Body() body: { credits?: number; role?: string; emailVerified?: boolean },
   ) {
-    if (!body.credits && !body.role) {
-      throw new BadRequestException('至少需要提供 credits 或 role 字段');
+    if (body.credits === undefined && body.role === undefined && body.emailVerified === undefined) {
+      throw new BadRequestException('至少需要提供 credits、role 或 emailVerified 字段');
     }
     if (body.credits !== undefined && (typeof body.credits !== 'number' || body.credits < 0)) {
       throw new BadRequestException('credits 必须为非负数');
+    }
+    if (body.emailVerified !== undefined && typeof body.emailVerified !== 'boolean') {
+      throw new BadRequestException('emailVerified 必须为布尔值');
     }
     const user = await this.adminService.updateUser(userId, body);
     return { data: user };

@@ -10,6 +10,16 @@ import { MemoryService } from './memory.service';
 export class MemoryController {
   constructor(private readonly memoryService: MemoryService) {}
 
+  @Get('providers')
+  async providers() {
+    return {
+      data: {
+        active: this.memoryService.getProviderName(),
+        providers: this.memoryService.capabilities(),
+      },
+    };
+  }
+
   @Get()
   async list(
     @CurrentUser() user: AuthenticatedRequestUser,
@@ -25,7 +35,7 @@ export class MemoryController {
 
   @Post('search')
   async search(@CurrentUser() user: AuthenticatedRequestUser, @Body() payload: SearchMemoryDto) {
-    return { data: await this.memoryService.search(user.id, payload.query, payload.agentId) };
+    return { data: await this.memoryService.search(user.id, payload.query, payload.agentId, payload.limit, payload.memoryType) };
   }
 
   @Patch(':id')

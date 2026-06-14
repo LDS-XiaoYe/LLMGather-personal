@@ -1,5 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { MemoryService } from './memory.service';
+import { NativeMemoryProvider } from './providers/native-memory.provider';
+import { LangGraphMemoryProvider } from './providers/langgraph-memory.provider';
 
 type MemoryRow = Record<string, any>;
 
@@ -19,7 +21,7 @@ function makeMemoryDb() {
     }),
     run: jest.fn(async (...args: any[]) => {
       if (sql.includes('INSERT INTO memories')) {
-        const [id, userId, agentId, namespace, memoryType, content, importance, metadata, createdAt, updatedAt] = args;
+        const [id, userId, agentId, namespace, memoryType, content, importance, metadata, provider, externalId, providerPayload, createdAt, updatedAt] = args;
         rows.push({
           id,
           user_id: userId,
@@ -29,14 +31,17 @@ function makeMemoryDb() {
           content,
           importance,
           metadata,
+          provider,
+          external_id: externalId,
+          provider_payload: providerPayload,
           created_at: createdAt,
           updated_at: updatedAt,
           deleted_at: null,
         });
       } else if (sql.includes('SET namespace = ?')) {
-        const [namespace, memoryType, content, importance, updatedAt, id, userId] = args;
+        const [namespace, memoryType, content, importance, metadata, updatedAt, id, userId] = args;
         const row = rows.find((item) => item.id === id && item.user_id === userId && !item.deleted_at);
-        if (row) Object.assign(row, { namespace, memory_type: memoryType, content, importance, updated_at: updatedAt });
+        if (row) Object.assign(row, { namespace, memory_type: memoryType, content, importance, metadata, updated_at: updatedAt });
       } else if (sql.includes('SET deleted_at = ?')) {
         const [deletedAt, updatedAt, id, userId] = args;
         const row = rows.find((item) => item.id === id && item.user_id === userId && !item.deleted_at);
@@ -63,15 +68,24 @@ function toSelectRow(row: MemoryRow) {
     content: row.content,
     importance: row.importance,
     metadata: row.metadata,
+    provider: row.provider ?? 'native',
+    externalId: row.external_id ?? '',
+    providerPayload: row.provider_payload ?? '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
+function makeService(db: any) {
+  const native = new NativeMemoryProvider(db);
+  const langgraph = new LangGraphMemoryProvider(native);
+  return new MemoryService(native, langgraph);
+}
+
 describe('MemoryService', () => {
   it('creates, lists and searches user-scoped memories', async () => {
     const { db } = makeMemoryDb();
-    const service = new MemoryService(db as any);
+    const service = makeService(db as any);
 
     const item = await service.create('user-1', {
       agentId: 'agent-1',
@@ -97,7 +111,7 @@ describe('MemoryService', () => {
 
   it('updates and soft-deletes memories by owner', async () => {
     const { db } = makeMemoryDb();
-    const service = new MemoryService(db as any);
+    const service = makeService(db as any);
     const item = await service.create('user-1', {
       agentId: 'agent-1',
       content: '旧偏好',
@@ -122,7 +136,7 @@ describe('MemoryService', () => {
 
   it('auto-remembers useful agent episodes', async () => {
     const { db } = makeMemoryDb();
-    const service = new MemoryService(db as any);
+    const service = makeService(db as any);
 
     const memory = await service.autoRemember(
       'user-1',
@@ -131,8 +145,8 @@ describe('MemoryService', () => {
       '已记录，后续会优先选择保守策略。',
     );
 
-    expect(memory?.memoryType).toBe('episode');
-    expect(memory?.namespace).toBe('agent_runs');
+    expect(memory?.memoryType).toBe('messages');
+    expect(memory?.namespace).toBe('conversation');
     expect(memory?.content).toContain('保守驾驶策略');
   });
 });

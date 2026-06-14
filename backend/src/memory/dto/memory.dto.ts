@@ -1,4 +1,6 @@
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsNotEmpty, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+
+export const MEMORY_TYPE_VALUES = ['messages', 'summary', 'preference', 'fact', 'project', 'skill', 'episode', 'procedure'] as const;
 
 export class CreateMemoryDto {
   @IsOptional()
@@ -12,8 +14,8 @@ export class CreateMemoryDto {
   namespace?: string;
 
   @IsOptional()
-  @IsIn(['fact', 'preference', 'procedure', 'episode'])
-  memoryType?: 'fact' | 'preference' | 'procedure' | 'episode';
+  @IsIn(MEMORY_TYPE_VALUES)
+  memoryType?: typeof MEMORY_TYPE_VALUES[number];
 
   @IsString()
   @IsNotEmpty()
@@ -25,6 +27,10 @@ export class CreateMemoryDto {
   @Min(1)
   @Max(5)
   importance?: number;
+
+  @IsOptional()
+  @IsObject()
+  metadata?: Record<string, unknown>;
 }
 
 export class SearchMemoryDto {
@@ -37,6 +43,16 @@ export class SearchMemoryDto {
   @IsString()
   @MaxLength(36)
   agentId?: string;
+
+  @IsOptional()
+  @IsIn(MEMORY_TYPE_VALUES)
+  memoryType?: typeof MEMORY_TYPE_VALUES[number];
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  limit?: number;
 }
 
 export class UpdateMemoryDto {
@@ -46,8 +62,8 @@ export class UpdateMemoryDto {
   namespace?: string;
 
   @IsOptional()
-  @IsIn(['fact', 'preference', 'procedure', 'episode'])
-  memoryType?: 'fact' | 'preference' | 'procedure' | 'episode';
+  @IsIn(MEMORY_TYPE_VALUES)
+  memoryType?: typeof MEMORY_TYPE_VALUES[number];
 
   @IsOptional()
   @IsString()
@@ -60,4 +76,8 @@ export class UpdateMemoryDto {
   @Min(1)
   @Max(5)
   importance?: number;
+
+  @IsOptional()
+  @IsObject()
+  metadata?: Record<string, unknown>;
 }

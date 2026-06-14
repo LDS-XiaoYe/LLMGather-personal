@@ -36,6 +36,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.ensureQwen37ProviderConfig();
     await this.ensureGeminiProviderConfig();
     await this.seedSystemSettings();
+    await this.ensureNoAutoModelSystemSettings();
     await this.ensureGeminiSystemSettings();
     await this.ensureQwen37SystemSettings();
     await this.seedRouterRules();
@@ -93,6 +94,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id ${pk},
         username VARCHAR(64) UNIQUE,
         email VARCHAR(191) UNIQUE,
+        email_verified INT NOT NULL DEFAULT 0,
         invitation_code VARCHAR(6) UNIQUE,
         invited_by VARCHAR(36),
         role VARCHAR(16) NOT NULL DEFAULT 'user',
@@ -255,6 +257,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         agent_id VARCHAR(36) NOT NULL,
         user_id VARCHAR(36) NOT NULL,
         status VARCHAR(16) NOT NULL DEFAULT 'running',
+        conversation_id VARCHAR(80) NOT NULL DEFAULT '',
+        parent_run_id VARCHAR(36) DEFAULT NULL,
         input TEXT NOT NULL,
         output TEXT NOT NULL,
         model VARCHAR(128) NOT NULL,
@@ -266,8 +270,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at ${ts},
         completed_at DATETIME(3) DEFAULT NULL,
         INDEX idx_agent_runs_agent (agent_id),
+        INDEX idx_agent_runs_conversation (agent_id, user_id, conversation_id),
+        INDEX idx_agent_runs_parent (parent_run_id),
         INDEX idx_agent_runs_user_created (user_id, created_at),
         INDEX idx_agent_runs_status (status)
+      )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id ${pk},
+        agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        run_id VARCHAR(36) DEFAULT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'queued',
+        input TEXT NOT NULL,
+        output TEXT NOT NULL,
+        error TEXT NOT NULL,
+        options_json TEXT,
+        created_at ${ts},
+        started_at DATETIME(3) DEFAULT NULL,
+        completed_at DATETIME(3) DEFAULT NULL,
+        updated_at ${ts},
+        INDEX idx_agent_tasks_agent (agent_id),
+        INDEX idx_agent_tasks_user_created (user_id, created_at),
+        INDEX idx_agent_tasks_status (status)
       )${fk};`);
 
     await this.adapter.exec(`
@@ -389,6 +415,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         runtime VARCHAR(32) NOT NULL DEFAULT 'builtin',
         risk_level VARCHAR(16) NOT NULL DEFAULT 'low',
         code LONGTEXT,
+        version INT NOT NULL DEFAULT 1,
         timeout_ms INT NOT NULL DEFAULT 30000,
         retries INT NOT NULL DEFAULT 0,
         enabled INT NOT NULL DEFAULT 1,
@@ -623,6 +650,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       )${fk};`);
 
     await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS agent_sub_agents (
+        agent_id VARCHAR(36) NOT NULL,
+        sub_agent_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        created_at ${ts},
+        PRIMARY KEY (agent_id, sub_agent_id),
+        INDEX idx_agent_sub_agents_user (user_id),
+        INDEX idx_agent_sub_agents_sub_agent (sub_agent_id)
+      )${fk};`);
+
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS memories (
         id ${pk},
         user_id VARCHAR(36) NOT NULL,
@@ -632,10 +670,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         content TEXT NOT NULL,
         importance INT NOT NULL DEFAULT 3,
         metadata TEXT,
+        provider VARCHAR(32) NOT NULL DEFAULT 'native',
+        external_id VARCHAR(191) NOT NULL DEFAULT '',
+        provider_payload LONGTEXT,
         created_at ${ts},
         updated_at ${ts},
         deleted_at DATETIME(3) DEFAULT NULL,
         INDEX idx_memories_user_agent (user_id, agent_id),
+        INDEX idx_memories_provider (provider, external_id),
         FULLTEXT INDEX ft_memories_content (content)
       )${fk};`);
 
@@ -709,6 +751,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `ALTER TABLE billing_ledger ADD COLUMN provider_key_prefix VARCHAR(32) NOT NULL DEFAULT ''`,
       `ALTER TABLE billing_ledger ADD COLUMN audit_metadata TEXT`,
       `CREATE INDEX idx_billing_provider_key ON billing_ledger (provider_name, provider_key_id)`,
+      `ALTER TABLE agent_runs ADD COLUMN conversation_id VARCHAR(80) NOT NULL DEFAULT ''`,
+      `ALTER TABLE agent_runs ADD COLUMN parent_run_id VARCHAR(36) DEFAULT NULL`,
+      `UPDATE agent_runs SET conversation_id = id WHERE conversation_id = '' OR conversation_id IS NULL`,
+      `CREATE INDEX idx_agent_runs_conversation ON agent_runs (agent_id, user_id, conversation_id)`,
+      `CREATE INDEX idx_agent_runs_parent ON agent_runs (parent_run_id)`,
     ]) {
       try {
         await this.adapter.exec(statement);
@@ -716,7 +763,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
-    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'user_library_files', 'agent_knowledge_bases', 'agent_workflows', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
+    const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_tasks', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'user_library_files', 'agent_knowledge_bases', 'agent_workflows', 'agent_sub_agents', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
         await this.adapter.exec(
@@ -834,6 +881,28 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.adapter.exec(`
+        CREATE TABLE IF NOT EXISTS agent_tasks (
+          id ${pk},
+          agent_id VARCHAR(36) NOT NULL,
+          user_id VARCHAR(36) NOT NULL,
+          run_id VARCHAR(36) DEFAULT NULL,
+          status VARCHAR(16) NOT NULL DEFAULT 'queued',
+          input TEXT NOT NULL,
+          output TEXT NOT NULL,
+          error TEXT NOT NULL,
+          options_json TEXT,
+          created_at ${ts},
+          started_at DATETIME(3) DEFAULT NULL,
+          completed_at DATETIME(3) DEFAULT NULL,
+          updated_at ${ts},
+          INDEX idx_agent_tasks_agent (agent_id),
+          INDEX idx_agent_tasks_user_created (user_id, created_at),
+          INDEX idx_agent_tasks_status (status)
+        )${fk};`);
+    } catch {}
+
+    try {
+      await this.adapter.exec(`
         CREATE TABLE IF NOT EXISTS agent_workflows (
           agent_id VARCHAR(36) NOT NULL,
           workflow_id VARCHAR(36) NOT NULL,
@@ -920,6 +989,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       // column already exists
     }
 
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE users ADD COLUMN email_verified INT NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `UPDATE users SET email_verified = 1 WHERE email IS NOT NULL AND email <> '' AND (email_verified IS NULL OR email_verified = 0)`,
+      );
+    } catch {}
+
     // email_verification_codes table
     await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS email_verification_codes (
@@ -938,6 +1021,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.adapter.exec(
         `ALTER TABLE agents ADD COLUMN memory_enabled INT NOT NULL DEFAULT 1`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE memories ADD COLUMN provider VARCHAR(32) NOT NULL DEFAULT 'native'`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE memories ADD COLUMN external_id VARCHAR(191) NOT NULL DEFAULT ''`,
+      );
+    } catch {
+      // column already exists
+    }
+
+    try {
+      await this.adapter.exec(
+        `ALTER TABLE memories ADD COLUMN provider_payload LONGTEXT`,
       );
     } catch {
       // column already exists
@@ -1031,6 +1138,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `ALTER TABLE tools ADD COLUMN runtime VARCHAR(32) NOT NULL DEFAULT 'builtin'`,
       `ALTER TABLE tools ADD COLUMN risk_level VARCHAR(16) NOT NULL DEFAULT 'low'`,
       `ALTER TABLE tools ADD COLUMN code LONGTEXT`,
+      `ALTER TABLE tools ADD COLUMN version INT NOT NULL DEFAULT 1`,
       `ALTER TABLE tools ADD COLUMN timeout_ms INT NOT NULL DEFAULT 30000`,
       `ALTER TABLE tools ADD COLUMN retries INT NOT NULL DEFAULT 0`,
       `ALTER TABLE tools ADD COLUMN deleted_at DATETIME(3) DEFAULT NULL`,
@@ -1047,11 +1155,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async seedBuiltinTools(): Promise<void> {
     const now = dbNow();
     const randomUUID = (await import('crypto')).randomUUID;
+    const codeOutputSchema = {
+      type: 'object',
+      properties: {
+        result: { description: '代码返回值。' },
+        logs: { type: 'array', items: { type: 'string' }, description: '代码运行期间的日志。' },
+        stdout: { type: 'string', description: '容器执行标准输出。' },
+        stderr: { type: 'string', description: '容器执行错误输出。' },
+      },
+    };
     const tools: Array<{
       name: string;
       displayName: string;
       description: string;
       schema: Record<string, unknown>;
+      outputSchema: Record<string, unknown>;
       category?: string;
       riskLevel?: 'low' | 'medium' | 'high';
     }> = [
@@ -1060,12 +1178,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         displayName: '当前时间',
         description: '返回当前服务器时间，可用于日期、时间、时区相关任务。',
         schema: { type: 'object', properties: { timezone: { type: 'string', default: 'Asia/Shanghai' } } },
+        outputSchema: { type: 'object', properties: { datetimeText: { type: 'string', description: '按指定时区格式化后的时间文本。' } } },
       },
       {
         name: 'calculator',
         displayName: '安全计算器',
         description: '执行简单数学表达式计算，仅支持数字和 + - * / % ^ ( ) . 运算符。',
         schema: { type: 'object', required: ['expression'], properties: { expression: { type: 'string' } } },
+        outputSchema: { type: 'object', properties: { value: { type: 'number' }, text: { type: 'string' } } },
       },
       {
         name: 'javascript_runner',
@@ -1079,6 +1199,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input: { type: 'object', description: '传入代码的 JSON 输入，可通过 input 变量访问。' },
           },
         },
+        outputSchema: codeOutputSchema,
       },
       {
         name: 'container_javascript_runner',
@@ -1092,6 +1213,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input: { type: 'object' },
           },
         },
+        outputSchema: codeOutputSchema,
       },
       {
         name: 'python_runner',
@@ -1105,6 +1227,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             input: { type: 'object', description: '传入代码的 JSON 输入，可通过 input 变量访问。' },
           },
         },
+        outputSchema: codeOutputSchema,
       },
       {
         name: 'notion_search',
@@ -1118,6 +1241,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             limit: { type: 'number', default: 5 },
           },
         },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            results: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  url: { type: 'string' },
+                  object: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
       },
       {
         name: 'browser_fetch',
@@ -1129,6 +1268,52 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           properties: {
             url: { type: 'string' },
             maxChars: { type: 'number', default: 6000 },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            url: { type: 'string' },
+            title: { type: 'string' },
+            content: { type: 'string' },
+          },
+        },
+      },
+      {
+        name: 'tavily_search',
+        displayName: 'Tavily 联网搜索',
+        description: '通过 Tavily 真实搜索接口检索网页信息，适合调研、事实核验、资料收集和带来源的回答。需要配置 TAVILY_API_KEY。',
+        category: 'research',
+        riskLevel: 'low',
+        schema: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: '搜索问题或关键词。' },
+            searchDepth: { type: 'string', enum: ['basic', 'advanced'], default: 'basic' },
+            maxResults: { type: 'number', default: 5 },
+            includeAnswer: { type: 'boolean', default: true },
+            includeRawContent: { type: 'boolean', default: false },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            provider: { type: 'string' },
+            query: { type: 'string' },
+            answer: { type: 'string' },
+            results: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  url: { type: 'string' },
+                  content: { type: 'string' },
+                  score: { type: 'number' },
+                },
+              },
+            },
           },
         },
       },
@@ -1148,18 +1333,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             language: { type: 'string', default: 'zh' },
           },
         },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            provider: { type: 'string' },
+            location: { type: 'object' },
+            timezone: { type: 'string' },
+            current: { type: 'object' },
+            daily: { type: 'array', items: { type: 'object' } },
+            sourceUrls: { type: 'object' },
+          },
+        },
       },
       {
         name: 'text_stats',
         displayName: '文本统计',
         description: '统计文本的字符数、中文字符数、英文词数和行数。',
         schema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+        outputSchema: { type: 'object', properties: { chars: { type: 'number' }, cjkChars: { type: 'number' }, englishWords: { type: 'number' }, lines: { type: 'number' } } },
       },
       {
         name: 'uuid',
         displayName: 'UUID 生成器',
         description: '生成一个随机 UUID。',
         schema: { type: 'object', properties: {} },
+        outputSchema: { type: 'object', properties: { uuid: { type: 'string' } } },
       },
       {
         name: 'platform_agent_api',
@@ -1181,6 +1379,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 'list_workflows',
                 'create_workflow',
                 'bind_workflow_to_agent',
+                'list_agent_tasks',
+                'create_agent_task',
+                'list_agent_versions',
+                'create_agent_version',
+                'publish_agent_version',
+                'compare_agent_versions',
+                'restore_agent_version',
+                'rollback_agent_version',
+                'save_file_to_user_library',
+                'self_optimize_agent',
                 'create_skill',
                 'update_skill',
                 'bind_skill_to_agent',
@@ -1194,13 +1402,36 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             },
             agentId: { type: 'string' },
             workflowId: { type: 'string' },
+            taskId: { type: 'string' },
+            versionId: { type: 'string' },
+            leftVersionId: { type: 'string' },
+            rightVersionId: { type: 'string' },
             skillId: { type: 'string' },
             toolId: { type: 'string' },
             agent: { type: 'object' },
             workflow: { type: 'object' },
+            task: { type: 'object', description: '后台任务配置，字段包含 input、mode、maxSteps。' },
+            version: { type: 'object', description: '版本发布配置，字段包含 label、notes、releaseMode、trafficPercent、publicSlug、published、apiEnabled。' },
+            file: { type: 'object', description: '保存到用户库的文件，字段包含 filename、content、mimeType、source。' },
+            optimization: { type: 'object', description: 'Agent 自优化补丁，字段包含 goal、findings、systemPromptPatch、toolIds、skillIds、workflowIds 等。' },
             skill: { type: 'object' },
             tool: { type: 'object' },
             limit: { type: 'number', default: 20 },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            operation: { type: 'string' },
+            data: { type: 'object' },
+            items: { type: 'array', items: { type: 'object' } },
+            agent: { type: 'object' },
+            workflow: { type: 'object' },
+            skill: { type: 'object' },
+            tool: { type: 'object' },
+            version: { type: 'object' },
+            task: { type: 'object' },
+            error: { type: 'string' },
           },
         },
       },
@@ -1214,14 +1445,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       if (existing) {
         await this.adapter.prepare(
           `UPDATE tools
-           SET display_name = ?, description = ?, category = ?, schema_json = ?, risk_level = ?, enabled = 1, updated_at = ?
+           SET display_name = ?, description = ?, category = ?, schema_json = ?, output_schema_json = ?, risk_level = ?, enabled = 1, updated_at = ?
            WHERE id = ?`,
-        ).run(tool.displayName, tool.description, tool.category ?? 'builtin', JSON.stringify(tool.schema), tool.riskLevel ?? 'low', now, existing.id);
+        ).run(tool.displayName, tool.description, tool.category ?? 'builtin', JSON.stringify(tool.schema), JSON.stringify(tool.outputSchema), tool.riskLevel ?? 'low', now, existing.id);
       } else {
         await this.adapter.prepare(
-          `INSERT INTO tools (id, user_id, name, display_name, description, category, schema_json, implementation_type, runtime, risk_level, enabled, created_at, updated_at)
-           VALUES (?, NULL, ?, ?, ?, ?, ?, 'builtin', 'builtin', ?, 1, ?, ?)`,
-        ).run(randomUUID(), tool.name, tool.displayName, tool.description, tool.category ?? 'builtin', JSON.stringify(tool.schema), tool.riskLevel ?? 'low', now, now);
+          `INSERT INTO tools (id, user_id, name, display_name, description, category, schema_json, output_schema_json, implementation_type, runtime, risk_level, enabled, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'builtin', 'builtin', ?, 1, ?, ?)`,
+        ).run(randomUUID(), tool.name, tool.displayName, tool.description, tool.category ?? 'builtin', JSON.stringify(tool.schema), JSON.stringify(tool.outputSchema), tool.riskLevel ?? 'low', now, now);
       }
     }
   }
@@ -1646,6 +1877,60 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           this.appendUnique(tiers, 'tier_vision', geminiModels),
         ].some(Boolean) || changed;
         if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
+      } catch {}
+    }
+  }
+
+  private async ensureNoAutoModelSystemSettings(): Promise<void> {
+    await this.removeModelFromCsvSettings('auto');
+
+    const classifierRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('router_classifier_model')) as { value: string } | undefined;
+    if (classifierRow?.value?.trim() === 'auto') {
+      await this.updateSystemSetting('router_classifier_model', 'qwen-plus');
+    }
+
+    const tagRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('model_tags')) as { value: string } | undefined;
+    if (tagRow?.value) {
+      try {
+        const tags = JSON.parse(tagRow.value) as Record<string, string[]>;
+        if (Object.prototype.hasOwnProperty.call(tags, 'auto')) {
+          delete tags.auto;
+          await this.updateSystemSetting('model_tags', JSON.stringify(tags));
+        }
+      } catch {}
+    }
+
+    const tierRow = (await this.adapter
+      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
+      .get('model_tier_mapping')) as { value: string } | undefined;
+    if (tierRow?.value) {
+      try {
+        const tiers = JSON.parse(tierRow.value) as Record<string, string[]>;
+        let changed = false;
+        for (const [tier, models] of Object.entries(tiers)) {
+          const next = Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
+          if (next.length !== (models || []).length) changed = true;
+          tiers[tier] = next;
+        }
+        if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
+      } catch {}
+    }
+
+    const routerRows = (await this.adapter
+      .prepare('SELECT intent, models FROM router_rules')
+      .all()) as Array<{ intent: string; models: string }>;
+    for (const row of routerRows) {
+      try {
+        const models = JSON.parse(row.models) as string[];
+        const next = Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
+        if (next.length === models.length) continue;
+        await this.adapter
+          .prepare('UPDATE router_rules SET models = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE intent = ?')
+          .run(JSON.stringify(next), row.intent);
       } catch {}
     }
   }

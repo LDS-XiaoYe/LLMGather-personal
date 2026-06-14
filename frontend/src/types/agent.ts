@@ -9,10 +9,10 @@ export interface AgentForm {
   maxTokens: number;
   memoryEnabled: boolean;
   toolIds: string[];
-  toolPermissions: Record<string, string>;
   knowledgeBaseIds: string[];
   skillIds: string[];
   workflowIds: string[];
+  subAgentIds: string[];
   status: 'active' | 'archived';
   published: boolean;
   apiEnabled: boolean;
@@ -24,12 +24,12 @@ export type DagNodeType =
   | 'start' | 'user_input' | 'file_input' | 'form_input' 
   | 'output' | 'structured_output' | 'generate_file' | 'end'
   | 'intent_detection' | 'parameter_extract' | 'info_extract'
-  | 'content_classify' | 'condition' | 'multi_branch' | 'confidence_check'
+  | 'content_classify' | 'condition' | 'if_else' | 'multi_branch' | 'question_classifier' | 'confidence_check'
   | 'knowledge_search' | 'context_read' | 'memory_read' | 'memory_write'
   | 'doc_parse' | 'citation整理'
   | 'tool_call' | 'skill_call' | 'agent_call' | 'http_request'
-  | 'db_query' | 'code执行' | 'webhook'
-  | 'llm_generate' | 'prompt_builder' | 'result_summary' | 'result_rewrite'
+  | 'db_query' | 'code执行' | 'code' | 'webhook'
+  | 'llm_generate' | 'prompt_builder' | 'template_transform' | 'variable_assigner' | 'result_summary' | 'result_rewrite'
   | 'format_output' | 'json_parse' | 'multi_result_merge'
   | 'human_confirm' | 'permission_check' | 'sensitive_confirm'
   | 'retry' | 'error_handle' | 'fallback' | 'wait';

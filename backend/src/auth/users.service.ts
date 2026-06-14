@@ -57,7 +57,7 @@ export class UsersService {
     return code;
   }
 
-  async createUser(usernameRaw: string, password: string, email: string, invitedBy?: string): Promise<AuthUser> {
+  async createUser(usernameRaw: string, password: string, email = '', invitedBy?: string, options: { role?: 'admin' | 'user'; credits?: number; emailVerified?: boolean } = {}): Promise<AuthUser> {
     const username = usernameRaw.trim().toLowerCase();
     const normalizedEmail = email.trim().toLowerCase();
     const db = this.databaseService.connection;
@@ -69,23 +69,25 @@ export class UsersService {
       throw new ConflictException('用户名已存在');
     }
 
-    const existingEmail = await db
-      .prepare('SELECT id FROM users WHERE email = ?')
-      .get(normalizedEmail) as { id: string } | undefined;
-    if (existingEmail) {
-      throw new ConflictException('该邮箱已被注册');
+    if (normalizedEmail) {
+      const existingEmail = await db
+        .prepare('SELECT id FROM users WHERE email = ?')
+        .get(normalizedEmail) as { id: string } | undefined;
+      if (existingEmail) {
+        throw new ConflictException('该邮箱已被注册');
+      }
     }
 
     const { total: userCount } = await db.prepare('SELECT COUNT(*) as total FROM users').get() as { total: number };
     const adminUsername = process.env.ADMIN_USERNAME?.trim().toLowerCase();
     const isAdmin = (userCount === 0) || (adminUsername && username === adminUsername);
-    const role = isAdmin ? 'admin' : 'user';
+    const role = options.role ?? (isAdmin ? 'admin' : 'user');
 
     const salt = randomBytes(16).toString('hex');
     const passwordHash = this.hashPassword(password, salt);
     const invitationCode = await this.generateUniqueInvitationCode();
 
-    let credits = this.defaultCredits;
+    let credits = options.credits ?? this.defaultCredits;
     if (invitedBy) {
       const inviter = await this.getById(invitedBy);
       if (inviter) {
@@ -97,6 +99,7 @@ export class UsersService {
       id: randomUUID(),
       username,
       email: normalizedEmail,
+      emailVerified: options.emailVerified ?? true,
       role,
       passwordHash,
       salt,
@@ -106,11 +109,12 @@ export class UsersService {
     };
 
     await db.prepare(
-      'INSERT INTO users (id, username, email, role, password_hash, salt, credits, total_spent, created_at, invitation_code, invited_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (id, username, email, email_verified, role, password_hash, salt, credits, total_spent, created_at, invitation_code, invited_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(
       user.id,
       user.username,
       user.email,
+      user.emailVerified ? 1 : 0,
       user.role,
       user.passwordHash,
       user.salt,
@@ -128,7 +132,7 @@ export class UsersService {
     const username = usernameRaw.trim().toLowerCase();
     const db = this.databaseService.connection;
     const row = await db.prepare(
-      'SELECT id, username, email, role, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE username = ?',
+      'SELECT id, username, email, email_verified as emailVerified, role, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE username = ?',
     ).get(username) as unknown as StoredUser | undefined;
 
     if (!row) return null;
@@ -138,7 +142,7 @@ export class UsersService {
   async getById(userId: string): Promise<StoredUser> {
     const db = this.databaseService.connection;
     const user = await db.prepare(
-      'SELECT id, username, email, role, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE id = ?',
+      'SELECT id, username, email, email_verified as emailVerified, role, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE id = ?',
     ).get(userId) as unknown as StoredUser | undefined;
 
     if (!user) {
@@ -213,6 +217,7 @@ export class UsersService {
       id: user.id,
       username: user.username,
       email: user.email || null,
+      emailVerified: Number(user.emailVerified ?? 0) === 1 || user.emailVerified === true,
       role: user.role || 'user',
       credits: Number(user.credits),
       totalSpent: Number(user.totalSpent),

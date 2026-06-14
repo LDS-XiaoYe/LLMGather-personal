@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { SettingsThrottle } from '../common/settings-throttle.decorator';
 import { SettingsThrottleGuard } from '../common/settings-throttle.guard';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, SendVerificationCodeDto, TopUpDto } from './dto';
 import { CurrentUser } from './current-user.decorator';
@@ -30,8 +30,8 @@ export class AuthController {
   @Post('register')
   @SettingsThrottle('rate_limit_register')
   @UseGuards(SettingsThrottleGuard)
-  async register(@Body() payload: RegisterDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.register(payload);
+  async register(@Body() payload: RegisterDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.register(payload, this.ip(req), req.header('user-agent') || '');
     this.setTokenCookie(res, result.accessToken);
     return result;
   }
@@ -39,8 +39,8 @@ export class AuthController {
   @Post('login')
   @SettingsThrottle('rate_limit_login')
   @UseGuards(SettingsThrottleGuard)
-  async login(@Body() payload: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.login(payload);
+  async login(@Body() payload: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.login(payload, this.ip(req), req.header('user-agent') || '');
     this.setTokenCookie(res, result.accessToken);
     return result;
   }
@@ -80,5 +80,10 @@ export class AuthController {
       maxAge: COOKIE_MAX_AGE,
       path: '/v1',
     });
+  }
+
+  private ip(req: Request): string {
+    const forwarded = req.header('x-forwarded-for')?.split(',')[0]?.trim();
+    return forwarded || req.ip || req.socket.remoteAddress || 'unknown';
   }
 }

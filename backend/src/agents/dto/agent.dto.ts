@@ -90,6 +90,12 @@ export class CreateAgentDto {
   workflowIds?: string[];
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  subAgentIds?: string[];
+
+  @IsOptional()
   @IsIn(['active', 'archived'])
   status?: 'active' | 'archived';
 }
@@ -164,6 +170,12 @@ export class UpdateAgentDto {
   @ArrayMaxSize(10)
   @IsString({ each: true })
   workflowIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  subAgentIds?: string[];
 }
 
 export class RunAgentDto {
@@ -178,6 +190,20 @@ export class RunAgentDto {
   @ValidateNested({ each: true })
   @Type(() => AgentMessageDto)
   messages?: AgentMessageDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  conversationId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  parentRunId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  continueFromLast?: boolean;
 
   @IsOptional()
   @IsArray()
@@ -214,6 +240,8 @@ export class RunAgentDto {
   approvedToolIds?: string[];
 
 }
+
+export class CreateAgentTaskDto extends RunAgentDto {}
 
 export class EvaluateAgentRunDto {
   @IsOptional()

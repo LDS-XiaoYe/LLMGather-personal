@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // @ts-nocheck
-import { computed as vueComputed, isRef, unref } from 'vue';
+import { computed as vueComputed, isRef, ref, unref } from 'vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -128,6 +128,32 @@ const modelTierSearch = bind(app, 'modelTierSearch');
 const modelTierTagFilter = bind(app, 'modelTierTagFilter');
 const filteredModelTierRows = bind(app, 'filteredModelTierRows');
 const unassignedCount = bind(app, 'unassignedCount');
+
+const visibleProviderKeyIds = ref<Set<string>>(new Set());
+
+function isProviderKeyVisible(row: { id: string }) {
+  return visibleProviderKeyIds.value.has(row.id);
+}
+
+function toggleProviderKeyVisibility(row: { id: string }) {
+  const next = new Set(visibleProviderKeyIds.value);
+  if (next.has(row.id)) next.delete(row.id);
+  else next.add(row.id);
+  visibleProviderKeyIds.value = next;
+}
+
+function toggleAllProviderKeysVisibility() {
+  if (visibleProviderKeyIds.value.size >= adminProviderKeys.value.length) {
+    visibleProviderKeyIds.value = new Set();
+    return;
+  }
+  visibleProviderKeyIds.value = new Set(adminProviderKeys.value.map((row: { id: string }) => row.id));
+}
+
+function displayProviderKey(row: { id: string; apiKey?: string; keyPrefix?: string }) {
+  if (isProviderKeyVisible(row)) return row.apiKey || '';
+  return row.keyPrefix || '******';
+}
 const changeModelTier = bind(app, 'changeModelTier');
 const tierRows = bind(app, 'tierRows');
 const tierTagType = bind(app, 'tierTagType');
@@ -463,6 +489,9 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-select v-model="adminApiKeyProviderFilter" placeholder="按 Provider 筛选" clearable style="width:200px" @change="loadAdminProviderKeys()">
                   <el-option v-for="cfg in adminProviderConfigs" :key="cfg.providerName" :label="cfg.displayName" :value="cfg.providerName" />
                 </el-select>
+                <el-button :disabled="!adminProviderKeys.length" @click="toggleAllProviderKeysVisibility()">
+                  {{ visibleProviderKeyIds.size >= adminProviderKeys.length ? '隐藏全部 Key' : '显示全部 Key' }}
+                </el-button>
                 <el-button :icon="Refresh" @click="loadAdminProviderKeys()">刷新指标</el-button>
               </div>
               <div v-if="adminProviderKeyMetrics.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
@@ -483,9 +512,23 @@ const getModelTags = bind(app, 'getModelTags');
               <el-table :data="adminProviderKeys" stripe size="small" class="admin-table" empty-text="暂无 Provider API Key，请添加或检查 .env 配置">
                 <el-table-column prop="providerName" label="Provider" width="130" />
                 <el-table-column prop="name" label="名称" min-width="140" />
-                <el-table-column label="API Key" min-width="280">
+                <el-table-column label="API Key" min-width="360">
                   <template #default="{ row }">
-                    <code style="font-size:12px;word-break:break-all;user-select:all">{{ row.apiKey }}</code>
+                    <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                      <code
+                        :style="{
+                          fontSize: '12px',
+                          wordBreak: 'break-all',
+                          userSelect: isProviderKeyVisible(row) ? 'all' : 'none',
+                          color: isProviderKeyVisible(row) ? '#0f172a' : '#64748b',
+                        }"
+                      >
+                        {{ displayProviderKey(row) }}
+                      </code>
+                      <el-button link type="primary" @click="toggleProviderKeyVisibility(row)">
+                        {{ isProviderKeyVisible(row) ? '隐藏' : '显示' }}
+                      </el-button>
+                    </div>
                   </template>
                 </el-table-column>
                 <el-table-column label="状态" width="90" align="center">

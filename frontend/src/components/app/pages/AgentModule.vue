@@ -2336,61 +2336,6 @@ function formatTraceDisplayValue(value: unknown) {
                   </div>
                 </div>
               </div>
-
-
-
-              <el-drawer v-model="skillPreviewOpen" size="520px" title="技能预览" :destroy-on-close="true">
-                <template v-if="activeSkill">
-                  <div class="skill-preview">
-                    <div class="skill-preview-header">
-                      <strong>{{ activeSkill.name }}</strong>
-                      <div>
-                        <el-tag size="small" :type="activeSkill.source === 'builtin' ? 'success' : 'primary'">{{ activeSkill.source === 'builtin' ? '平台内置' : '自定义' }}</el-tag>
-                        <el-tag size="small" :type="skillRiskTagType(activeSkill.riskLevel)">{{ riskLevelLabel(activeSkill.riskLevel) }}</el-tag>
-                      </div>
-                    </div>
-                    <p>{{ activeSkill.description }}</p>
-                    <el-descriptions :column="1" border size="small">
-                      <el-descriptions-item label="分类">{{ activeSkill.category }}</el-descriptions-item>
-                      <el-descriptions-item label="版本">v{{ activeSkill.version }}</el-descriptions-item>
-                      <el-descriptions-item label="已绑定 Agent">{{ activeSkill.boundAgents?.map((agent) => agent.name).join('、') || '暂无' }}</el-descriptions-item>
-                    </el-descriptions>
-                    <div class="agent-resource-title">内部能力说明</div>
-                    <pre class="agent-step-meta">{{ activeSkill.content }}</pre>
-                    <div class="agent-resource-title">输入 / 输出结构</div>
-                    <pre class="agent-step-meta">{{ JSON.stringify({ input: activeSkill.inputSchema, output: activeSkill.outputSchema }, null, 2) }}</pre>
-                    <div class="agent-resource-title">示例</div>
-                    <div class="agent-resource-item">
-                      <strong>输入</strong>
-                      <div class="agent-resource-content">{{ activeSkill.exampleInput || '暂无示例输入' }}</div>
-                      <strong>输出</strong>
-                      <div class="agent-resource-content">{{ activeSkill.exampleOutput || '暂无示例输出' }}</div>
-                    </div>
-                    <el-divider />
-                    <div class="agent-resource-title">测试技能</div>
-                    <el-input v-model="skillTestInput" type="textarea" :rows="4" resize="vertical" placeholder="填写测试输入" />
-                    <el-button type="primary" :loading="skillTesting" @click="runActiveSkillTest()">运行技能</el-button>
-                    <div v-if="activeSkillTestResult" class="agent-resource-item">
-                      <div class="agent-resource-title">
-                        <span>运行结果</span>
-                        <el-tag size="small" type="success">{{ activeSkillTestResult.latencyMs }} ms</el-tag>
-                      </div>
-                      <pre class="agent-step-meta">{{ activeSkillTestResult.output || activeSkillTestResult.error }}</pre>
-                      <div class="agent-market-meta">
-                        <el-tag size="small" type="info">Token {{ activeSkillTestResult.tokenUsage.totalTokens }}</el-tag>
-                        <el-tag size="small" :type="activeSkillTestResult.knowledgeAccessed ? 'warning' : 'info'">RAG {{ activeSkillTestResult.knowledgeAccessed ? '声明访问' : '未访问' }}</el-tag>
-                        <el-tag size="small" :type="activeSkillTestResult.toolCalls.length ? 'warning' : 'info'">工具 {{ activeSkillTestResult.toolCalls.length }}</el-tag>
-                      </div>
-                    </div>
-                    <el-divider />
-                    <div class="skill-preview-actions">
-                      <el-button @click="exportSkillAsMarkdown(activeSkill)">导出 Markdown</el-button>
-                      <el-button type="primary" @click="bindSkillToCurrentAgent(activeSkill)">绑定到当前 Agent</el-button>
-                      <el-button @click="skillPreviewOpen = false">关闭</el-button>
-                    </div>
-                  </div>
-                </template>
-              </el-drawer>
             </el-card>
             </div>
 
@@ -2808,6 +2753,60 @@ function formatTraceDisplayValue(value: unknown) {
                 </div>
               </el-card>
             </div>
+
+            <el-drawer v-model="skillPreviewOpen" size="520px" title="技能预览" :destroy-on-close="true">
+              <template v-if="activeSkill">
+                <div class="skill-preview">
+                  <div class="skill-preview-header">
+                    <strong>{{ activeSkill.name }}</strong>
+                    <div>
+                      <el-tag size="small" :type="activeSkill.source === 'builtin' ? 'success' : 'primary'">{{ activeSkill.source === 'builtin' ? '平台内置' : '自定义' }}</el-tag>
+                      <el-tag size="small" :type="skillRiskTagType(activeSkill.riskLevel)">{{ riskLevelLabel(activeSkill.riskLevel) }}</el-tag>
+                    </div>
+                  </div>
+                  <p>{{ activeSkill.description }}</p>
+                  <el-descriptions :column="1" border size="small">
+                    <el-descriptions-item label="分类">{{ activeSkill.category }}</el-descriptions-item>
+                    <el-descriptions-item label="版本">v{{ activeSkill.version }}</el-descriptions-item>
+                    <el-descriptions-item label="已绑定 Agent">{{ activeSkill.boundAgents?.map((agent) => agent.name).join('、') || '暂无' }}</el-descriptions-item>
+                  </el-descriptions>
+                  <div class="agent-resource-title">内部能力说明</div>
+                  <pre class="agent-step-meta">{{ activeSkill.content }}</pre>
+                  <div class="agent-resource-title">输入 / 输出结构</div>
+                  <pre class="agent-step-meta">{{ JSON.stringify({ input: activeSkill.inputSchema, output: activeSkill.outputSchema }, null, 2) }}</pre>
+                  <div class="agent-resource-title">示例</div>
+                  <div class="agent-resource-item">
+                    <strong>输入</strong>
+                    <div class="agent-resource-content">{{ activeSkill.exampleInput || '暂无示例输入' }}</div>
+                    <strong>输出</strong>
+                    <div class="agent-resource-content">{{ activeSkill.exampleOutput || '暂无示例输出' }}</div>
+                  </div>
+                  <el-divider />
+                  <div class="agent-resource-title">测试技能</div>
+                  <el-input v-model="skillTestInput" type="textarea" :rows="4" resize="vertical" placeholder="填写测试输入" />
+                  <el-button type="primary" :loading="skillTesting" @click="runActiveSkillTest()">运行技能</el-button>
+                  <div v-if="activeSkillTestResult" class="agent-resource-item">
+                    <div class="agent-resource-title">
+                      <span>运行结果</span>
+                      <el-tag size="small" type="success">{{ activeSkillTestResult.latencyMs }} ms</el-tag>
+                    </div>
+                    <pre class="agent-step-meta">{{ activeSkillTestResult.output || activeSkillTestResult.error }}</pre>
+                    <div class="agent-market-meta">
+                      <el-tag size="small" type="info">Token {{ activeSkillTestResult.tokenUsage.totalTokens }}</el-tag>
+                      <el-tag size="small" :type="activeSkillTestResult.knowledgeAccessed ? 'warning' : 'info'">RAG {{ activeSkillTestResult.knowledgeAccessed ? '声明访问' : '未访问' }}</el-tag>
+                      <el-tag size="small" :type="activeSkillTestResult.toolCalls.length ? 'warning' : 'info'">工具 {{ activeSkillTestResult.toolCalls.length }}</el-tag>
+                    </div>
+                  </div>
+                  <el-divider />
+                  <div class="skill-preview-actions">
+                    <el-button @click="exportSkillAsMarkdown(activeSkill)">导出 Markdown</el-button>
+                    <el-button type="primary" @click="bindSkillToCurrentAgent(activeSkill)">绑定到当前 Agent</el-button>
+                    <el-button @click="skillPreviewOpen = false">关闭</el-button>
+                  </div>
+                </div>
+              </template>
+              <el-empty v-else description="正在加载技能详情" :image-size="72" />
+            </el-drawer>
 
             <el-dialog v-model="showAgentExportDialog" title="导出 Agent JSON 包" width="620px" :close-on-click-modal="false">
               <div class="agent-export-dialog">

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
-import { ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Cpu, ChatDotRound, DataAnalysis, Delete, Document, EditPen, Headset, InfoFilled, Lightning, MoreFilled, Monitor, Picture, PictureFilled, Plus, Promotion, Refresh, Search, Setting, Star, Sunny, SwitchButton, TrendCharts, User, UserFilled, VideoCamera, Coin, Upload } from '@element-plus/icons-vue';
 import * as echarts from 'echarts';
 import { useDagNodes } from '../composables/useDagNodes';
@@ -3713,19 +3713,31 @@ export function useAppController() {
   }
 
   async function previewSkill(skill: SkillDefinition) {
+    activeSkill.value = skill;
+    skillTestInput.value = skill.exampleInput || '请演示这个 Skill 如何处理一个真实任务。';
+    activeSkillTestResult.value = null;
+    skillPreviewOpen.value = true;
+    status.value = `正在加载 Skill 详情：${skill.name}`;
     try {
-      activeSkill.value = await fetchSkillDetail(skill.id, backendBaseUrl.value);
+      const detail = await fetchSkillDetail(skill.id, backendBaseUrl.value);
+      activeSkill.value = { ...skill, ...detail };
       skillTestInput.value = activeSkill.value.exampleInput || '请演示这个 Skill 如何处理一个真实任务。';
-      activeSkillTestResult.value = null;
-      skillPreviewOpen.value = true;
+      status.value = `已打开 Skill 预览：${activeSkill.value.name}`;
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '加载 Skill 详情失败';
+      const message = error instanceof Error ? error.message : '加载 Skill 详情失败';
+      status.value = message;
+      ElMessage.error(message);
     }
   }
 
   function previewSkillById(skillId: string) {
     const skill = availableSkills.value.find((item) => item.id === skillId);
     if (skill) void previewSkill(skill);
+    else {
+      const message = '找不到这个 Skill，可能已被删除或技能列表尚未加载完成。';
+      status.value = message;
+      ElMessage.warning(message);
+    }
   }
 
   async function runActiveSkillTest() {

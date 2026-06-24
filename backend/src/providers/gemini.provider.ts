@@ -76,6 +76,31 @@ function firstValue<T = unknown>(record: Record<string, unknown> | undefined, ..
   return undefined;
 }
 
+function isHighDemandMessage(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  return normalized.includes('high demand') || normalized.includes('try again later');
+}
+
+async function readGeminiErrorDetail(response: Response): Promise<string> {
+  let detail = response.statusText;
+  try {
+    const text = await response.text();
+    if (!text) return detail;
+    try {
+      const data = JSON.parse(text) as GeminiResponse;
+      return data.error?.message || text.slice(0, 500);
+    } catch {
+      return text.slice(0, 500);
+    }
+  } catch {
+    return detail;
+  }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class GeminiProvider implements ProviderAdapter {
   public readonly providerName: string;
   private readonly timeoutMs: number;
@@ -175,6 +200,13 @@ export class GeminiProvider implements ProviderAdapter {
         }
 
         if (response.status >= 500 && attempt < maxAttempts) {
+          const detail = await readGeminiErrorDetail(response.clone());
+          if (response.status === 503 && isHighDemandMessage(detail)) {
+            lastError = `HTTP ${response.status}: ${detail}`;
+            rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
+            await wait(Math.min(1500 * (attempt + 1), 5000));
+            continue;
+          }
           this.keyPool.markRetryableFailure(currentKey, `HTTP ${response.status}`);
           rotation = { provider: this.providerName, attempts: attempt + 1, reason: 'retryable_failure' };
           currentKey = this.keyPool.getRandomKey();
@@ -627,18 +659,12 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   private async buildProviderException(response: Response): Promise<BadGatewayException> {
-    let detail = response.statusText;
-    try {
-      const text = await response.text();
-      if (text) {
-        try {
-          const data = JSON.parse(text) as GeminiResponse;
-          detail = data.error?.message || text.slice(0, 500);
-        } catch {
-          detail = text.slice(0, 500);
-        }
-      }
-    } catch {}
+    const detail = await readGeminiErrorDetail(response);
+    if (response.status === 503 && isHighDemandMessage(detail)) {
+      return new BadGatewayException(
+        `${this.providerName} request failed (${response.status}): Gemini 模型当前高负载，这是 Google 上游容量问题，请稍后重试或临时切换其他模型。原始错误：${detail}`,
+      );
+    }
     return new BadGatewayException(`${this.providerName} request failed (${response.status}): ${detail}`);
   }
 

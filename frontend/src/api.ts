@@ -146,6 +146,7 @@ export interface ProviderKeyRotationInfo {
 
 const defaultBaseUrl = '/v1';
 const REQUEST_TIMEOUT_MS = 60_000;
+const STREAM_REQUEST_TIMEOUT_MS = 120_000;
 const TOKEN_STORAGE_KEY = 'llm_gather_access_token';
 
 export function getStoredToken(): string {
@@ -503,7 +504,7 @@ export async function streamCompletion(
   baseUrl = defaultBaseUrl,
   externalSignal?: AbortSignal,
 ): Promise<void> {
-  const { signal: timeoutSignal, cleanup } = withTimeoutSignal();
+  const { signal: timeoutSignal, cleanup } = withTimeoutSignal(STREAM_REQUEST_TIMEOUT_MS);
 
   // Merge external signal and timeout signal
   const controller = new AbortController();

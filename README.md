@@ -1,4 +1,4 @@
-# LLM Gather — 大模型聚合多模态智能平台
+# LLM Gather — 大模型智能体聚合平台
 使用前首先安装 Docker。
 ## Docker 一键启动
 

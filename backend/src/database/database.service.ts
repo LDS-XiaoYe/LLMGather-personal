@@ -1,12 +1,12 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { IDatabaseAdapter } from './database.adapter.interface';
 import { MysqlDatabaseAdapter } from './adapters/mysql.adapter';
+import { migrateP0 } from './migrations/p0-infrastructure';
 
 /**
  * 返回当前时间戳字符串（MySQL DATETIME(3) 兼容）
  */
-export function dbNow(): string {
-  const d = new Date();
+export function dbNow(d = new Date()): string {
   // MySQL DATETIME(3) 格式：YYYY-MM-DD HH:mm:ss.SSS
   return (
     d.getFullYear() + '-' +
@@ -30,6 +30,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.initMysql();
     await this.createTables();
     await this.migrateColumnsIfNeeded();
+    await migrateP0(this.adapter);
     await this.seedBuiltinTools();
     await this.seedDefaultAgentSkills();
     await this.seedProviderConfigs();

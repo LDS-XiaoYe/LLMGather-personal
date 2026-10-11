@@ -141,4 +141,14 @@ export class KnowledgeController {
   ) {
     return { data: await this.knowledgeService.search(user.id, [id], payload.query, payload.limit ?? 5, { mode: payload.mode }) };
   }
+  @Post('bases/:id/reindex')
+  async reindex(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string, @Body() payload: { reset?: boolean }) {
+    return { data: await this.knowledgeService.reindex(user.id, id, payload?.reset === true) };
+  }
+  @Get('bases/:id/index-status')
+  async indexStatus(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string) {
+    return { data: await this.knowledgeService.indexStatus(user.id, id) };
+  }
+  @Get('retrieval-health')
+  async retrievalHealth() { return { data: await this.knowledgeService.retrievalHealth() }; }
 }

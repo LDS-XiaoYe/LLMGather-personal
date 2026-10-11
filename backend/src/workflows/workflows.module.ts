@@ -1,3 +1,7 @@
+import { MysqlCheckpointer } from './runtime/mysql-checkpointer';
+import { WorkflowRuntimeService } from './runtime/workflow-runtime.service';
+import { ProvidersModule } from '../providers/providers.module';
+
 import { Module, forwardRef } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { AuthModule } from '../auth/auth.module';
@@ -9,9 +13,9 @@ import { WorkflowsController } from './workflows.controller';
 import { WorkflowsService } from './workflows.service';
 
 @Module({
-  imports: [AuthModule, forwardRef(() => AgentsModule), ToolsModule, KnowledgeModule, MemoryModule, SkillsModule],
+  imports: [ProvidersModule, AuthModule, forwardRef(() => AgentsModule), ToolsModule, KnowledgeModule, MemoryModule, SkillsModule],
   controllers: [WorkflowsController],
-  providers: [WorkflowsService],
+  providers: [WorkflowsService, MysqlCheckpointer, WorkflowRuntimeService],
   exports: [WorkflowsService],
 })
 export class WorkflowsModule {}

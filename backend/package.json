@@ -11,14 +11,18 @@
     "start:dev": "node ../node_modules/@nestjs/cli/bin/nest.js start --watch",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "jest",
-    "backup:sanitized": "node scripts/export-sanitized-sql.cjs"
+    "backup:sanitized": "node scripts/export-sanitized-sql.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit --incremental false",
+    "test:p0:integration": "node scripts/p0-integration.cjs"
   },
   "dependencies": {
     "@langchain/langgraph": "^1.3.6",
+    "@langchain/langgraph-checkpoint": "1.1.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
     "@nestjs/throttler": "^6.5.0",
+    "@qdrant/js-client-rest": "1.15.1",
     "@types/pdf-parse": "^1.1.5",
     "alipay-sdk": "^3.3.3",
     "class-transformer": "^0.5.1",
@@ -51,6 +55,7 @@
     "prettier": "^3.4.2",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "8.71.1"
   }
 }

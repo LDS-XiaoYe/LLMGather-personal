@@ -1,3 +1,9 @@
+import { RagflowRetrievalProvider } from './retrieval/ragflow-retrieval.provider';
+import { EmbeddingService } from './retrieval/embedding.service';
+import { QdrantService } from './retrieval/qdrant.service';
+import { NativeRetrievalService } from './retrieval/native-retrieval.service';
+import { KnowledgeIndexService } from './retrieval/knowledge-index.service';
+import { reciprocalRankFusion } from './retrieval/rrf';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../database/database.service';
@@ -93,7 +99,9 @@ type UserLibraryFileRow = Omit<UserLibraryFile, 'fileSize'> & {
 
 @Injectable()
 export class KnowledgeService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(private readonly databaseService: DatabaseService,
+    private readonly nativeRetrieval: NativeRetrievalService, private readonly indexes: KnowledgeIndexService,
+    private readonly embeddings: EmbeddingService, private readonly vectors: QdrantService) {}
 
   async list(userId: string): Promise<KnowledgeBase[]> {
     const rows = await this.databaseService.connection.prepare(
@@ -152,13 +160,14 @@ export class KnowledgeService {
     if (kb.provider === 'ragflow') {
       return this.addRagflowDocument(userId, kb, dto);
     }
+    return this.indexes.mutate(userId, kbId, async () => {
     const docId = randomUUID();
     const now = this.databaseService.now();
     const fileType = (dto.fileType || this.fileTypeFromName(dto.title) || 'text').slice(0, 32);
     await this.databaseService.connection.prepare(
       `INSERT INTO knowledge_documents (id, kb_id, user_id, title, file_type, parse_status, vector_status, failure_reason, source_file_id, content, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(docId, kbId, userId, dto.title.trim(), fileType, 'succeeded', 'succeeded', '', dto.sourceFileId ?? '', dto.content, now, now);
+    ).run(docId, kbId, userId, dto.title.trim(), fileType, 'succeeded', 'pending', '', dto.sourceFileId ?? '', dto.content, now, now);
 
     const chunks = this.chunkText(dto.content);
     const stmt = this.databaseService.connection.prepare(
@@ -173,13 +182,14 @@ export class KnowledgeService {
         userId,
         i,
         chunks[i],
-        JSON.stringify(this.embed(chunks[i])),
+        process.env.RAG_LEGACY_WRITE_VECTORS === 'true' ? JSON.stringify(this.embed(chunks[i])) : '',
         this.estimateTokens(chunks[i]),
         now,
       );
     }
 
     return { id: docId, kbId, title: dto.title.trim(), chunkCount: chunks.length };
+    });
   }
 
   async listDocuments(userId: string, kbId: string, query = '') {
@@ -237,6 +247,10 @@ export class KnowledgeService {
   }
 
   async listDocumentChunks(userId: string, docId: string) {
+    const document = await this.databaseService.connection.prepare(
+      'SELECT vector_status AS vectorStatus FROM knowledge_documents WHERE id=? AND user_id=? AND deleted_at IS NULL',
+    ).get(docId, userId);
+    if (!document) throw new NotFoundException('知识库文档不存在');
     const rows = await this.databaseService.connection.prepare(
       `SELECT id, kb_id as kbId, document_id as documentId, chunk_index as chunkIndex, content,
               embedding_json as embeddingJson, token_estimate as tokenEstimate, created_at as createdAt
@@ -248,7 +262,7 @@ export class KnowledgeService {
       ...row,
       chunkIndex: Number(row.chunkIndex ?? 0),
       tokenEstimate: Number(row.tokenEstimate ?? 0),
-      vectorStatus: row.embeddingJson ? 'succeeded' : 'pending',
+      vectorStatus: String(document.vectorStatus || 'pending'),
     }));
   }
 
@@ -258,6 +272,8 @@ export class KnowledgeService {
     if (kb.provider === 'ragflow') {
       return this.reparseRagflowDocument(userId, kb, detail);
     }
+    return this.indexes.mutate(userId, detail.kbId, async () => {
+    await this.indexes.deleteDocument(userId, detail.kbId, docId);
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
       `DELETE FROM knowledge_chunks WHERE document_id = ? AND user_id = ?`,
@@ -268,12 +284,13 @@ export class KnowledgeService {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (let i = 0; i < chunks.length; i++) {
-      await stmt.run(randomUUID(), detail.kbId, docId, userId, i, chunks[i], JSON.stringify(this.embed(chunks[i])), this.estimateTokens(chunks[i]), now);
+      await stmt.run(randomUUID(), detail.kbId, docId, userId, i, chunks[i], process.env.RAG_LEGACY_WRITE_VECTORS === 'true' ? JSON.stringify(this.embed(chunks[i])) : '', this.estimateTokens(chunks[i]), now);
     }
     await this.databaseService.connection.prepare(
       `UPDATE knowledge_documents SET parse_status = ?, vector_status = ?, failure_reason = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
     ).run('succeeded', 'succeeded', '', now, docId, userId);
     return { id: docId, kbId: detail.kbId, title: detail.title, chunkCount: chunks.length };
+    });
   }
 
   async deleteDocument(userId: string, docId: string) {
@@ -287,6 +304,8 @@ export class KnowledgeService {
     if (kb.provider === 'ragflow' && row.externalId) {
       await this.deleteRagflowDocument(kb, row.externalId);
     }
+    const remove = async () => {
+    if (kb.provider === 'native') await this.indexes.deleteDocument(userId, row.kbId, docId);
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
       `UPDATE knowledge_documents SET deleted_at = ? WHERE id = ? AND user_id = ?`,
@@ -295,6 +314,8 @@ export class KnowledgeService {
       `DELETE FROM knowledge_chunks WHERE document_id = ? AND user_id = ?`,
     ).run(docId, userId);
     return { success: true };
+    };
+    return kb.provider === 'native' ? this.indexes.mutate(userId, row.kbId, remove) : remove();
   }
 
   async listUserLibraryFiles(
@@ -584,52 +605,27 @@ export class KnowledgeService {
     if (kbs.length !== uniqueKbIds.length) throw new NotFoundException('知识库不存在');
     const nativeKbIds = kbs.filter((kb) => kb.provider === 'native').map((kb) => kb.id);
     const ragflowKbs = kbs.filter((kb) => kb.provider === 'ragflow');
-    const results: KnowledgeSearchResult[] = [];
+    const topK = Math.max(1, Math.min(50, Math.floor(limit)));
+    const candidates = Math.min(200, topK * 4);
+    const groups: KnowledgeSearchResult[][] = [];
     if (nativeKbIds.length) {
-      results.push(...await this.searchNative(userId, nativeKbIds, query, limit, options));
+      groups.push(process.env.NATIVE_RAG_BACKEND === 'legacy'
+        ? await this.nativeRetrieval.keyword(userId, nativeKbIds, query, candidates)
+        : await this.nativeRetrieval.search(userId, nativeKbIds, query, candidates, options.mode ?? 'hybrid'));
     }
-    for (const kb of ragflowKbs) {
-      results.push(...await this.searchRagflow(kb, query, limit));
-    }
-    return results.sort((a, b) => b.score - a.score).slice(0, limit);
+    const ragflow = new RagflowRetrievalProvider(ragflowKbs, (kb, text, count) => this.searchRagflow(kb, text, count));
+    if (ragflowKbs.length) groups.push(await ragflow.search(userId, ragflowKbs.map(kb => kb.id), query, candidates, options.mode ?? 'hybrid'));
+    return reciprocalRankFusion(groups, topK, item => item.kbId + ':' + item.id);
   }
 
-  private async searchNative(
-    userId: string,
-    kbIds: string[],
-    query: string,
-    limit = 5,
-    options: { mode?: 'hybrid' | 'keyword' | 'vector' } = {},
-  ): Promise<KnowledgeSearchResult[]> {
-    const placeholders = kbIds.map(() => '?').join(',');
-    const rows = await this.databaseService.connection.prepare(
-      `SELECT c.id, c.kb_id as kbId, c.document_id as documentId, d.title, c.content, c.embedding_json as embeddingJson
-       FROM knowledge_chunks c
-       JOIN knowledge_documents d ON d.id = c.document_id
-       WHERE c.user_id = ? AND c.kb_id IN (${placeholders}) AND d.deleted_at IS NULL
-       ORDER BY c.created_at DESC
-       LIMIT 300`,
-    ).all(userId, ...kbIds) as unknown as Array<Omit<KnowledgeSearchResult, 'score'> & { embeddingJson?: string }>;
-
-    const terms = this.terms(query);
-    const queryVector = this.embed(query);
-    const mode = options.mode ?? 'hybrid';
-    return rows
-      .map((row) => {
-        const keywordScore = mode === 'vector' ? 0 : this.score(row.content + '\n' + row.title, terms);
-        const vectorScore = mode === 'keyword' ? 0 : this.cosine(queryVector, this.parseVector(row.embeddingJson));
-        return {
-          id: row.id,
-          kbId: row.kbId,
-          documentId: row.documentId,
-          title: row.title,
-          content: row.content,
-          score: Number((keywordScore + vectorScore * 100).toFixed(4)),
-        };
-      })
-      .filter((row) => row.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+  async reindex(userId: string, kbId: string, reset = false) {
+    const kb = await this.get(userId, kbId);
+    if (kb.provider !== 'native') throw new BadRequestException('Reindex is available for native knowledge bases');
+    return this.indexes.migrate(userId, kbId, reset);
+  }
+  async indexStatus(userId: string, kbId: string) { return this.indexes.status(userId, kbId); }
+  async retrievalHealth() {
+    return { qdrant: await this.vectors.health(), embedding: await this.embeddings.health() };
   }
 
   async getAgentKnowledgeBases(userId: string, agentId: string): Promise<KnowledgeBase[]> {
@@ -736,8 +732,8 @@ export class KnowledgeService {
     }
   }
 
-  private requireRagflowConfig(kb: KnowledgeBase): RagflowConfig {
-    const row = this.databaseService.connection.prepare(
+  private async requireRagflowConfig(kb: KnowledgeBase): Promise<RagflowConfig> {
+    const row = await this.databaseService.connection.prepare(
       `SELECT engine_config_json as engineConfigJson, external_id as externalId
        FROM knowledge_bases
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
@@ -795,7 +791,7 @@ export class KnowledgeService {
   }
 
   private async uploadRagflowDocument(kb: KnowledgeBase, title: string, content: string, fileType: string): Promise<string> {
-    const config = this.requireRagflowConfig(kb);
+    const config = await this.requireRagflowConfig(kb);
     const form = new FormData();
     const ext = fileType === 'markdown' ? 'md' : 'txt';
     form.append('file', new Blob([content], { type: 'text/plain;charset=utf-8' }), this.ensureFilename(title, ext));
@@ -809,7 +805,7 @@ export class KnowledgeService {
   }
 
   private async parseRagflowDocument(kb: KnowledgeBase, documentId: string): Promise<void> {
-    const config = this.requireRagflowConfig(kb);
+    const config = await this.requireRagflowConfig(kb);
     await this.ragflowRequest(config, `/api/v1/datasets/${encodeURIComponent(config.datasetId || '')}/chunks`, {
       method: 'POST',
       body: JSON.stringify({ document_ids: [documentId] }),
@@ -817,7 +813,7 @@ export class KnowledgeService {
   }
 
   private async deleteRagflowDocument(kb: KnowledgeBase, documentId: string): Promise<void> {
-    const config = this.requireRagflowConfig(kb);
+    const config = await this.requireRagflowConfig(kb);
     await this.ragflowRequest(config, `/api/v1/datasets/${encodeURIComponent(config.datasetId || '')}/documents`, {
       method: 'DELETE',
       body: JSON.stringify({ ids: [documentId] }),
@@ -825,7 +821,7 @@ export class KnowledgeService {
   }
 
   private async searchRagflow(kb: KnowledgeBase, query: string, limit: number): Promise<KnowledgeSearchResult[]> {
-    const config = this.requireRagflowConfig(kb);
+    const config = await this.requireRagflowConfig(kb);
     const data = await this.ragflowRequest(config, '/api/v1/retrieval', {
       method: 'POST',
       body: JSON.stringify({

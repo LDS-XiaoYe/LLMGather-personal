@@ -1,0 +1,41 @@
+# Isolated integration infrastructure. No public interface; all host bindings are loopback.
+services:
+  mysql:
+    image: mysql:8.0.43
+    environment:
+      MYSQL_ROOT_PASSWORD: p0-integration-only
+      MYSQL_DATABASE: p0_test_compose
+    volumes: [p0_mysql:/var/lib/mysql]
+    ports: ["127.0.0.1:13308:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  qdrant:
+    image: qdrant/qdrant:v1.15.5@sha256:0fb8897412abc81d1c0430a899b9a81eb8328aa634e7242d1bc804c1fe8fe863
+    environment:
+      QDRANT__SERVICE__API_KEY: p0-integration-only
+    ports: ["127.0.0.1:16334:6333"]
+    volumes: [p0_qdrant:/qdrant/storage]
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; read -r line <&3; [[ \"$$line\" == *200* ]]"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  embedding:
+    profiles: [embedding]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+    command: ["--model-id", "BAAI/bge-small-en-v1.5", "--port", "80", "--max-client-batch-size", "64"]
+    ports: ["127.0.0.1:18081:80"]
+    volumes: [p0_embedding:/data]
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/80; printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; read -r line <&3; [[ \"$$line\" == *200* ]]"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+volumes:
+  p0_mysql:
+  p0_qdrant:
+  p0_embedding:

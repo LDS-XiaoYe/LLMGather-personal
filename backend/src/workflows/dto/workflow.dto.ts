@@ -23,6 +23,10 @@ export class WorkflowNodeDto {
 }
 
 export class CreateWorkflowDto {
+  @IsOptional()
+  @IsIn([1, 2])
+  schemaVersion?: 1 | 2;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(128)

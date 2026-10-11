@@ -50,6 +50,22 @@ services:
     networks:
       - llmgather-net
 
+  qdrant:
+    image: qdrant/qdrant:v1.15.5@sha256:0fb8897412abc81d1c0430a899b9a81eb8328aa634e7242d1bc804c1fe8fe863
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY}
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; read -r line <&3; [[ \"$$line\" == *200* ]]"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - llmgather-net
+
   backend:
     build:
       context: .
@@ -57,8 +73,10 @@ services:
     container_name: llmgather-backend
     restart: unless-stopped
     env_file:
-      - .env.docker
+      - ${LLMGATHER_ENV_FILE:-.env.docker}
     depends_on:
+      qdrant:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
@@ -67,6 +85,7 @@ services:
         condition: service_started
     environment:
       - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
       - MEMORY_PROVIDER=langgraph
       - LANGGRAPH_MEMORY_URL=http://langgraph-memory:2024
     networks:
@@ -86,6 +105,7 @@ services:
       - llmgather-net
 
 volumes:
+  qdrant_data:
   mysql_data:
   redis_data:
   langgraph_node_modules:

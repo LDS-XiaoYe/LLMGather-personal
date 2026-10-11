@@ -10,6 +10,9 @@ import { WorkflowsService } from './workflows.service';
 export class WorkflowsController {
   constructor(private readonly workflowsService: WorkflowsService) {}
 
+  @Get('health/runtime')
+  async runtimeHealth() { return { data: await this.workflowsService.runtimeHealth() }; }
+
   @Get()
   async list(@CurrentUser() user: AuthenticatedRequestUser) {
     return { data: await this.workflowsService.list(user.id) };
@@ -36,5 +39,17 @@ export class WorkflowsController {
         ? { runtimeAgentId: payload.agentId, skipWorkflowAgentIds: [payload.agentId] }
         : {}),
     };
+  }
+  @Get('runs/:runId')
+  async getRun(@CurrentUser() user: AuthenticatedRequestUser, @Param('runId') runId: string) {
+    return { data: await this.workflowsService.getRun(user.id, runId) };
+  }
+  @Post('runs/:runId/resume')
+  async resume(@CurrentUser() user: AuthenticatedRequestUser, @Param('runId') runId: string) {
+    return { data: await this.workflowsService.resume(user.id, runId) };
+  }
+  @Post('runs/:runId/cancel')
+  async cancel(@CurrentUser() user: AuthenticatedRequestUser, @Param('runId') runId: string) {
+    return { data: await this.workflowsService.cancel(user.id, runId) };
   }
 }

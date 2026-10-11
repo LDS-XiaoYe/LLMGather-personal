@@ -7,7 +7,7 @@ COPY package.json package-lock.json ./
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
 
-RUN npm install
+RUN npm ci
 
 # Copy full source
 COPY backend/ backend/

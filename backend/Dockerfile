@@ -6,6 +6,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
+COPY deployment-agent/package.json deployment-agent/
 
 RUN npm ci
 
@@ -24,6 +25,7 @@ COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/backend/package.json ./backend/package.json
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/package-lock.json ./package-lock.json
+COPY deployment-agent/registry.json ./deployment-agent/registry.json
 
 ENV NODE_PATH=/app/node_modules
 ENV NODE_ENV=production

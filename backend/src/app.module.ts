@@ -21,6 +21,7 @@ import { SkillsModule } from './skills/skills.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 import { RedisModule } from './redis/redis.module';
 import { SecurityModule } from './security/security.module';
+import { ModelServicesModule } from './model-services/model-services.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { SecurityModule } from './security/security.module';
     RedisModule,
     DatabaseModule,
     SecurityModule,
+    ModelServicesModule,
     ProvidersModule,
     AuthModule,
     ApiKeysModule,

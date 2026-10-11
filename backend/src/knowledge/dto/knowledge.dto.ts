@@ -1,6 +1,10 @@
 import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class CreateKnowledgeBaseDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  embeddingInstanceId?:string;
   @IsString()
   @IsNotEmpty()
   @MaxLength(128)

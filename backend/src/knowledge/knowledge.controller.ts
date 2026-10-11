@@ -4,11 +4,19 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto, CreateUserLibraryFileDto, ParseFileDto, RenameUserLibraryFileDto, SearchKnowledgeDto } from './dto/knowledge.dto';
 import { KnowledgeService } from './knowledge.service';
+import { ManagedEmbeddingService } from '../model-services/managed-embedding.service';
+import { ModelServicesService } from '../model-services/model-services.service';
 
 @Controller('knowledge')
 @UseGuards(JwtAuthGuard)
 export class KnowledgeController {
-  constructor(private readonly knowledgeService: KnowledgeService) {}
+  constructor(private readonly knowledgeService: KnowledgeService,private readonly managed:ManagedEmbeddingService,private readonly modelServices:ModelServicesService) {}
+
+  @Get('embedding-providers') async embeddingProviders(){return{data:await this.modelServices.providers()};}
+  @Post('bases/:id/embedding') async bindEmbedding(@CurrentUser() user:AuthenticatedRequestUser,@Param('id') id:string,@Body() input:{instanceId:string}){
+    if(typeof input.instanceId!=='string')throw new BadRequestException('Invalid embedding instance');
+    return{data:await this.managed.bind(user.id,id,input.instanceId)};
+  }
 
   @Get('bases')
   async list(@CurrentUser() user: AuthenticatedRequestUser) {

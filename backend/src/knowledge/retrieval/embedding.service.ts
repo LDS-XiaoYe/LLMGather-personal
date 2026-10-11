@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ManagedEmbeddingService } from '../../model-services/managed-embedding.service';
 import { createHash } from 'crypto';
 import { ProviderApiKeyStore } from '../../providers/provider-api-key.store';
 import { ApiKeyPool } from '../../providers/api-key-pool';
@@ -27,7 +28,7 @@ interface Configuration {
 @Injectable()
 export class EmbeddingService implements EmbeddingProvider {
   private active = 0;
-  constructor(private readonly providers: ProviderApiKeyStore) {}
+  constructor(private readonly providers: ProviderApiKeyStore, @Optional() private readonly managed?: ManagedEmbeddingService) {}
   private async configuration(withKey = true): Promise<Configuration> {
     const name = process.env.EMBEDDING_PROVIDER_NAME || '';
     const provider = name ? await this.providers.getConfig(name) : null;
@@ -53,7 +54,8 @@ export class EmbeddingService implements EmbeddingProvider {
       authPrefix: prefix ? prefix + ' ' : '',
     };
   }
-  async describe(): Promise<EmbeddingDescriptor> {
+  async describe(kb?:string): Promise<EmbeddingDescriptor> {
+    const local=await this.managed?.describe(kb);if(local)return local;
     return (await this.configuration(false)).descriptor;
   }
   async health(): Promise<{ status: string; dimensions: number }> {
@@ -62,6 +64,10 @@ export class EmbeddingService implements EmbeddingProvider {
   }
   async embed(texts: string[], expected?: EmbeddingDescriptor): Promise<number[][]> {
     if (!texts.length) return [];
+    if(expected?.endpoint.startsWith('managed://')){
+      if(!this.managed)throw new Error('Managed embedding provider is not configured');
+      return this.managed.embed(texts,expected);
+    }
     const config = await this.configuration();
     if (expected && expected.fingerprint !== config.descriptor.fingerprint)
       throw new Error('Embedding vector space changed; reindex before retrieval');

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { KnowledgeSearchResult } from '../knowledge.service';
-import { EmbeddingService } from './embedding.service';
+import { EmbeddingDescriptor, EmbeddingService } from './embedding.service';
 import { KnowledgeIndexService } from './knowledge-index.service';
 import { QdrantService } from './qdrant.service';
 import { reciprocalRankFusion } from './rrf';
@@ -35,11 +35,18 @@ export class NativeRetrievalService implements RetrievalProvider {
     const candidates = Math.min(200, Math.max(limit * 4, 20));
     const keyword = mode === 'vector' ? [] : await this.keyword(user, kbIds, query, candidates);
     if (mode === 'keyword') return keyword.slice(0, limit);
-    const descriptor = await this.embeddings.describe();
+    const groups=new Map<string,{descriptor:EmbeddingDescriptor;ids:string[]}>();
+    for(const kb of kbIds){const descriptor=await this.embeddings.describe(kb);const group=groups.get(descriptor.fingerprint)||{descriptor,ids:[]};group.ids.push(kb);groups.set(descriptor.fingerprint,group);}
+    const ranked:KnowledgeSearchResult[][]=[];
+    for(const group of groups.values())ranked.push(await this.dense(user,group.ids,query,candidates,group.descriptor));
+    if(mode==='hybrid')ranked.push(keyword);
+    return ranked.length===1?ranked[0].slice(0,limit):reciprocalRankFusion(ranked,limit);
+  }
+  private async dense(user:string,kbIds:string[],query:string,candidates:number,descriptor:EmbeddingDescriptor):Promise<KnowledgeSearchResult[]>{
     await this.indexes.requireReady(user, kbIds, descriptor);
     const [embedding] = await this.embeddings.embed([query], descriptor);
     const points = await this.vectors.search(descriptor, embedding, user, kbIds, candidates);
-    if (!points.length) return mode === 'hybrid' ? keyword.slice(0, limit) : [];
+    if (!points.length) return [];
     // Never trust vector payloads for content or authorization; hydrate only authorized/live MySQL chunks.
     const rows = (await this.database.connection
       .prepare(
@@ -54,7 +61,7 @@ export class NativeRetrievalService implements RetrievalProvider {
     const dense = points.flatMap((point) =>
       byId.has(point.id) ? [{ ...byId.get(point.id)!, score: point.score }] : [],
     );
-    return mode === 'vector' ? dense.slice(0, limit) : reciprocalRankFusion([dense, keyword], limit);
+    return dense;
   }
   async keyword(user: string, kbIds: string[], query: string, limit: number): Promise<KnowledgeSearchResult[]> {
     const terms = [

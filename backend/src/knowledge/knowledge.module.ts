@@ -7,9 +7,10 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { KnowledgeController } from './knowledge.controller';
 import { KnowledgeService } from './knowledge.service';
+import { ModelServicesModule } from '../model-services/model-services.module';
 
 @Module({
-  imports: [AuthModule, ProvidersModule],
+  imports: [AuthModule, ProvidersModule, ModelServicesModule],
   controllers: [KnowledgeController],
   providers: [KnowledgeService, EmbeddingService, QdrantService, KnowledgeIndexService, NativeRetrievalService],
   exports: [KnowledgeService],

@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { IDatabaseAdapter } from './database.adapter.interface';
 import { MysqlDatabaseAdapter } from './adapters/mysql.adapter';
 import { migrateP0 } from './migrations/p0-infrastructure';
+import { migrateModelServices } from './migrations/model-services';
 
 /**
  * 返回当前时间戳字符串（MySQL DATETIME(3) 兼容）
@@ -31,6 +32,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.createTables();
     await this.migrateColumnsIfNeeded();
     await migrateP0(this.adapter);
+    await migrateModelServices(this.adapter);
     await this.seedBuiltinTools();
     await this.seedDefaultAgentSkills();
     await this.seedProviderConfigs();

@@ -4,7 +4,8 @@ import { QdrantService } from './retrieval/qdrant.service';
 import { NativeRetrievalService } from './retrieval/native-retrieval.service';
 import { KnowledgeIndexService } from './retrieval/knowledge-index.service';
 import { reciprocalRankFusion } from './retrieval/rrf';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { ManagedEmbeddingService } from '../model-services/managed-embedding.service';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../database/database.service';
 import { AddKnowledgeDocumentDto, CreateKnowledgeBaseDto, CreateUserLibraryFileDto } from './dto/knowledge.dto';
@@ -101,7 +102,8 @@ type UserLibraryFileRow = Omit<UserLibraryFile, 'fileSize'> & {
 export class KnowledgeService {
   constructor(private readonly databaseService: DatabaseService,
     private readonly nativeRetrieval: NativeRetrievalService, private readonly indexes: KnowledgeIndexService,
-    private readonly embeddings: EmbeddingService, private readonly vectors: QdrantService) {}
+    private readonly embeddings: EmbeddingService, private readonly vectors: QdrantService,
+    @Optional() private readonly managedEmbedding?:ManagedEmbeddingService) {}
 
   async list(userId: string): Promise<KnowledgeBase[]> {
     const rows = await this.databaseService.connection.prepare(
@@ -128,6 +130,7 @@ export class KnowledgeService {
     const id = randomUUID();
     const now = this.databaseService.now();
     const provider = this.normalizeProvider(dto.provider);
+    const binding=provider==='native'&&this.managedEmbedding?await this.managedEmbedding.initialBinding(dto.embeddingInstanceId):{id:null,spec:null};
     const name = dto.name.trim();
     const description = dto.description?.trim() ?? '';
     let externalId = '';
@@ -141,9 +144,9 @@ export class KnowledgeService {
       engineConfigJson = JSON.stringify({ ...config, datasetId: externalId });
     }
     await this.databaseService.connection.prepare(
-      `INSERT INTO knowledge_bases (id, user_id, name, description, provider, external_id, engine_config_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, userId, name, description, provider, externalId, engineConfigJson, now, now);
+      `INSERT INTO knowledge_bases (id, user_id, name, description, provider, external_id, engine_config_json, created_at, updated_at,embedding_instance_id,embedding_spec_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)`,
+    ).run(id, userId, name, description, provider, externalId, engineConfigJson, now, now,binding.id,binding.spec);
     const kb = (await this.list(userId)).find((item) => item.id === id);
     if (!kb) throw new NotFoundException('知识库创建失败');
     return kb;

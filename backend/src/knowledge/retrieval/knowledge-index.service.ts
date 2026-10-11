@@ -121,7 +121,7 @@ export class KnowledgeIndexService {
     kb: string,
     guard: () => Promise<void>,
   ): Promise<{ status: string; indexedCount: number }> {
-    const descriptor = await this.embeddings.describe();
+    const descriptor = await this.embeddings.describe(kb);
     const db = this.database.connection;
     const collection = this.vectors.collection(descriptor);
     await db
@@ -191,7 +191,7 @@ export class KnowledgeIndexService {
           throw new Error('Index query verification failed');
       }
       await guard();
-      if ((await this.embeddings.describe()).fingerprint !== descriptor.fingerprint)
+      if ((await this.embeddings.describe(kb)).fingerprint !== descriptor.fingerprint)
         throw new Error('Embedding configuration changed during indexing');
       await db
         .prepare("UPDATE knowledge_indexes SET status='ready',error='',updated_at=? WHERE kb_id=? AND fingerprint=?")

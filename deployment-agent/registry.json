@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "bge-m3",
+      "name": "BGE-M3",
+      "type": "embedding",
+      "parameters": 568000000,
+      "dimensions": 1024,
+      "maxTokens": 8192,
+      "minMemoryMiB": 6144,
+      "minDiskMiB": 6144,
+      "minCpu": 2,
+      "protocol": "openai-embeddings",
+      "variants": {
+        "tei": {
+          "repository": "BAAI/bge-m3",
+          "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+          "format": "pytorch-bin",
+          "pooling": "cls-normalized",
+          "sources": [
+            "modelscope",
+            "huggingface"
+          ],
+          "files": [
+            {
+              "path": "1_Pooling/config.json",
+              "size": 191,
+              "gitBlob": "9bd85925f325e25246d94c4918dc02ab98f2a1b7",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "config.json",
+              "size": 687,
+              "gitBlob": "e6eda1c72da8f9dc30fdd9b69c73d35af3b7a7ad",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "config_sentence_transformers.json",
+              "size": 123,
+              "gitBlob": "1fba91c78a6c8e17227058ab6d4d3acb5d8630a9",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "modules.json",
+              "size": 349,
+              "gitBlob": "952a9b81c0bfd99800fabf352f69c7ccd46c5e43",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "pytorch_model.bin",
+              "size": 2271145830,
+              "sha256": "b5e0ce3470abf5ef3831aa1bd5553b486803e83251590ab7ff35a117cf6aad38",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "sentence_bert_config.json",
+              "size": 54,
+              "gitBlob": "0140ba1eac83a3c9b857d64baba91969d988624b",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "sentencepiece.bpe.model",
+              "size": 5069051,
+              "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "special_tokens_map.json",
+              "size": 964,
+              "gitBlob": "b1879d702821e753ffe4245048eee415d54a9385",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "tokenizer.json",
+              "size": 17098108,
+              "sha256": "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            },
+            {
+              "path": "tokenizer_config.json",
+              "size": 444,
+              "gitBlob": "dc69ac559dcba2694012009aaa108c614541789a",
+              "modelscopeRevision": "e44369c5623cc146f016da906583db4ee0e3488d"
+            }
+          ]
+        },
+        "mlx": {
+          "repository": "mlx-community/bge-m3-mlx-fp16",
+          "revision": "a37eddded9a6a1273a87fb8b0da0d1cdbd98aeec",
+          "format": "mlx-safetensors",
+          "precision": "float16",
+          "pooling": "runtime-text-embeds-normalized",
+          "sources": [
+            "huggingface"
+          ],
+          "verification": "source-api-reviewed; apple-hardware-pending",
+          "files": [
+            {
+              "path": "config.json",
+              "size": 715,
+              "gitBlob": "29ab5a712d12afaa3177b434ee0601c8754fdb61"
+            },
+            {
+              "path": "config_sentence_transformers.json",
+              "size": 123,
+              "gitBlob": "1fba91c78a6c8e17227058ab6d4d3acb5d8630a9"
+            },
+            {
+              "path": "model.safetensors",
+              "size": 1135554209,
+              "sha256": "e8028acb2e77e0010d35ef75832d823edb5851c95682deef2bde86a45bd4441d"
+            },
+            {
+              "path": "model.safetensors.index.json",
+              "size": 29154,
+              "gitBlob": "71c9bc01cd8df3ee455ae3f2ebf42a291bbea505"
+            },
+            {
+              "path": "modules.json",
+              "size": 349,
+              "gitBlob": "952a9b81c0bfd99800fabf352f69c7ccd46c5e43"
+            },
+            {
+              "path": "sentence_bert_config.json",
+              "size": 54,
+              "gitBlob": "0140ba1eac83a3c9b857d64baba91969d988624b"
+            },
+            {
+              "path": "special_tokens_map.json",
+              "size": 964,
+              "gitBlob": "b1879d702821e753ffe4245048eee415d54a9385"
+            },
+            {
+              "path": "tokenizer.json",
+              "size": 17098085,
+              "sha256": "5df1f55d60c9705a501ab9a75550728625740741fe4be308dac4806c16b7d51d"
+            },
+            {
+              "path": "tokenizer_config.json",
+              "size": 379,
+              "gitBlob": "ab63b149970c01ed8c739d3536cebabdb7560fa8"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "matrix": [
+    {
+      "backend": "cpu",
+      "arch": "amd64",
+      "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c",
+      "precision": "float32",
+      "verification": "cpu-image-tested; bge-m3-acceptance-pending"
+    },
+    {
+      "backend": "nvidia",
+      "capability": "8.6",
+      "image": "ghcr.io/huggingface/text-embeddings-inference:86-1.9@sha256:bee0bdb887096229add91b6fdfcf95258c12eb9180e90dc86f3b4b25b86fc613",
+      "precision": "float16",
+      "verification": "official-matrix; hardware-pending"
+    },
+    {
+      "backend": "nvidia",
+      "capability": "8.9",
+      "image": "ghcr.io/huggingface/text-embeddings-inference:89-1.9@sha256:1a284d9ca1adcc20b78c261d4d052c06057f0a3cb49a15c5d2c00930f710fce2",
+      "precision": "float16",
+      "verification": "official-matrix; hardware-pending"
+    },
+    {
+      "backend": "nvidia",
+      "capability": "12.0",
+      "image": "ghcr.io/huggingface/text-embeddings-inference:120-1.9@sha256:bd8e5b1954146f7fe8590b64b959bc194433c6c38c036592a84d736841ca9400",
+      "precision": "float16",
+      "experimental": true,
+      "verification": "official-experimental; rtx5070-acceptance-pending"
+    }
+  ]
+}

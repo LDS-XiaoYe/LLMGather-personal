@@ -1,0 +1,3 @@
+mlx==0.32.3
+mlx-embeddings==0.1.0
+transformers==4.57.3

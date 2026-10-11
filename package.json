@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "backend",
-    "frontend"
+    "frontend",
+    "deployment-agent"
   ],
   "scripts": {
     "dev:backend": "npm --prefix backend run start:dev",

@@ -44,10 +44,14 @@ class DeploymentAgent {
       if(task.action==='deploy'){
         const config=validateDeployment(task.config);const hardware=await detect(this.root,process.env.AGENT_PYTHON);
         const compatibility=await this.runtime[config.backend].checkCompatibility(config,hardware);signal.throwIfAborted();
-        if(!instance){const occupied=new Set(Object.values(this.store.state.instances).map(i=>i.port));let port=21000;while(occupied.has(port)&&port<21100)port++;if(port>=21100)throw Error('Managed service port range exhausted');
+        if(!instance){const occupied=new Set(Object.values(this.store.state.instances).filter(i=>i.actualState!=='REMOVED').map(i=>i.port));let port=21000;while(occupied.has(port)&&port<21100)port++;if(port>=21100)throw Error('Managed service port range exhausted');
           instance={...config,id:task.instanceId,port,image:compatibility.image,precision:compatibility.precision,gpuName:compatibility.gpuName,variant:config.backend==='apple'?'mlx':'tei',desiredState:'RUNNING',actualState:'PREPARING'};
           this.store.state.instances[instance.id]=instance;await this.store.save();
         }else if(JSON.stringify(task.config)!==JSON.stringify(instance.originalConfig||task.config)&&instance.originalConfig)throw Error('Managed deployment configuration is immutable');
+        if(instance.actualState==='REMOVED'){
+          const occupied=new Set(Object.values(this.store.state.instances).filter(i=>i.id!==instance.id&&i.actualState!=='REMOVED').map(i=>i.port));
+          let port=21000;while(occupied.has(port)&&port<21100)port++;if(port>=21100)throw Error('Managed service port range exhausted');instance.port=port;
+        }
         instance.originalConfig=task.config;
         instance.desiredState='RUNNING';instance.actualState='PREPARING';await this.store.save();
         const adapter=this.runtime[instance.backend];

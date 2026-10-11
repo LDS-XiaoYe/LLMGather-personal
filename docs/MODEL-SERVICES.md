@@ -151,6 +151,7 @@ npm --prefix backend run build
 npm --prefix frontend run build
 # 单独真实硬件测试（缓存保留，临时受管服务卸载）
 node deployment-agent/scripts/acceptance.cjs cpu nvidia
+node deployment-agent/scripts/download-acceptance.cjs
 # macOS 真机：node deployment-agent/scripts/acceptance.cjs apple
 # 设置隔离 p0_test MySQL / Redis / Qdrant 环境后执行：
 node backend/scripts/model-services-integration.cjs
@@ -158,7 +159,7 @@ node backend/scripts/model-services-integration.cjs
 
 硬件脚本保存 agent-state/acceptance.json、CPU/CUDA运行日志；HTTP集成脚本断言管理员/普通用户/Agent鉴权、幂等部署、Provider注册、真实向量与Qdrant召回、KB所有权、停止依赖、SSE、worker重建及离线状态。单测不代替真机结果。
 
-本次可用硬件：Windows i9-13900KF、Docker Linux amd64、RTX5070(CC12.0/driver610.88/12GB)。CPU实测约2.99GiB RSS，GPU容器RSS约1.46GiB（不是显存占用；GPU指标通过nvidia-smi查询）。两种模式真实2×1024与stop/start/restart通过。Apple M1/M2/M3/M4、RTX30、RTX40、远程TLS/重新启动整台计算节点、开机安装器及UI浏览器点选均需进一步相应环境验收，未声称通过。
+本次可用硬件：Windows i9-13900KF、Docker Linux amd64、RTX5070(CC12.0/driver610.88/12GB)。CPU实测约2.99GiB RSS，GPU容器RSS约1.46GiB（不是显存占用；GPU指标通过nvidia-smi查询）。两种模式真实2×1024与stop/start/restart通过；Agent与后端Docker镜像实际构建通过，Agent Docker CLI28.5.1能连接Server29.5.2。Apple M1/M2/M3/M4、RTX30、RTX40、远程TLS/重新启动整台计算节点、开机安装器及UI浏览器点选均需进一步相应环境验收，未声称通过。
 
 ## 10. 常见问题 / 后续验证
 

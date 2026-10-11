@@ -17,7 +17,7 @@ class RequestVerifier {
     this.nonces.set(nonce,now+60000);
   }
 }
-function id(value) { if(typeof value!=='string'||! /^[a-f0-9-]{36}$/.test(value))throw Error('Invalid managed ID');return value; }
+function id(value) { if(typeof value!=='string'||! /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value))throw Error('Invalid managed ID');return value; }
 function inside(root,...parts) {
   const base=path.resolve(root),target=path.resolve(base,...parts),relative=path.relative(base,target);
   if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw Error('Invalid managed path');

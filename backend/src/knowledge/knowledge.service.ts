@@ -20,6 +20,7 @@ export interface KnowledgeEngineInfo {
 }
 
 export interface KnowledgeBase {
+  embeddingInstanceId?: string | null;
   id: string;
   userId: string;
   name: string;
@@ -58,6 +59,7 @@ export interface UserLibraryFile {
 }
 
 type KnowledgeBaseRow = {
+  embeddingInstanceId?: string | null;
   id: string;
   userId: string;
   name: string;
@@ -109,7 +111,7 @@ export class KnowledgeService {
     const rows = await this.databaseService.connection.prepare(
       `SELECT kb.id, kb.user_id as userId, kb.name, kb.description,
               COALESCE(kb.provider, 'native') as provider, kb.external_id as externalId, kb.engine_config_json as engineConfigJson,
-              kb.created_at as createdAt, kb.updated_at as updatedAt,
+              kb.created_at as createdAt, kb.updated_at as updatedAt,kb.embedding_instance_id as embeddingInstanceId,
               COALESCE(docs.documentCount, 0) as documentCount,
               COALESCE(chunks.chunkCount, 0) as chunkCount
        FROM knowledge_bases kb
@@ -145,7 +147,7 @@ export class KnowledgeService {
     }
     await this.databaseService.connection.prepare(
       `INSERT INTO knowledge_bases (id, user_id, name, description, provider, external_id, engine_config_json, created_at, updated_at,embedding_instance_id,embedding_spec_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,NULLIF(?,''),NULLIF(?,''))`,
     ).run(id, userId, name, description, provider, externalId, engineConfigJson, now, now,binding.id,binding.spec);
     const kb = (await this.list(userId)).find((item) => item.id === id);
     if (!kb) throw new NotFoundException('知识库创建失败');
@@ -664,6 +666,7 @@ export class KnowledgeService {
     const provider = this.normalizeProvider(row.provider);
     return {
       id: row.id,
+      embeddingInstanceId: row.embeddingInstanceId ?? null,
       userId: row.userId,
       name: row.name,
       description: row.description,

@@ -1104,6 +1104,7 @@ export interface ToolInvocationResult {
 }
 
 export interface KnowledgeBase {
+  embeddingInstanceId?: string | null;
   id: string;
   userId: string;
   name: string;
@@ -1826,7 +1827,7 @@ export async function fetchKnowledgeBases(baseUrl = defaultBaseUrl): Promise<Kno
 }
 
 export async function createKnowledgeBase(
-  payload: { name: string; description?: string; provider?: 'native' | 'ragflow'; ragflowBaseUrl?: string; ragflowApiKey?: string; ragflowDatasetId?: string },
+  payload: { name: string; description?: string; provider?: 'native' | 'ragflow'; embeddingInstanceId?:string; ragflowBaseUrl?: string; ragflowApiKey?: string; ragflowDatasetId?: string },
   baseUrl = defaultBaseUrl,
 ): Promise<KnowledgeBase> {
   const response = await fetch(`${baseUrl}/knowledge/bases`, {

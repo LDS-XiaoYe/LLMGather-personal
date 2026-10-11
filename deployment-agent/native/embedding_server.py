@@ -23,6 +23,7 @@ def main():
     args.add_argument("--model-path", required=True)
     args.add_argument("--model-id", required=True)
     args.add_argument("--port", type=int, required=True)
+    args.add_argument("--memory-mib", type=int, required=True)
     options = args.parse_args()
     folder = Path(options.model_path).resolve()
     if not (folder / "COMPLETE.json").is_file():
@@ -32,6 +33,8 @@ def main():
     if not mx.metal.is_available():
         raise RuntimeError("Metal unavailable; GPU mode does not fall back to CPU")
     mx.set_default_device(mx.gpu)
+    mx.set_memory_limit(options.memory_mib * 1048576)
+    mx.set_cache_limit(min(1024, options.memory_mib // 4) * 1048576)
     model, tokenizer = load(str(folder))
     lock = threading.Lock()
 

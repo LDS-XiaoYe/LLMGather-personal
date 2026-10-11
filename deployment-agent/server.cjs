@@ -11,8 +11,15 @@ const registry=require('./registry.json');
 const {validateDeployment}=require('./validation.cjs');
 class DeploymentAgent {
   constructor(root){this.root=path.resolve(root);this.cacheRoot=path.join(this.root,'cache');this.store=new AgentStore(this.root);this.runtime=adapters(this.root,this.cacheRoot);this.downloads=new ModelDownloadService(this.cacheRoot,this.store);this.controllers=new Map();this.working=false;}
-  async initialize(){await this.store.load();await fs.mkdir(this.cacheRoot,{recursive:true});for(const task of Object.values(this.store.state.tasks))if(task.status==='RUNNING')task.status='PENDING';await this.store.save();this.timer=setInterval(()=>void this.reconcile().catch(()=>{}),30000);this.timer.unref();void this.drain();return this;}
-  async progress(task,update){Object.assign(task,update,{updatedAt:new Date().toISOString()});if(update.totalBytes)this.store.state.downloads[task.taskId]={instanceId:task.instanceId,phase:task.phase,downloadedBytes:task.downloadedBytes,totalBytes:task.totalBytes,source:task.source,file:task.file,updatedAt:task.updatedAt};await this.store.save();}
+  async initialize(){
+    await fs.mkdir(this.root,{recursive:true,mode:0o700});this.lockFile=path.join(this.root,'agent.lock');
+    try{const previous=JSON.parse(await fs.readFile(this.lockFile,'utf8'));let alive=true;try{process.kill(previous.pid,0);}catch(e){if(e.code==='ESRCH')alive=false;}
+      if(alive)throw Error('Agent data directory is already owned by a live process');await fs.unlink(this.lockFile);
+    }catch(e){if(e.code!=='ENOENT')throw e;}
+    this.lock=await fs.open(this.lockFile,'wx',0o600);await this.lock.writeFile(JSON.stringify({pid:process.pid}));
+    await this.store.load();await fs.mkdir(this.cacheRoot,{recursive:true});for(const task of Object.values(this.store.state.tasks))if(task.status==='RUNNING')task.status='PENDING';await this.store.save();this.timer=setInterval(()=>void this.reconcile().catch(()=>{}),30000);this.timer.unref();void this.drain();return this;
+  }
+  async progress(task,update){const now=new Date().toISOString();if(update.phase&&update.phase!==task.phase)(task.history||=[]).push({phase:update.phase,status:update.status||task.status,at:now});Object.assign(task,update,{updatedAt:now});if(update.totalBytes)this.store.state.downloads[task.taskId]={instanceId:task.instanceId,phase:task.phase,downloadedBytes:task.downloadedBytes,totalBytes:task.totalBytes,source:task.source,file:task.file,updatedAt:task.updatedAt};await this.store.save();}
   async submit(body){
     if(!body||Object.keys(body).some(k=>!['taskId','instanceId','action','config'].includes(k)))throw Error('Invalid managed task field');
     id(body.taskId);id(body.instanceId);
@@ -21,7 +28,7 @@ class DeploymentAgent {
     const previous=this.store.state.tasks[body.taskId];if(previous){if(previous.requestHash!==hash)throw Error('Task idempotency payload mismatch');return previous;}
     if(Object.values(this.store.state.tasks).some(t=>t.instanceId===body.instanceId&&['PENDING','RUNNING'].includes(t.status)))throw Error('Managed instance operation is already pending');
     if(body.action==='deploy')validateDeployment(body.config);else if(!this.store.state.instances[body.instanceId])throw Error('Managed instance not found');
-    const task={...body,requestHash:hash,status:'PENDING',phase:'CHECKING_ENVIRONMENT',createdAt:new Date().toISOString()};
+    const task={...body,requestHash:hash,status:'PENDING',phase:'CHECKING_ENVIRONMENT',createdAt:new Date().toISOString(),history:[{phase:'CHECKING_ENVIRONMENT',status:'PENDING',at:new Date().toISOString()}]};
     this.store.state.tasks[body.taskId]=task;await this.store.save();void this.drain();return task;
   }
   async drain(){
@@ -42,6 +49,7 @@ class DeploymentAgent {
           this.store.state.instances[instance.id]=instance;await this.store.save();
         }else if(JSON.stringify(task.config)!==JSON.stringify(instance.originalConfig||task.config)&&instance.originalConfig)throw Error('Managed deployment configuration is immutable');
         instance.originalConfig=task.config;
+        instance.desiredState='RUNNING';instance.actualState='PREPARING';await this.store.save();
         const adapter=this.runtime[instance.backend];
         await this.progress(task,{phase:instance.backend==='apple'?'PREPARING_RUNTIME':'PULLING_IMAGE'});
         await adapter.prepare(instance);signal.throwIfAborted();
@@ -82,20 +90,24 @@ class DeploymentAgent {
     }
     throw Error('Health verification failed: '+safeError(last));
   }
-  async cancel(taskId){const task=this.store.state.tasks[id(taskId)];if(!task)throw Error('Task not found');if(['SUCCEEDED','FAILED','CANCELLED'].includes(task.status))return task;task.cancelRequested=true;if(task.status==='PENDING')task.status='CANCELLED';this.controllers.get(taskId)?.abort();await this.store.save();return task;}
+  async cancel(taskId){const task=this.store.state.tasks[id(taskId)];if(!task)throw Error('Task not found');if(['SUCCEEDED','FAILED','CANCELLED'].includes(task.status))return task;task.cancelRequested=true;if(task.status==='PENDING')await this.progress(task,{status:'CANCELLED',phase:'CANCELLED'});this.controllers.get(taskId)?.abort();await this.store.save();return task;}
   async reconcile(){
     for(const instance of Object.values(this.store.state.instances)){
       if(instance.actualState==='REMOVED'||Object.values(this.store.state.tasks).some(t=>t.instanceId===instance.id&&['PENDING','RUNNING'].includes(t.status)))continue;
       const adapter=this.runtime[instance.backend],state=await adapter.inspect(instance);
       if(instance.desiredState==='RUNNING'){
         try{if(state.status!=='RUNNING')await adapter.start(instance);await adapter.healthCheck(instance);instance.actualState='RUNNING';instance.lastHealthyAt=new Date().toISOString();}catch{instance.actualState=state.status==='RUNNING'?'UNHEALTHY':state.status;}
+      }else if(instance.desiredState==='STOPPED'){
+        if(state.status==='RUNNING')await adapter.stop(instance);instance.actualState=state.status==='MISSING'?'MISSING':'STOPPED';
+      }else if(instance.desiredState==='REMOVED'){
+        if(state.status!=='MISSING')await adapter.remove(instance);instance.actualState='REMOVED';
       }else instance.actualState=state.status;
     }
     await this.store.save();
   }
   async metrics(instance){return{runtime:await this.runtime[instance.backend].getMetrics(instance),hardware:await detect(this.root,process.env.AGENT_PYTHON)};}
   async embed(instance,input){if(instance.actualState!=='RUNNING'||instance.desiredState!=='RUNNING')throw Error('Model service is not running');return this.runtime[instance.backend].embed(instance,input);}
-  async close(){clearInterval(this.timer);for(const controller of this.controllers.values())controller.abort();await this.store.save();}
+  async close(){clearInterval(this.timer);for(const controller of this.controllers.values())controller.abort();await this.store.save();if(this.lock){await this.lock.close();await fs.unlink(this.lockFile);}}
 }
 async function start(){
   id(process.env.AGENT_ID);const verifier=new RequestVerifier(process.env.AGENT_TOKEN);const agent=await new DeploymentAgent(process.env.AGENT_DATA_DIR||path.resolve(__dirname,'.state')).initialize();

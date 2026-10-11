@@ -36,7 +36,7 @@ export class ManagedEmbeddingService {
       .run(owner,kb,user);
     if(!claim.changes)throw new ConflictException('Knowledge base missing or indexing is active');
     try{
-      const changed=await db.prepare("UPDATE knowledge_bases SET embedding_instance_id=?,embedding_spec_json=?,retrieval_backend='legacy' WHERE id=? AND user_id=? AND rag_owner=? AND rag_lease_until>NOW(3)")
+      const changed=await db.prepare("UPDATE knowledge_bases SET embedding_instance_id=NULLIF(?,''),embedding_spec_json=NULLIF(?,''),retrieval_backend='legacy' WHERE id=? AND user_id=? AND rag_owner=? AND rag_lease_until>NOW(3)")
         .run(id||null,descriptor?JSON.stringify(descriptor):null,kb,user,owner);
       if(!changed.changes)throw new ConflictException('Knowledge binding lease lost');
       await db.prepare("UPDATE knowledge_indexes SET status='pending',cursor_id='',indexed_count=0 WHERE kb_id=? AND user_id=?").run(kb,user);

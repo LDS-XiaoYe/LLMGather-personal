@@ -29,6 +29,11 @@ describe('model service contract',()=>{
     process.env.MODEL_AGENT_ALLOWED_HOSTS='mac.example';expect(()=>validateAgentUrl('http://mac.example')).toThrow();expect(validateAgentUrl('https://mac.example').protocol).toBe('https:');delete process.env.MODEL_AGENT_ALLOWED_HOSTS;
   });
   test('identifiers reject path traversal and malformed UUID',()=>{expect(()=>managedId('../model')).toThrow();expect(()=>managedId('-'.repeat(36))).toThrow();});
+  test('node freshness uses the database clock rather than interpreting DATETIME in the host timezone',async()=>{
+    const id='f5736df0-4f77-4b34-9acf-0183beac0de0';
+    const db={connection:{prepare:(sql:string)=>({get:async()=>sql.includes('model_nodes')?{id,status:'ONLINE',fresh:1,last_seen:'2000-01-01'}:{id,node_id:id,actual_state:'RUNNING',desired_state:'RUNNING',provider_registered:1}})}} as unknown as DatabaseService;
+    expect((await new ModelServicesService(db,{} as AgentClient).readyInstance(id)).id).toBe(id);
+  });
   test('admin guard rejects ordinary and anonymous users',()=>{
     const guard=new AdminGuard();const context=(role:string)=>({switchToHttp:()=>({getRequest:()=>({user:{role}})})}) as ExecutionContext;
     expect(()=>guard.canActivate(context('user'))).toThrow();expect(guard.canActivate(context('admin'))).toBe(true);

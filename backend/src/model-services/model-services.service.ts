@@ -24,7 +24,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
     await this.db.prepare('INSERT INTO model_audit (actor_id,action,target_id,detail_json) VALUES (?,?,?,?)').run(actor,action,target,JSON.stringify(detail));
   }
   async node(id: string): Promise<NodeRow> {
-    const row=await this.db.prepare('SELECT * FROM model_nodes WHERE id=?').get(managedId(id));
+    const row=await this.db.prepare('SELECT *, (last_seen>DATE_SUB(NOW(3),INTERVAL 45 SECOND)) AS fresh FROM model_nodes WHERE id=?').get(managedId(id));
     if(!row)throw new NotFoundException('Compute node not found');return row as unknown as NodeRow;
   }
   async registerNode(actor: string,input: {id:string;name:string;baseUrl:string;token:string}) {
@@ -85,7 +85,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
         .run(input.instanceId,node.id,input.config!.modelId,JSON.stringify(input.config));}
       catch(e){if((e as {code?:string}).code!=='ER_DUP_ENTRY')throw e;}
     }
-    const claimed=await this.db.prepare(`UPDATE model_instances SET operation_id=? WHERE id=? AND operation_id IS NULL`).run(input.taskId,input.instanceId);
+    const claimed=await this.db.prepare(`UPDATE model_instances SET operation_id=?,updated_at=NOW(3) WHERE id=? AND operation_id IS NULL`).run(input.taskId,input.instanceId);
     if(!claimed.changes)throw new ConflictException('Another model operation owns this instance');
     try{
       await this.db.prepare(`INSERT INTO model_tasks (id,instance_id,node_id,request_json,request_hash,status,phase,progress_json) VALUES (?,?,?,?,?,'PENDING','CHECKING_ENVIRONMENT','{}')`)
@@ -109,7 +109,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
   async defaultId():Promise<string|null>{const row=await this.db.prepare("SELECT value FROM model_settings WHERE id='default_embedding'").get();return row?.value?String(row.value):null;}
   async setDefault(actor:string,id:string){await this.readyInstance(id);await this.db.prepare("INSERT INTO model_settings (id,value) VALUES ('default_embedding',?) ON DUPLICATE KEY UPDATE value=VALUES(value)").run(id);await this.audit(actor,'provider.default',id);return{id,appliesTo:'new-knowledge-bases-only'};}
   async readyInstance(id:string):Promise<InstanceRow>{const i=await this.instance(id);const n=await this.node(i.node_id);
-    if(i.actual_state!=='RUNNING'||i.desired_state!=='RUNNING'||!i.provider_registered||n.status!=='ONLINE'||Date.now()-new Date(n.last_seen).getTime()>45000)
+    if(i.actual_state!=='RUNNING'||i.desired_state!=='RUNNING'||!i.provider_registered||n.status!=='ONLINE'||Number(n.fresh)!==1)
       throw new ConflictException('Embedding model service is stopped, unhealthy or node offline');return i;}
   async providers(){return this.db.prepare(`SELECT i.id,i.model_id AS modelId,i.fingerprint,i.spec_json AS specJson,n.name AS nodeName
     FROM model_instances i JOIN model_nodes n ON n.id=i.node_id WHERE i.provider_registered=1 AND i.actual_state='RUNNING' AND i.desired_state='RUNNING'
@@ -119,7 +119,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
     try{
       // Recover a crash between reserving an instance and inserting its durable task.
       await this.db.prepare(`UPDATE model_instances i LEFT JOIN model_tasks t ON t.id=i.operation_id SET i.operation_id=NULL
-        WHERE i.operation_id IS NOT NULL AND t.id IS NULL AND i.updated_at<DATE_SUB(NOW(3),INTERVAL 60 SECOND)`).run();
+        WHERE i.operation_id IS NOT NULL AND (t.status IN ('SUCCEEDED','FAILED','CANCELLED') OR (t.id IS NULL AND i.updated_at<DATE_SUB(NOW(3),INTERVAL 60 SECOND)))`).run();
       const nodes=await this.db.prepare('SELECT * FROM model_nodes').all();
       for(const row of nodes){const n=row as unknown as NodeRow;
         try {
@@ -145,7 +145,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
         if(i.fingerprint&&i.fingerprint!==expected)throw new Error('Managed vector space changed unexpectedly');
       }
       // Only the task lease owner registers a provider after a live embedding probe. Reconciliation must not race desired state.
-      await this.db.prepare('UPDATE model_instances SET actual_state=?,spec_json=COALESCE(?,spec_json),fingerprint=COALESCE(?,fingerprint),updated_at=NOW(3) WHERE id=?')
+      await this.db.prepare("UPDATE model_instances SET actual_state=?,spec_json=COALESCE(NULLIF(?,''),spec_json),fingerprint=COALESCE(NULLIF(?,''),fingerprint),updated_at=NOW(3) WHERE id=?")
         .run(actual.actualState,actual.spec?JSON.stringify(actual.spec):null,actual.fingerprint||null,i.id);
       if(actual.actualState!=='RUNNING'||i.desired_state!=='RUNNING')await this.db.prepare('UPDATE model_instances SET provider_registered=0 WHERE id=?').run(i.id);
       else if(!i.operation_id&&!i.provider_registered&&actual.spec){try{await this.probeRegister(node,i.id,actual.spec.dimensions);}catch{await this.db.prepare("UPDATE model_instances SET actual_state='UNHEALTHY',provider_registered=0 WHERE id=?").run(i.id);}}
@@ -165,6 +165,9 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
       let current=state.tasks[task.id];
       if(!current)current=await this.agent.request<AgentTask>(node,'POST','/v1/tasks',JSON.parse(task.request_json));
       if(task.cancel_requested&&!terminal.includes(current.status))current=await this.agent.request<AgentTask>(node,'POST',`/v1/tasks/${task.id}/cancel`,{});
+      const previousProgress=JSON.parse(task.progress_json||'{}') as {historyCursor?:number};
+      const historyCursor=previousProgress.historyCursor||0;
+      for(const change of (current.history||[]).slice(historyCursor))if(change.phase!=='COMPLETED')await this.event(task.id,{...change,status:'RUNNING'});
       if(current.status==='SUCCEEDED'&&current.phase==='COMPLETED'){
         const instance=await this.instance(task.instance_id);
         if(instance.desired_state==='RUNNING'){
@@ -173,7 +176,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
           await this.probeRegister(node,instance.id,JSON.parse(instance.spec_json).dimensions as number);
         }
       }
-      const progress=JSON.stringify({downloadedBytes:current.downloadedBytes,totalBytes:current.totalBytes,source:current.source,file:current.file,cached:current.cached});
+      const progress=JSON.stringify({downloadedBytes:current.downloadedBytes,totalBytes:current.totalBytes,source:current.source,file:current.file,cached:current.cached,historyCursor:current.history?.length||0});
       if(task.status!==current.status||task.phase!==current.phase||task.progress_json!==progress)await this.event(task.id,{...current,error:current.error?traceText(current.error):undefined});
       const result=await this.db.prepare(`UPDATE model_tasks SET status=?,phase=?,progress_json=?,error=?,updated_at=NOW(3),owner=NULL,lease_until=NULL WHERE id=? AND owner=? AND lease_until>NOW(3)`)
         .run(current.status,current.phase,progress,traceText(current.error||''),task.id,this.worker);
@@ -182,6 +185,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
         VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE source=VALUES(source),downloaded_bytes=VALUES(downloaded_bytes),total_bytes=VALUES(total_bytes),phase=VALUES(phase),file_path=VALUES(file_path),updated_at=NOW(3)`)
         .run(task.id,task.instance_id,current.source||'',current.downloadedBytes||0,current.totalBytes,current.phase,current.file||'');
     if(terminal.includes(current.status)){
+      if(['FAILED','CANCELLED'].includes(current.status)&&!state.instances[task.instance_id])await this.db.prepare("UPDATE model_instances SET desired_state='STOPPED',actual_state=?,provider_registered=0 WHERE id=? AND operation_id=?").run(current.status,task.instance_id,task.id);
       if(['FAILED','CANCELLED'].includes(current.status)&&state.instances[task.instance_id]?.desiredState==='STOPPED')await this.db.prepare("UPDATE model_instances SET desired_state='STOPPED',provider_registered=0 WHERE id=? AND operation_id=?").run(task.instance_id,task.id);
       await this.db.prepare('UPDATE model_instances SET operation_id=NULL WHERE id=? AND operation_id=?').run(task.instance_id,task.id);
     }

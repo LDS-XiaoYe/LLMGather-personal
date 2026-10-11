@@ -16,7 +16,7 @@ async function main(){
   }
   try{
     for(const backend of process.argv.slice(2).length?process.argv.slice(2):['cpu','nvidia']){
-      const id=randomUUID(),config={modelId:'bge-m3',backend,source:'auto',cpu:4,memoryMiB:8192,...(backend==='nvidia'?{gpuUuid:report.hardware.gpus[0]?.uuid,allowExperimental:true}:{})};
+      const id=randomUUID(),config={modelId:'bge-m3',backend,source:backend==='apple'?'huggingface':'auto',cpu:4,memoryMiB:8192,...(backend==='nvidia'?{gpuUuid:report.hardware.gpus[0]?.uuid,allowExperimental:true}:{})};
       await operation(id,'deploy',config);
       const instance=a.store.state.instances[id];const vectors=await a.embed(instance,['中文知识库检索','English retrieval']);
       assert.equal(vectors.data.length,2);assert.equal(vectors.data[0].embedding.length,1024);

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import KnowledgeEmbeddingSelector from '../../KnowledgeEmbeddingSelector.vue';
 
 const props = defineProps<{ app: Record<string, any> }>();
 const app = props.app;
@@ -362,6 +363,7 @@ function formatSize(size: number) {
               { label: 'RAGFlow', value: 'ragflow' },
             ]" />
           </el-form-item>
+          <el-form-item v-if="knowledgeForm.provider==='native'" label="Embedding 模型"><KnowledgeEmbeddingSelector v-model="knowledgeForm.embeddingInstanceId" :base-url="unref(app.backendBaseUrl)||'/v1'" /></el-form-item>
           <template v-if="knowledgeForm.provider === 'ragflow'">
             <el-form-item label="RAGFlow 地址" required>
               <el-input v-model="knowledgeForm.ragflowBaseUrl" placeholder="例如：http://localhost:9380" />
@@ -399,6 +401,7 @@ function formatSize(size: number) {
           <el-input-number v-model="ragLabForm.limit" :min="1" :max="12" :step="1" />
         </div>
         <el-input v-model="ragLabForm.query" type="textarea" :rows="4" resize="vertical" placeholder="输入真实用户问题，检查召回片段是否正确" />
+        <KnowledgeEmbeddingSelector v-if="ragLabForm.kbId&&knowledgeBases.find(k=>k.id===ragLabForm.kbId)?.provider==='native'" :key="ragLabForm.kbId" :kb-id="ragLabForm.kbId" :model-value="knowledgeBases.find(k=>k.id===ragLabForm.kbId)?.embeddingInstanceId||''" :base-url="unref(app.backendBaseUrl)||'/v1'" />
         <el-button type="primary" :loading="ragLabSearching" :disabled="!ragLabForm.kbId || !ragLabForm.query.trim()" @click="runRagLabSearch()">测试检索</el-button>
         <div class="rag-result-list">
           <div v-for="result in ragLabResults" :key="result.id" class="agent-resource-item rag-result-item">

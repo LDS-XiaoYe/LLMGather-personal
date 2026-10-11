@@ -96,3 +96,10 @@ test('task idempotency persists and rejects a changed payload',async()=>{
   await a.cancel(request.taskId);assert.equal(a.store.state.tasks[request.taskId].status,'CANCELLED');
   await fs.rm(root,{recursive:true});
 });
+test('Agent restart recovers RUNNING tasks and rejects a second live owner',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'llmgather-recovery-')),a=new DeploymentAgent(root);a.drain=async()=>{};await a.initialize();
+  a.store.state.tasks.t={status:'RUNNING',phase:'DOWNLOADING_MODEL',downloadedBytes:4};await a.store.save();
+  const duplicate=new DeploymentAgent(root);duplicate.drain=async()=>{};await assert.rejects(duplicate.initialize(),/live process/);
+  await a.close();const b=new DeploymentAgent(root);b.drain=async()=>{};await b.initialize();
+  assert.equal(b.store.state.tasks.t.status,'PENDING');assert.equal(b.store.state.tasks.t.downloadedBytes,4);await b.close();await fs.rm(root,{recursive:true});
+});

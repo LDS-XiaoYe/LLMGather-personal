@@ -2,6 +2,7 @@
 // @ts-nocheck
 import { computed as vueComputed, isRef, ref, unref } from 'vue';
 import type { PageMode } from '../../../types';
+import ModelServiceManagement from '../../ModelServiceManagement.vue';
 
 const props = defineProps<{ app: Record<string, any> }>();
 const app = props.app;
@@ -682,6 +683,7 @@ const getModelTags = bind(app, 'getModelTags');
 
             <!-- Page Settings Tab -->
             <el-tab-pane label="系统配置" name="settings">
+              <ModelServiceManagement v-if="adminTab==='settings'" :base-url="unref(app.backendBaseUrl)||'/v1'" />
               <el-table :data="adminSettings.filter((s: any) => s.key !== 'model_tier_mapping')" stripe size="small" class="admin-table">
                 <el-table-column prop="description" label="配置" min-width="250" />
                 <el-table-column prop="value" label="值" min-width="300">

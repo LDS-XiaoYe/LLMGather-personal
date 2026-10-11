@@ -20,10 +20,11 @@ export interface AgentInstance extends DeploymentConfig {
 export interface AgentTask {
   taskId: string; instanceId: string; status: string; phase: string; error?: string;
   downloadedBytes?: number; totalBytes?: number; source?: string; file?: string; cached?: boolean;
+  history?:{phase:string;status:string;at:string}[];
 }
 export interface AgentState {instances: Record<string, AgentInstance>; tasks: Record<string, AgentTask>}
 export interface AgentNode {id: string; hardware: Hardware}
-export interface NodeRow {id: string; name: string; base_url: string; token_cipher: string; status: string; hardware_json: string; last_seen: string}
+export interface NodeRow {id: string; name: string; base_url: string; token_cipher: string; status: string; hardware_json: string; last_seen: string; fresh?:number}
 export interface InstanceRow {
   id: string; node_id: string; model_id: string; config_json: string; spec_json: string | null;
   desired_state: string; actual_state: string; fingerprint: string | null; provider_registered: number;

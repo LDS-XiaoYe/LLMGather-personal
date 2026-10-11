@@ -152,7 +152,8 @@
       "arch": "amd64",
       "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c",
       "precision": "float32",
-      "verification": "cpu-image-tested; bge-m3-acceptance-pending"
+      "verification": "BGE-M3 CPU real 2x1024 and lifecycle passed; 1024-token truncation",
+      "maxInputTokens": 1024
     },
     {
       "backend": "nvidia",
@@ -174,7 +175,7 @@
       "image": "ghcr.io/huggingface/text-embeddings-inference:120-1.9@sha256:bd8e5b1954146f7fe8590b64b959bc194433c6c38c036592a84d736841ca9400",
       "precision": "float16",
       "experimental": true,
-      "verification": "official-experimental; rtx5070-acceptance-pending"
+      "verification": "RTX 5070 CC12.0 driver610.88 real CUDA 2x1024 and lifecycle passed; experimental"
     }
   ]
 }

@@ -1,0 +1,27 @@
+# Optional CPU node Agent. Business backend is NOT given the Docker socket.
+# Launch: docker compose --env-file deployment-agent/.env -f docker-compose.model-agent.yml up -d --build
+services:
+  model-agent:
+    build:
+      context: .
+      dockerfile: deployment-agent/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      AGENT_ID: ${AGENT_ID:?Set fixed AGENT_ID UUID}
+      AGENT_TOKEN: ${AGENT_TOKEN:?Set a random credential of at least 32 chars}
+      AGENT_CACHE_VOLUME: llmgather_model_cache
+      AGENT_HOST: 127.0.0.1
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODELSCOPE_TOKEN: ${MODELSCOPE_TOKEN:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,::1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - model_agent_state:/state
+      - model_cache:/state/cache
+volumes:
+  model_agent_state:
+  model_cache:
+    name: llmgather_model_cache

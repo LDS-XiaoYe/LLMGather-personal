@@ -17,9 +17,9 @@ class ModelRuntimeAdapter {
   }
   async embed(instance,input){
     const route=instance.backend==='apple'?'/v1/embeddings':'/v1/embeddings';
-    const response=await fetch(`http://127.0.0.1:${instance.port}${route}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:instance.modelId,input,encoding_format:'float'}),signal:AbortSignal.timeout(60000)});
+    const response=await fetch(`http://127.0.0.1:${instance.port}${route}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:instance.backend==='apple'?instance.modelId:'',input,encoding_format:'float'}),signal:AbortSignal.timeout(60000)});
     if(!response.ok)throw Error('Model inference HTTP '+response.status);
-    return response.json();
+    const result=await response.json();return{...result,model:instance.modelId,dimensions:registry.models.find(m=>m.id===instance.modelId).dimensions};
   }
 }
 class DockerRuntimeAdapter extends ModelRuntimeAdapter {
@@ -50,7 +50,7 @@ class DockerRuntimeAdapter extends ModelRuntimeAdapter {
     return args;
   }
   async deploy(instance,cache){
-    try{await this.owned(instance);return;}catch(e){if(e.message==='Managed container ownership mismatch')throw e;}
+    try{const existing=await this.owned(instance);if(existing.Config.Image!==instance.image)throw Error('Managed container runtime image mismatch');return;}catch(e){if(e.message.startsWith('Managed container'))throw e;}
     await this.run('docker',this.arguments(instance,cache));
   }
   async start(instance){await this.owned(instance);await this.run('docker',['start',this.name(instance)]);}
@@ -113,7 +113,7 @@ class AppleMetalRuntimeAdapter extends ModelRuntimeAdapter {
   }
   async deploy(instance,cache){
     const folder=inside(this.root,'launchd');await fs.mkdir(folder,{recursive:true});const logs=inside(this.root,'logs');await fs.mkdir(logs,{recursive:true});
-    const args=[this.python(),path.join(__dirname,'native','embedding_server.py'),'--model-path',cache.path,'--model-id',instance.modelId,'--port',String(instance.port)];
+    const args=[this.python(),path.join(__dirname,'native','embedding_server.py'),'--model-path',cache.path,'--model-id',instance.modelId,'--port',String(instance.port),'--memory-mib',String(instance.memoryMiB)];
     const body=`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${xml(this.label(instance))}</string><key>ProgramArguments</key><array>${args.map(a=>'<string>'+xml(a)+'</string>').join('')}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>${xml(inside(logs,instance.id+'.out'))}</string><key>StandardErrorPath</key><string>${xml(inside(logs,instance.id+'.err'))}</string><key>EnvironmentVariables</key><dict><key>HF_HUB_OFFLINE</key><string>1</string></dict></dict></plist>`;
     await fs.writeFile(this.plist(instance),body,{mode:0o600});
   }

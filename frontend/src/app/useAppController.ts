@@ -524,6 +524,7 @@ export function useAppController() {
     status: 'active' as 'active' | 'archived',
   });
   const knowledgeForm = ref({
+    embeddingInstanceId:'',
     name: '',
     description: '',
     provider: 'native' as 'native' | 'ragflow',
@@ -3015,13 +3016,14 @@ export function useAppController() {
         name,
         description: knowledgeForm.value.description.trim(),
         provider: knowledgeForm.value.provider,
+        embeddingInstanceId: knowledgeForm.value.embeddingInstanceId || undefined,
         ragflowBaseUrl: knowledgeForm.value.ragflowBaseUrl.trim(),
         ragflowApiKey: knowledgeForm.value.ragflowApiKey.trim(),
         ragflowDatasetId: knowledgeForm.value.ragflowDatasetId.trim(),
       }, backendBaseUrl.value);
       knowledgeBases.value = [kb, ...knowledgeBases.value.filter((item) => item.id !== kb.id)];
       knowledgeDocForm.value.kbId = kb.id;
-      knowledgeForm.value = { name: '', description: '', provider: 'native', ragflowBaseUrl: '', ragflowApiKey: '', ragflowDatasetId: '' };
+      knowledgeForm.value = { name: '', description: '', provider: 'native', embeddingInstanceId:'', ragflowBaseUrl: '', ragflowApiKey: '', ragflowDatasetId: '' };
       status.value = '知识库已创建';
     } catch (error) {
       status.value = error instanceof Error ? error.message : '创建知识库失败';

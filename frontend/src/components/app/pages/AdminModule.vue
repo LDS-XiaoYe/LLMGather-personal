@@ -1,8 +1,12 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, ref, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 import ModelServiceManagement from '../../ModelServiceManagement.vue';
+import BailianModelSync from '../../BailianModelSync.vue';
+import { fetchPageModels } from '../../../api';
+import { ElMessage } from 'element-plus';
 
 const props = defineProps<{ app: Record<string, any> }>();
 const app = props.app;
@@ -20,6 +24,7 @@ const Delete = bind(app, 'Delete');
 const EditPen = bind(app, 'EditPen');
 const MoreFilled = bind(app, 'MoreFilled');
 const Plus = bind(app, 'Plus');
+const Refresh = bind(app, 'Refresh');
 const Search = bind(app, 'Search');
 const Setting = bind(app, 'Setting');
 const TrendCharts = bind(app, 'TrendCharts');
@@ -61,6 +66,9 @@ const adminBillingToDate = bind(app, 'adminBillingToDate');
 const adminProviderKeyCounts = bind(app, 'adminProviderKeyCounts');
 const adminApiKeyProviderFilter = bind(app, 'adminApiKeyProviderFilter');
 const adminSettings = bind(app, 'adminSettings');
+const adminSettingSaving = bind(app, 'adminSettingSaving');
+const adminSettingsLoading = bind(app, 'adminSettingsLoading');
+const adminSettingsError = bind(app, 'adminSettingsError');
 const adminEditSettingDialog = bind(app, 'adminEditSettingDialog');
 const adminEditSettingKey = bind(app, 'adminEditSettingKey');
 const adminEditSettingValue = bind(app, 'adminEditSettingValue');
@@ -106,6 +114,8 @@ const openAddProviderKey = bind(app, 'openAddProviderKey');
 const saveAddProviderKey = bind(app, 'saveAddProviderKey');
 const deleteProviderKey = bind(app, 'deleteProviderKey');
 const loadAdminProviderConfigs = bind(app, 'loadAdminProviderConfigs');
+const backendBaseUrl = bind(app, 'backendBaseUrl');
+const pageModelsConfig = bind(app, 'pageModelsConfig');
 const openAddConfig = bind(app, 'openAddConfig');
 const openEditConfig = bind(app, 'openEditConfig');
 const saveConfig = bind(app, 'saveConfig');
@@ -161,6 +171,8 @@ const tierTagType = bind(app, 'tierTagType');
 const defaultPricePrompt = bind(app, 'defaultPricePrompt');
 const defaultPriceCompletion = bind(app, 'defaultPriceCompletion');
 const adminDefaultPromptPrice = bind(app, 'adminDefaultPromptPrice');
+const adminDefaultPricesReady = bind(app, 'adminDefaultPricesReady');
+const adminDefaultPricesSaving = bind(app, 'adminDefaultPricesSaving');
 const adminDefaultCompletionPrice = bind(app, 'adminDefaultCompletionPrice');
 const initDefaultPriceFields = bind(app, 'initDefaultPriceFields');
 const saveDefaultPrices = bind(app, 'saveDefaultPrices');
@@ -178,15 +190,18 @@ const saveAdminRouterRule = bind(app, 'saveAdminRouterRule');
 const deleteAdminRouterRule = bind(app, 'deleteAdminRouterRule');
 const loadAdminDailyUsage = bind(app, 'loadAdminDailyUsage');
 const getModelTags = bind(app, 'getModelTags');
+async function refreshAfterBailianSync() {
+  await Promise.all([
+    loadAdminProviderConfigs.value(), loadAdminProviderKeyCounts.value(), loadModels.value(),
+    loadAdminSettings.value(), loadAdminModelTiers.value(),
+  ]);
+  try { pageModelsConfig.value = await fetchPageModels(backendBaseUrl.value); }
+  catch { ElMessage.warning('模型已同步，页面能力标签刷新失败，请刷新页面'); }
+}
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left"><strong>管理后台</strong></div>
-          <div class="header-right">
-            <el-tag v-if="isAdmin" type="warning" effect="dark">管理员</el-tag>
-          </div>
-        </div>
+        <WorkspaceHeader title="管理后台" :app="app"></WorkspaceHeader>
 
         <div class="admin-page-content">
           <el-tabs v-model="adminTab" @tab-change="(tab: string | number) => {
@@ -202,78 +217,18 @@ const getModelTags = bind(app, 'getModelTags');
           }">
             <!-- Dashboard Tab -->
             <el-tab-pane label="概览" name="dashboard">
-              <div class="admin-stats-grid">
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#eff6ff"><el-icon :size="22" color="#3b82f6"><UserFilled /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminStats ? adminStats.totalUsers : '—' }}</div>
-                    <div class="admin-stat-label">用户总数</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#f0fdf4"><el-icon :size="22" color="#22c55e"><Plus /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminStats ? adminStats.newUsersToday : '—' }}</div>
-                    <div class="admin-stat-label">今日新增</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#fef3c7"><el-icon :size="22" color="#f59e0b"><Coin /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminStats ? '¥' + adminStats.totalRevenue.toFixed(2) : '—' }}</div>
-                    <div class="admin-stat-label">总收入</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#faf5ff"><el-icon :size="22" color="#a855f7"><TrendCharts /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminStats ? adminStats.totalRequests : '—' }}</div>
-                    <div class="admin-stat-label">请求总数</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#fff1f2"><el-icon :size="22" color="#f43f5e"><Cpu /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminStats ? adminStats.activeModels : '—' }}</div>
-                    <div class="admin-stat-label">活跃模型</div>
-                  </div>
-                </div>
-              </div>
+              <div class="admin-dashboard">
+              <div class="admin-stats-grid ui-overview-stats">
+<div class="admin-stat-card"><div class="admin-stat-body"><div class="admin-stat-label">用户总数</div><div class="admin-stat-value">{{ adminStats?.totalUsers ?? '—' }}</div><div class="ui-metric-note">今日新增 {{ adminStats?.newUsersToday ?? '—' }}</div></div></div>
+<div class="admin-stat-card"><div class="admin-stat-body"><div class="admin-stat-label">总收入</div><div class="admin-stat-value">{{ adminStats ? '¥' + adminStats.totalRevenue.toFixed(2) : '—' }}</div><div class="ui-metric-note">今日收入 {{ adminTodayStats ? '¥' + adminTodayStats.revenue.toFixed(4) : '—' }}</div></div></div>
+<div class="admin-stat-card"><div class="admin-stat-body"><div class="admin-stat-label">请求总数</div><div class="admin-stat-value">{{ adminStats?.totalRequests ?? '—' }}</div><div class="ui-metric-note">今日请求 {{ adminTodayStats?.requests ?? '—' }}</div></div></div>
+<div class="admin-stat-card"><div class="admin-stat-body"><div class="admin-stat-label">总 Token 数</div><div class="admin-stat-value">{{ adminStats ? adminStats.totalTokens.toLocaleString() : '—' }}</div><div class="ui-metric-note">今日 Token {{ adminTodayStats ? adminTodayStats.tokens.toLocaleString() : '—' }}</div></div></div>
+<div class="admin-stat-card"><div class="admin-stat-body"><div class="admin-stat-label">活跃模型</div><div class="admin-stat-value">{{ adminStats?.activeModels ?? '—' }}</div></div></div>
+</div>
 
-              <div class="admin-stats-grid" style="margin-top:12px">
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#ecfdf5"><el-icon :size="22" color="#10b981"><Coin /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminTodayStats ? '¥' + adminTodayStats.revenue.toFixed(4) : '—' }}</div>
-                    <div class="admin-stat-label">今日收入</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#f0f9ff"><el-icon :size="22" color="#0ea5e9"><TrendCharts /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminTodayStats ? adminTodayStats.requests : '—' }}</div>
-                    <div class="admin-stat-label">今日请求</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#fdf4ff"><el-icon :size="22" color="#d946ef"><Cpu /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminStats ? adminStats.totalTokens.toLocaleString() : '—' }}</div>
-                    <div class="admin-stat-label">总 Token 数</div>
-                  </div>
-                </div>
-                <div class="admin-stat-card">
-                  <div class="admin-stat-icon" style="background:#fefce8"><el-icon :size="22" color="#eab308"><TrendCharts /></el-icon></div>
-                  <div class="admin-stat-body">
-                    <div class="admin-stat-value">{{ adminTodayStats ? adminTodayStats.tokens.toLocaleString() : '—' }}</div>
-                    <div class="admin-stat-label">今日 Token</div>
-                  </div>
-                </div>
-              </div>
-
-              <el-card shadow="never" class="admin-chart-card">
+<el-card shadow="never" class="admin-chart-card">
                 <template #header>
-                  <div style="display:flex;align-items:center;justify-content:space-between">
+                  <div class="admin-chart-heading">
                     <span style="font-weight:600">用量趋势</span>
                     <el-segmented
                       :model-value="String(adminChartDays)"
@@ -296,6 +251,7 @@ const getModelTags = bind(app, 'getModelTags');
                 <div v-if="adminModelUsage.length > 0" id="admin-model-chart" style="width:100%;height:320px"></div>
                 <el-empty v-else description="暂无模型用量数据" :image-size="48" style="padding:40px 0" />
               </el-card>
+              </div>
             </el-tab-pane>
 
             <!-- Users Tab -->
@@ -446,8 +402,9 @@ const getModelTags = bind(app, 'getModelTags');
 
             <!-- Provider Config Tab -->
             <el-tab-pane label="服务商" name="providers">
-              <div style="margin-bottom: 16px">
+              <div style="margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 8px">
                 <el-button type="primary" :icon="Plus" @click="openAddConfig()">添加服务商</el-button>
+                <BailianModelSync :base-url="backendBaseUrl" :configs="adminProviderConfigs" @synced="refreshAfterBailianSync" />
               </div>
               <el-table :data="adminProviderConfigs" stripe size="small" class="admin-table" empty-text="暂无服务商配置">
                 <el-table-column prop="displayName" label="名称" min-width="140" />
@@ -676,15 +633,19 @@ const getModelTags = bind(app, 'getModelTags');
                     <div style="font-size:12px;color:#909399;margin-bottom:4px">输出价格（元/千token）</div>
                     <el-input-number v-model="adminDefaultCompletionPrice" :min="0" :step="0.001" :precision="4" style="width:180px" size="small" />
                   </div>
-                  <el-button type="primary" size="small" @click="saveDefaultPrices()">保存默认价格</el-button>
+                  <el-button type="primary" size="small" :disabled="!adminDefaultPricesReady" :loading="adminDefaultPricesSaving" @click="saveDefaultPrices()">保存默认价格</el-button>
                 </div>
               </el-card>
             </el-tab-pane>
 
+            <el-tab-pane label="知识库模型" name="knowledge-models" lazy>
+              <ModelServiceManagement v-if="adminTab==='knowledge-models'" :base-url="unref(app.backendBaseUrl)||'/v1'" />
+            </el-tab-pane>
+
             <!-- Page Settings Tab -->
             <el-tab-pane label="系统配置" name="settings">
-              <ModelServiceManagement v-if="adminTab==='settings'" :base-url="unref(app.backendBaseUrl)||'/v1'" />
-              <el-table :data="adminSettings.filter((s: any) => s.key !== 'model_tier_mapping')" stripe size="small" class="admin-table">
+              <el-alert v-if="adminSettingsError" :title="adminSettingsError" type="error" :closable="false" style="margin-bottom:12px" />
+              <el-table v-loading="adminSettingsLoading" :data="adminSettings.filter((s: any) => s.key !== 'model_tier_mapping')" stripe size="small" class="admin-table">
                 <el-table-column prop="description" label="配置" min-width="250" />
                 <el-table-column prop="value" label="值" min-width="300">
                   <template #default="{ row }">
@@ -780,7 +741,7 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-input v-model="adminCreateUserForm.email" placeholder="请输入邮箱" />
               </el-form-item>
               <el-form-item label="密码">
-                <el-input v-model="adminCreateUserForm.password" type="password" show-password placeholder="至少 4 位" />
+                <el-input v-model="adminCreateUserForm.password" type="password" show-password placeholder="至少 8 位" />
               </el-form-item>
               <el-form-item label="余额 (元)">
                 <el-input-number v-model="adminCreateUserForm.credits" :min="0" :precision="4" :step="1" style="width: 100%" />
@@ -886,7 +847,7 @@ const getModelTags = bind(app, 'getModelTags');
                 <el-input :model-value="adminResetPwdUsername" disabled />
               </el-form-item>
               <el-form-item label="新密码">
-                <el-input v-model="adminResetPwdValue" type="password" show-password placeholder="输入新密码（至少 4 位）" />
+                <el-input v-model="adminResetPwdValue" type="password" show-password placeholder="输入新密码（至少 8 位）" />
               </el-form-item>
             </el-form>
             <template #footer>
@@ -896,8 +857,9 @@ const getModelTags = bind(app, 'getModelTags');
           </el-dialog>
 
           <!-- Edit Setting Dialog -->
-          <el-dialog v-model="adminEditSettingDialog" title="编辑配置" :width="adminEditSettingKey === 'model_tags' ? '720px' : '600px'">
-            <el-form label-position="top">
+          <el-dialog v-model="adminEditSettingDialog" title="编辑配置" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="!adminSettingSaving" :width="adminEditSettingKey === 'model_tags' ? '720px' : '600px'">
+            <el-alert v-if="adminSettingsError" :title="adminSettingsError" type="error" :closable="false" style="margin-bottom:12px" />
+            <el-form label-position="top" :disabled="adminSettingSaving">
               <el-form-item label="配置键">
                 <el-input :model-value="adminEditSettingKey" disabled />
               </el-form-item>
@@ -959,8 +921,8 @@ const getModelTags = bind(app, 'getModelTags');
               </el-form-item>
             </el-form>
             <template #footer>
-              <el-button @click="adminEditSettingDialog = false">取消</el-button>
-              <el-button type="primary" @click="saveEditSetting()">保存</el-button>
+              <el-button :disabled="adminSettingSaving" @click="adminEditSettingDialog = false">取消</el-button>
+              <el-button type="primary" :loading="adminSettingSaving" @click="saveEditSetting()">保存</el-button>
             </template>
           </el-dialog>
 

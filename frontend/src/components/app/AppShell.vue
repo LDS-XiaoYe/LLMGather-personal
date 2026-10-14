@@ -1,6 +1,10 @@
 <script setup lang="ts">
 // @ts-nocheck
-import { computed as vueComputed, isRef, unref } from 'vue';
+import { computed as vueComputed, isRef, unref, ref, watch } from 'vue';
+import WorkspaceNavigation from '../ui/WorkspaceNavigation.vue';
+import WorkspaceSessions from '../ui/WorkspaceSessions.vue';
+import WorkspaceAccount from '../ui/WorkspaceAccount.vue';
+import { Menu, QuestionFilled } from '@element-plus/icons-vue';
 import type { PageMode } from '../../types';
 import ChatModule from './pages/ChatModule.vue';
 import AgentModule from './pages/AgentModule.vue';
@@ -19,6 +23,9 @@ import AdminModule from './pages/AdminModule.vue';
 
 const props = defineProps<{ app: Record<string, any> }>();
 const app = props.app;
+const mobileNavigationOpen = ref(false);
+watch(() => unref(app.pageMode), () => { mobileNavigationOpen.value = false; });
+function openPreferences() { mobileNavigationOpen.value = false; if (isRef(app.isSettingsOpen)) app.isSettingsOpen.value = true; else app.isSettingsOpen = true; }
 const bind = (target: Record<string, any>, key: string) => vueComputed({
   get: () => unref(target[key]),
   set: (value) => {
@@ -45,7 +52,6 @@ const UserFilled = bind(app, 'UserFilled');
 const VideoCamera = bind(app, 'VideoCamera');
 const MagicStick = bind(app, 'MagicStick');
 const theme = bind(app, 'theme');
-const chatThinkingMode = bind(app, 'chatThinkingMode');
 const menuBgColor = bind(app, 'menuBgColor');
 const menuTextColor = bind(app, 'menuTextColor');
 const menuActiveColor = bind(app, 'menuActiveColor');
@@ -55,6 +61,7 @@ const isAuthenticated = bind(app, 'isAuthenticated');
 const authMode = bind(app, 'authMode');
 const authUsername = bind(app, 'authUsername');
 const authPassword = bind(app, 'authPassword');
+const authRememberMe = bind(app, 'authRememberMe');
 const authEmail = bind(app, 'authEmail');
 const authVerificationCode = bind(app, 'authVerificationCode');
 const authInvitationCode = bind(app, 'authInvitationCode');
@@ -82,7 +89,6 @@ const settingsMemoryLoading = bind(app, 'settingsMemoryLoading');
 const settingsMemorySaving = bind(app, 'settingsMemorySaving');
 const settingsMemoryForm = bind(app, 'settingsMemoryForm');
 const memoryTypeOptions = bind(app, 'memoryTypeOptions');
-const memoryProviderInfo = bind(app, 'memoryProviderInfo');
 const sessions = bind(app, 'sessions');
 const activeSessionId = bind(app, 'activeSessionId');
 const pageMode = bind(app, 'pageMode');
@@ -109,7 +115,7 @@ const switchPage = bind(app, 'switchPage');
 </script>
 
 <template>
-  <el-container class="app-container">
+  <el-container class="app-container" :class="{'knowledge-shell': pageMode === 'rag'}">
     <!-- ====== SIDEBAR ====== -->
     <el-aside width="270px" class="app-aside">
       <div class="aside-logo">
@@ -117,190 +123,26 @@ const switchPage = bind(app, 'switchPage');
         <span>LLM Gather</span>
       </div>
 
-      <el-menu
-        :default-active="pageMode"
-        @select="(key: string | number) => switchPage(key as PageMode)"
-        class="aside-menu"
-        :background-color="menuBgColor"
-        :text-color="menuTextColor"
-        :active-text-color="menuActiveColor"
-      >
-        <el-menu-item index="chat">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>聊天</span>
-        </el-menu-item>
-        <el-menu-item index="agent">
-          <el-icon><Star /></el-icon>
-          <span>Agent 工作台</span>
-        </el-menu-item>
-        <el-menu-item index="rag">
-          <el-icon><Document /></el-icon>
-          <span>知识库</span>
-        </el-menu-item>
-        <el-sub-menu index="toolbox">
-          <template #title>
-            <el-icon><MagicStick /></el-icon>
-            <span>玩具箱</span>
-          </template>
-          <el-menu-item index="battle">
-            <el-icon><Lightning /></el-icon>
-            <span>对战</span>
-          </el-menu-item>
-          <el-menu-item index="group">
-            <el-icon><UserFilled /></el-icon>
-            <span>群组</span>
-          </el-menu-item>
-          <el-menu-item index="collab">
-            <el-icon><TrendCharts /></el-icon>
-            <span>协同推理</span>
-          </el-menu-item>
-          <el-menu-item index="tts">
-            <el-icon><Headset /></el-icon>
-            <span>语音生成</span>
-          </el-menu-item>
-          <el-menu-item index="multimodal">
-            <el-icon><PictureFilled /></el-icon>
-            <span>全模态 Beta</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-menu-item index="console">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>控制台</span>
-        </el-menu-item>
-        <el-menu-item index="api">
-          <el-icon><Document /></el-icon>
-          <span>API 用法</span>
-        </el-menu-item>
-        <el-menu-item v-if="isAdmin" index="admin">
-          <el-icon><Setting /></el-icon>
-          <span>管理后台</span>
-        </el-menu-item>
-      </el-menu>
-
-      <!-- Session list (chat only) -->
-      <div v-if="pageMode === 'chat'" class="aside-sessions">
-        <el-button type="primary" plain :icon="Plus" @click="createNewChat" class="new-chat-btn">新建对话</el-button>
-        <el-scrollbar class="session-list">
-          <div
-            v-for="session in sidebarSessions"
-            :key="session.id"
-            class="session-item"
-            :class="{ active: session.id === activeSessionId }"
-            @click="activeSessionId = session.id"
-          >
-            <el-icon :size="14"><Document /></el-icon>
-            <span class="session-title">{{ session.title }}</span>
-            <el-dropdown trigger="click" class="session-menu" @command="(cmd: string | number) => { if (cmd === 'delete') handleSoftDeleteSession(session.id); }" @click.stop>
-              <el-icon :size="14" class="session-menu-icon"><MoreFilled /></el-icon>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="delete" style="color: #ef4444">
-                    <el-icon><Delete /></el-icon> 删除会话
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-        </el-scrollbar>
-      </div>
-      <div v-else-if="pageMode === 'agent'" class="aside-sessions">
-        <el-button type="primary" plain :icon="Plus" @click="createAgentDraft" class="new-chat-btn">新建 Agent</el-button>
-        <el-scrollbar class="session-list">
-          <div
-            v-for="agent in agents"
-            :key="agent.id"
-            class="session-item"
-            :class="{ active: agent.id === activeAgentId }"
-            @click="selectAgent(agent)"
-          >
-            <el-icon :size="14"><Star /></el-icon>
-            <span class="session-title">{{ agent.name }}</span>
-            <el-tag v-if="agent.runCount > 0" size="small" type="info">{{ agent.runCount }}</el-tag>
-            <el-dropdown trigger="click" class="session-menu" @command="(cmd: string | number) => { if (cmd === 'delete') removeAgent(agent); }" @click.stop>
-              <el-icon :size="14" class="session-menu-icon"><MoreFilled /></el-icon>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="delete" style="color: #ef4444">
-                    <el-icon><Delete /></el-icon> 删除 Agent
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-          <el-empty v-if="!agentLoading && agents.length === 0" description="还没有 Agent" :image-size="64" />
-        </el-scrollbar>
-      </div>
-      <div v-else-if="pageMode === 'rag'" class="aside-hint">
-        <el-empty description="管理知识库、写入文档、测试 RAG 检索，再绑定给 Agent。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #2563eb"><Document /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-
-      <!-- Hints -->
-      <div v-else-if="pageMode === 'battle'" class="aside-hint">
-        <el-empty description="指定两个模型并发回答，或留空随机选择。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #2563eb"><Lightning /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else-if="pageMode === 'console'" class="aside-hint">
-        <el-empty description="查看账户余额、充值、计费规则和用量明细。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #6366f1"><DataAnalysis /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else-if="pageMode === 'api'" class="aside-hint">
-        <el-empty description="创建 API Key，查看中转接口用法和示例代码。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #059669"><Document /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else-if="pageMode === 'admin'" class="aside-hint">
-        <el-empty description="管理用户、定价映射，查看平台数据统计。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #f59e0b"><TrendCharts /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else-if="pageMode === 'vision'" class="aside-hint">
-        <el-empty description="上传图片，使用视觉模型进行理解和问答。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #8b5cf6"><Cpu /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else-if="pageMode === 'tts'" class="aside-hint">
-        <el-empty description="输入文本，选择音色和风格，生成语音并试听。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #ec4899"><ChatDotRound /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else-if="pageMode === 'multimodal'" class="aside-hint">
-        <el-empty description="视频理解、自动驾驶仿真、图文检索与多模态对话。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #8b5cf6"><VideoCamera /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-      <div v-else class="aside-hint">
-        <el-empty description="所有 AI 将逐个回复，后面的 AI 可以看到前面的讨论。" :image-size="72">
-          <template #image>
-            <el-icon :size="36" style="color: #0ea5e9"><UserFilled /></el-icon>
-          </template>
-        </el-empty>
-      </div>
-
-      <div class="aside-bottom">
-        <el-button text :icon="Setting" @click="isSettingsOpen = true" class="settings-btn">设置</el-button>
+      <WorkspaceNavigation :app="app" />
+      <WorkspaceSessions :app="app" />
+      <div class="ui-sidebar-footer">
+        <div class="aside-bottom">
+          <el-button text :icon="QuestionFilled" :class="{ 'is-current': pageMode === 'docs' }" :aria-current="pageMode === 'docs' ? 'page' : undefined" @click="switchPage('docs')" class="settings-btn">功能说明</el-button>
+          <el-button text :icon="Setting" @click="isSettingsOpen = true" class="settings-btn">设置</el-button>
+        </div>
+        <WorkspaceAccount :app="app" />
       </div>
     </el-aside>
 
+    <el-button class="ui-mobile-menu" :icon="Menu" aria-label="打开导航" aria-controls="mobile-workspace-nav" :aria-expanded="mobileNavigationOpen" @click="mobileNavigationOpen = true" />
+    <el-drawer id="mobile-workspace-nav" v-model="mobileNavigationOpen" direction="ltr" size="min(320px, 90vw)" title="导航" class="ui-navigation-drawer">
+      <WorkspaceNavigation :app="app" @navigate="mobileNavigationOpen = false" />
+      <WorkspaceSessions :app="app" @navigate="mobileNavigationOpen = false" />
+      <div class="ui-sidebar-footer">
+        <div class="aside-bottom"><el-button text :icon="QuestionFilled" :class="{ 'is-current': pageMode === 'docs' }" :aria-current="pageMode === 'docs' ? 'page' : undefined" @click="switchPage('docs'); mobileNavigationOpen = false">功能说明</el-button><el-button text :icon="Setting" @click="openPreferences">设置</el-button></div>
+        <WorkspaceAccount :app="app" @navigate="mobileNavigationOpen = false" />
+      </div>
+    </el-drawer>
     <!-- ====== MAIN CONTENT ====== -->
     <el-main class="app-main">
 
@@ -365,31 +207,35 @@ const switchPage = bind(app, 'switchPage');
         <div class="settings-section-head">
           <strong>记忆管理</strong>
           <div>
-            <el-tag v-if="memoryProviderInfo" size="small" type="info" style="margin-right:8px">
-              {{ memoryProviderInfo.active === 'langgraph' ? 'LangGraph Memory' : '本地记忆' }}
-            </el-tag>
             <el-button size="small" :loading="settingsMemoryLoading" @click="loadSettingsMemories()">刷新</el-button>
             <el-button size="small" type="danger" plain :disabled="!settingsMemories.length" @click="forgetAllSettingsMemories()">忘记所有</el-button>
           </div>
         </div>
         <el-empty v-if="!isAuthenticated" description="登录后管理记忆" :image-size="48" />
         <template v-else>
-          <el-form-item label="新增记忆">
+          <p class="ui-muted">聊天会按相关性和重要程度引用用户级记忆；Agent 专属记忆仅供对应 Agent 使用。</p>
+          <el-form-item label="新增用户级记忆">
             <el-input v-model="settingsMemoryForm.content" type="textarea" :rows="3" placeholder="写入一条长期记忆" />
           </el-form-item>
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-            <el-select v-model="settingsMemoryForm.memoryType" size="small" style="width:130px">
-              <el-option v-for="item in memoryTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-input-number v-model="settingsMemoryForm.importance" size="small" :min="1" :max="5" />
+          <div class="settings-memory-options">
+            <el-form-item label="记忆类型">
+              <el-select v-model="settingsMemoryForm.memoryType" size="small" aria-label="记忆类型">
+                <el-option v-for="item in memoryTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="重要程度">
+              <el-input-number v-model="settingsMemoryForm.importance" size="small" :min="1" :max="5" :step="1" step-strictly :precision="0" controls-position="right" aria-label="记忆重要程度" aria-describedby="settings-memory-importance-help" />
+            </el-form-item>
             <el-button size="small" type="primary" :loading="settingsMemorySaving" :disabled="!settingsMemoryForm.content.trim()" @click="createSettingsMemory()">新增</el-button>
           </div>
+          <p id="settings-memory-importance-help" class="ui-muted settings-memory-help">重要程度 1–5，默认 3；数值越大，引用优先级越高。</p>
           <div v-loading="settingsMemoryLoading" class="settings-memory-list">
             <el-empty v-if="!settingsMemories.length" description="暂无记忆" :image-size="48" />
             <div v-for="memory in settingsMemories" :key="memory.id" class="settings-memory-item">
               <div class="settings-memory-meta">
                 <el-tag size="small" type="info">{{ memory.memoryType }}</el-tag>
-                <el-tag v-if="memory.agentId" size="small" type="success">Agent</el-tag>
+                <el-tag v-if="memory.agentId" size="small" type="success">Agent 专属</el-tag>
+                <el-tag v-else size="small" type="info">用户级 · 聊天可用</el-tag>
                 <span>重要性 {{ memory.importance }}</span>
               </div>
               <div class="settings-memory-content">{{ memory.content }}</div>
@@ -414,6 +260,12 @@ const switchPage = bind(app, 'switchPage');
         </el-form-item>
         <el-form-item label="密码">
           <el-input v-model="authPassword" type="password" show-password placeholder="输入密码" @keyup.enter="submitAuth()" />
+        </el-form-item>
+        <el-form-item v-if="authMode === 'login'">
+          <div>
+            <el-checkbox v-model="authRememberMe" :disabled="authLoading">30 天内保持登录</el-checkbox>
+            <div class="auth-remember-note" style="font-size:12px;line-height:1.5;color:var(--el-text-color-secondary)">仅在个人设备上勾选；公共设备请取消勾选并在使用后退出。</div>
+          </div>
         </el-form-item>
         <el-form-item v-if="authMode === 'register'" label="邮箱">
           <el-input v-model="authEmail" placeholder="输入邮箱地址" />

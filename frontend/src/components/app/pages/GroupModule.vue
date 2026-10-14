@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -46,34 +47,11 @@ const copyToClipboard = bind(app, 'copyToClipboard');
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left">
-            <el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button>
-          </div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-            <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-            <el-dropdown v-else trigger="click" @command="handleUserMenu">
-              <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                  <el-dropdown-item v-if="userInvitationCode" disabled>
-                    <span style="color:#666;">邀请码：{{ userInvitationCode }}</span>
-                    <el-button size="small" style="margin-left:8px" @click.stop="copyToClipboard(userInvitationCode)">复制</el-button>
-                  </el-dropdown-item>
-                  <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-tag :type="isGrouping ? undefined : 'success'">{{ isGrouping ? '群聊进行中...' : `${groupModelList.length} 个参与模型` }}</el-tag>
-            </template>
-          </div>
-        </div>
+        <WorkspaceHeader title="群组" :app="app"><el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button></WorkspaceHeader>
 
         <div ref="groupThreadRef" class="thread group-thread">
           <div v-if="groupMessages.length === 0" class="group-empty">
-            <el-empty description="输入消息，AI 们将依次讨论回复。" :image-size="96">
+            <el-empty description="输入一个主题，参与模型将依次回复并参考前文。" :image-size="96">
               <template #image>
                 <el-icon :size="44" style="color: #0ea5e9"><UserFilled /></el-icon>
               </template>
@@ -119,7 +97,7 @@ const copyToClipboard = bind(app, 'copyToClipboard');
               type="textarea"
               :rows="3"
               resize="vertical"
-              placeholder="输入消息，所有模型将逐个回复"
+              placeholder="输入讨论主题"
               :disabled="isGrouping"
               @keydown.enter.exact.prevent="startGroupChat()"
               @compositionstart="isComposing = true"
@@ -127,7 +105,7 @@ const copyToClipboard = bind(app, 'copyToClipboard');
             />
             <div class="composer-bar">
               <div class="composer-meta">
-                <el-text type="info" size="small">{{ models.length }} 个模型</el-text>
+                <el-text type="info" size="small">{{ groupModelList.length }} 个参与模型</el-text>
               </div>
               <div class="composer-actions">
                 <el-button :icon="Delete" @click="clearGroupChat()">清空</el-button>

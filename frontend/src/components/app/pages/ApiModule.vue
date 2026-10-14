@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -38,27 +39,7 @@ const copyToClipboard = bind(app, 'copyToClipboard');
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left"><strong>API 用法</strong></div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-            <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-            <el-dropdown v-else trigger="click" @command="handleUserMenu">
-              <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                  <el-dropdown-item v-if="userInvitationCode" disabled>
-                    <span style="color:#666;">邀请码：{{ userInvitationCode }}</span>
-                    <el-button size="small" style="margin-left:8px" @click.stop="copyToClipboard(userInvitationCode)">复制</el-button>
-                  </el-dropdown-item>
-                  <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            </template>
-          </div>
-        </div>
+        <WorkspaceHeader title="API 用法" :app="app"></WorkspaceHeader>
 
         <div class="api-docs-page">
           <el-card shadow="never" class="api-section">
@@ -70,11 +51,12 @@ const copyToClipboard = bind(app, 'copyToClipboard');
             </template>
             <el-alert v-if="isAuthLoaded && !isAuthenticated" type="warning" :closable="false" show-icon title="请先登录以管理 API Key" />
             <template v-else>
+              <p v-if="apiKeys.some((key: any) => !key.fullKey)" class="ui-muted">完整 Key 仅创建时显示，已有 Key 只展示前缀。</p>
               <el-table :data="apiKeys" stripe size="small" v-if="apiKeys.length > 0">
                 <el-table-column label="Key" min-width="320">
                   <template #default="{ row }">
                     <code style="font-size:12px;word-break:break-all">{{ row.maskedKey }}</code>
-                    <el-button size="small" text type="primary" @click="copyToClipboard(row.fullKey || row.maskedKey)">复制</el-button>
+                    <el-button size="small" text type="primary" @click="copyToClipboard(row.fullKey)" :disabled="!row.fullKey" :title="row.fullKey ? '复制完整 Key' : '完整 Key 仅创建时显示'">复制</el-button>
                   </template>
                 </el-table-column>
                 <el-table-column prop="name" label="名称" width="140" />
@@ -101,18 +83,6 @@ const copyToClipboard = bind(app, 'copyToClipboard');
               <div class="api-info-item"><span class="api-info-label">Base URL</span><code class="api-info-value">{{ apiBaseUrl }}</code></div>
               <div class="api-info-item"><span class="api-info-label">认证方式</span><span class="api-info-value">Header <code>Authorization: Bearer sk-xxxx</code></span></div>
               <div class="api-info-item"><span class="api-info-label">API Key</span><span class="api-info-value">上方创建的 Key，以 <code>sk-</code> 开头，可替代 JWT Token 用于中转接口</span></div>
-            </div>
-          </el-card>
-
-          <el-card shadow="never" class="api-section">
-            <template #header><strong>接口索引</strong></template>
-            <div class="api-index-grid">
-              <a href="#api-chat">模型与聊天</a>
-              <a href="#api-agent">Agent</a>
-              <a href="#api-capabilities">能力资源</a>
-              <a href="#api-orchestration">编排协作</a>
-              <a href="#api-account">账户与计费</a>
-              <a href="#api-admin">管理接口</a>
             </div>
           </el-card>
 
@@ -145,10 +115,8 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)</pre>
           </el-card>
 
-          <el-card id="api-agent" shadow="never" class="api-section">
-            <template #header>
-              <div style="display:flex;align-items:center;gap:8px"><strong>Agent API</strong><el-tag size="small" type="primary">开发 / 调用</el-tag></div>
-            </template>
+          <details class="ui-doc-section" id="api-agent"><summary>Agent API</summary><el-card shadow="never" class="api-section">
+
             <div class="api-sub-title">开发管理接口使用登录 JWT；调用接口支持 API Key；公开调用不需要认证，但 Agent 必须开启公开发布和 API 接入。</div>
             <div class="api-sub-title">Agent 运行参数支持 <code>mode</code>、<code>contextStrategy</code>、<code>maxSteps</code>、<code>retryPolicy</code>、<code>approvedToolIds</code>。</div>
             <div class="api-endpoint">GET /v1/agents</div>
@@ -315,12 +283,10 @@ curl {{ apiBaseUrl }}/agents/marketplace/install \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-jwt-token" \
   -d '{"templateId":"template-id","model":"glm-5.1"}'</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card shadow="never" class="api-section">
-            <template #header>
-              <div style="display:flex;align-items:center;gap:8px"><strong>Anthropic 兼容接口</strong><el-tag size="small" type="warning">POST</el-tag></div>
-            </template>
+          <details class="ui-doc-section"><summary>Anthropic 兼容接口</summary><el-card shadow="never" class="api-section">
+
             <div class="api-endpoint">POST /v1/relay/anthropic/messages</div>
             <div class="api-sub-title">cURL 示例</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/relay/anthropic/messages \
@@ -331,10 +297,10 @@ curl {{ apiBaseUrl }}/agents/marketplace/install \
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "你好"}]
   }'</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card id="api-capabilities" shadow="never" class="api-section">
-            <template #header><strong>能力资源 API</strong></template>
+          <details class="ui-doc-section" id="api-capabilities"><summary>能力资源 API</summary><el-card shadow="never" class="api-section">
+
             <div class="api-sub-title">工具、知识库、记忆、Skill、MCP 都使用登录 JWT。Agent 运行时会根据绑定关系读取这些资源。</div>
             <div class="api-endpoint">Tools</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/tools \
@@ -428,10 +394,10 @@ curl {{ apiBaseUrl }}/mcp/servers/server-id/test \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-jwt-token" \
   -d '{"query":"test"}'</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card id="api-orchestration" shadow="never" class="api-section">
-            <template #header><strong>编排与协作 API</strong></template>
+          <details class="ui-doc-section" id="api-orchestration"><summary>编排与协作 API</summary><el-card shadow="never" class="api-section">
+
             <div class="api-endpoint">Agent Teams</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/agent-teams \
   -H "Authorization: Bearer your-jwt-token"
@@ -463,7 +429,7 @@ curl {{ apiBaseUrl }}/workflows \
     "name": "客服处理流程",
     "nodes": [
       {"id":"n1","type":"prompt","config":{"prompt":"整理用户问题"}},
-      {"id":"n2","type":"agent","config":{"agentId":"agent-id","input":"{{input}}"}}
+      {"id":"n2","type":"agent","config":{"agentId":"agent-id","input":"<span v-pre>{{input}}</span>"}}
     ]
   }'
 
@@ -480,10 +446,10 @@ curl {{ apiBaseUrl }}/workflows/workflow-id/runs \
     "models": ["glm-5.1", "deepseek-v4-pro"],
     "messages": [{"role":"user","content":"比较两个方案"}]
   }'</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card id="api-account" shadow="never" class="api-section">
-            <template #header><strong>账户、Key 与计费 API</strong></template>
+          <details class="ui-doc-section" id="api-account"><summary>账户、Key 与计费 API</summary><el-card shadow="never" class="api-section">
+
             <div class="api-endpoint">Auth</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/auth/send-verification-code \
   -H "Content-Type: application/json" \
@@ -528,10 +494,10 @@ curl {{ apiBaseUrl }}/billing/usage/daily \
 curl {{ apiBaseUrl }}/recharge/orders/order-id/check \
   -X POST \
   -H "Authorization: Bearer your-jwt-token"</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card id="api-admin" shadow="never" class="api-section">
-            <template #header><strong>管理 API</strong></template>
+          <details class="ui-doc-section" id="api-admin"><summary>管理 API</summary><el-card shadow="never" class="api-section">
+
             <div class="api-sub-title">以下接口需要管理员 JWT。</div>
             <div class="api-endpoint">系统统计与用户</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/admin/check \
@@ -560,12 +526,10 @@ curl {{ apiBaseUrl }}/admin/settings \
 
 curl {{ apiBaseUrl }}/admin/model-tiers \
   -H "Authorization: Bearer admin-jwt-token"</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card shadow="never" class="api-section">
-            <template #header>
-              <div style="display:flex;align-items:center;gap:8px"><strong>视觉理解（Vision）</strong><el-tag size="small" type="warning">POST</el-tag></div>
-            </template>
+          <details class="ui-doc-section"><summary>视觉理解（Vision）</summary><el-card shadow="never" class="api-section">
+
             <div class="api-endpoint">POST /v1/chat/completions</div>
             <div class="api-sub-title">与聊天接口相同，在 messages 中传入 image 类型的 content。支持 base64 编码图片和图片 URL。</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/chat/completions \
@@ -597,12 +561,10 @@ curl {{ apiBaseUrl }}/admin/model-tiers \
     }],
     "stream": false
   }'</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card shadow="never" class="api-section">
-            <template #header>
-              <div style="display:flex;align-items:center;gap:8px"><strong>语音合成（TTS）</strong><el-tag size="small" type="success">POST</el-tag></div>
-            </template>
+          <details class="ui-doc-section"><summary>语音合成（TTS）</summary><el-card shadow="never" class="api-section">
+
             <div class="api-endpoint">POST /v1/tts</div>
             <div class="api-sub-title">将文本转为语音，返回音频文件。默认格式为 wav。</div>
             <pre class="api-code-block">curl {{ apiBaseUrl }}/tts \
@@ -632,16 +594,16 @@ resp = requests.post(
 )
 with open("output.wav", "wb") as f:
     f.write(resp.content)</pre>
-          </el-card>
+          </el-card></details>
 
-          <el-card shadow="never" class="api-section">
-            <template #header><strong>错误码参考</strong></template>
+          <details class="ui-doc-section"><summary>错误码参考</summary><el-card shadow="never" class="api-section">
+
             <el-table :data="errorCodes" stripe size="small">
               <el-table-column prop="status" label="状态码" width="80" />
               <el-table-column prop="code" label="类型" width="140" />
               <el-table-column prop="desc" label="说明" />
             </el-table>
-          </el-card>
+          </el-card></details>
         </div>
 
         <!-- Create API Key Dialog -->

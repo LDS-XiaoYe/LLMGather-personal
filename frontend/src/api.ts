@@ -110,6 +110,8 @@ export interface ChatCompletionRequest {
   top_p?: number;
   max_tokens?: number;
   stream?: boolean;
+  memory_enabled?: boolean;
+  cache_enabled?: boolean;
   user?: string;
   extra_body?: {
     enable_thinking?: boolean;
@@ -145,26 +147,30 @@ export interface ProviderKeyRotationInfo {
 }
 
 const defaultBaseUrl = '/v1';
-const REQUEST_TIMEOUT_MS = 60_000;
+let requestTimeoutMs = 60_000;
 const STREAM_REQUEST_TIMEOUT_MS = 120_000;
 const TOKEN_STORAGE_KEY = 'llm_gather_access_token';
 
 export function getStoredToken(): string {
-  try { return localStorage.getItem(TOKEN_STORAGE_KEY) ?? ''; } catch { return ''; }
+  // Legacy localStorage tokens migrate to tab-lifetime storage. New browser
+  // logins use the server's HttpOnly cookie, not a JavaScript-readable token.
+  try {
+    const legacy = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (legacy) { sessionStorage.setItem(TOKEN_STORAGE_KEY, legacy); localStorage.removeItem(TOKEN_STORAGE_KEY); }
+  } catch {}
+  try { return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? ''; } catch { return ''; }
 }
 
 export function setStoredToken(token: string): void {
   try {
-    if (!token) {
-      localStorage.removeItem(TOKEN_STORAGE_KEY);
-      return;
-    }
-    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
   } catch {}
+  try { if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token); else sessionStorage.removeItem(TOKEN_STORAGE_KEY); } catch {}
 }
 
 export function clearStoredToken(): void {
   try { localStorage.removeItem(TOKEN_STORAGE_KEY); } catch {}
+  try { sessionStorage.removeItem(TOKEN_STORAGE_KEY); } catch {}
 }
 
 function buildHeaders(): HeadersInit {
@@ -180,7 +186,12 @@ const noStore: RequestCache = 'no-store';
 /** Shared fetch options for credentials (cookies) */
 const credOpts: RequestInit = { credentials: 'include' };
 
-function withTimeoutSignal(timeoutMs = REQUEST_TIMEOUT_MS) {
+export function applyPublicSettings(settings: Record<string, string>): void {
+  const value = Number(settings.frontend_request_timeout_ms);
+  if (Number.isInteger(value) && value >= 100 && value <= 300000) requestTimeoutMs = value;
+}
+
+function withTimeoutSignal(timeoutMs = requestTimeoutMs) {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   return {
@@ -265,7 +276,7 @@ export async function fetchModels(baseUrl = defaultBaseUrl): Promise<ModelDescri
     cleanup();
   }
 
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) throw new ApiError(await readError(response), response.status);
   const payload = (await response.json()) as { data?: ModelDescriptor[] };
   return payload.data ?? [];
 }
@@ -309,11 +320,12 @@ export async function login(
   password: string,
   security: AuthSecurityPayload,
   baseUrl = defaultBaseUrl,
+  rememberMe = false,
 ): Promise<AuthResponse> {
   const response = await fetch(`${baseUrl}/auth/login`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ username, password, ...security }),
+    body: JSON.stringify({ username, password, ...security, rememberMe }),
     ...credOpts,
   });
   if (!response.ok) await throwApiError(response);
@@ -326,7 +338,7 @@ export async function fetchMe(baseUrl = defaultBaseUrl): Promise<AuthUser> {
     headers: buildHeaders(),
     ...credOpts,
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) await throwApiError(response);
   return (await response.json()) as AuthUser;
 }
 
@@ -410,14 +422,15 @@ export async function fetchBillingLedger(baseUrl = defaultBaseUrl): Promise<Bill
   return payload.data ?? [];
 }
 
-export async function fetchPageModels(baseUrl = defaultBaseUrl): Promise<Record<string, string>> {
+export async function fetchPageModels(baseUrl = defaultBaseUrl, options: { applySettings?: boolean } = {}): Promise<Record<string, string>> {
   const response = await fetch(`${baseUrl}/billing/page-models`, {
     headers: buildHeaders(),
     cache: noStore,
     ...credOpts,
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) throw new ApiError(await readError(response), response.status);
   const payload = (await response.json()) as { data: Record<string, string> };
+  if (options.applySettings !== false) applyPublicSettings(payload.data ?? {});
   return payload.data ?? {};
 }
 
@@ -497,6 +510,7 @@ export async function streamCompletion(
   handlers: {
     onRequestId?: (requestId: string) => void;
     onKeyRotation?: (rotation: ProviderKeyRotationInfo) => void;
+    onMemoryWarning?: (message: string) => void;
     onChunk?: (chunk: ChatCompletionChunk) => void;
     onDone?: () => void;
     onAbort?: () => void;
@@ -540,6 +554,7 @@ export async function streamCompletion(
   }
 
   handlers.onRequestId?.(response.headers.get('x-request-id') ?? '');
+  if (response.headers.get('x-memory-status') === 'unavailable') handlers.onMemoryWarning?.('长期记忆读取失败，本次未使用记忆');
   const rotationHeader = response.headers.get('x-provider-key-rotation');
   if (rotationHeader) {
     try {
@@ -610,6 +625,7 @@ export interface AgentDefinition {
   maxTokens: number;
   memoryEnabled: boolean;
   toolIds: string[];
+  toolPermissions?: Record<string, 'auto' | 'confirm' | 'disabled'>;
   knowledgeBaseIds: string[];
   skillIds: string[];
   workflowIds: string[];
@@ -1163,6 +1179,22 @@ export interface KnowledgeSearchResult {
   title: string;
   content: string;
   score: number;
+  scoreType?: 'lexical' | 'cosine' | 'rrf' | 'external';
+  denseScore?: number;
+  lexicalScore?: number;
+  fusionScore?: number;
+  externalScore?: number;
+  ranks?: { dense?: number; lexical?: number; external?: number };
+  sources?: ('dense' | 'lexical' | 'external')[];
+}
+
+export interface KnowledgeRetrievalMeta {
+  requestedMode: 'hybrid' | 'keyword' | 'vector';
+  effectiveMode: 'hybrid' | 'keyword' | 'vector' | 'mixed';
+  degraded: boolean;
+  warnings: { kbId?: string; stage: string; code: string }[];
+  queryTerms?: string[];
+  minDenseScore?: number;
 }
 
 export interface UserLibraryFile {
@@ -1201,6 +1233,7 @@ export interface MemoryItem {
 
 export interface MemoryProviderInfo {
   active: 'native' | 'langgraph';
+  retrieval?: { primaryStore: 'mysql'; semanticIndexEnabled: boolean; searchMode: 'keyword' | 'hybrid' };
   providers: Array<{
     provider: 'native' | 'langgraph';
     displayName: string;
@@ -1243,6 +1276,7 @@ export interface WorkflowNode {
 }
 
 export interface Workflow {
+  schemaVersion?: 1 | 2;
   id: string;
   userId: string;
   name: string;
@@ -1257,7 +1291,7 @@ export interface WorkflowRun {
   id: string;
   workflowId: string;
   userId: string;
-  status: 'running' | 'succeeded' | 'failed';
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' | 'cancelled';
   input: string;
   output: string;
   error: string;
@@ -1986,9 +2020,17 @@ export async function addUserLibraryFileToKnowledge(fileId: string, kbId: string
 export async function searchKnowledgeBase(
   kbId: string,
   query: string,
-  options: { mode?: 'hybrid' | 'keyword' | 'vector'; limit?: number } = {},
+  options: { mode?: 'hybrid' | 'keyword' | 'vector'; limit?: number; minDenseScore?: number } = {},
   baseUrl = defaultBaseUrl,
 ): Promise<KnowledgeSearchResult[]> {
+  return (await searchKnowledgeBaseDetailed(kbId, query, options, baseUrl)).data;
+}
+
+export async function searchKnowledgeBaseDetailed(
+  kbId: string, query: string,
+  options: { mode?: 'hybrid' | 'keyword' | 'vector'; limit?: number; minDenseScore?: number } = {},
+  baseUrl = defaultBaseUrl,
+): Promise<{ data: KnowledgeSearchResult[]; meta?: KnowledgeRetrievalMeta }> {
   const response = await fetch(`${baseUrl}/knowledge/bases/${encodeURIComponent(kbId)}/search`, {
     method: 'POST',
     headers: buildHeaders(),
@@ -1996,8 +2038,8 @@ export async function searchKnowledgeBase(
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
-  const payload = (await response.json()) as { data?: KnowledgeSearchResult[] };
-  return payload.data ?? [];
+  const payload = (await response.json()) as { data?: KnowledgeSearchResult[]; meta?: KnowledgeRetrievalMeta };
+  return { data: payload.data ?? [], meta: payload.meta };
 }
 
 export async function fetchMemories(agentId?: string, baseUrl = defaultBaseUrl): Promise<MemoryItem[]> {
@@ -2091,7 +2133,7 @@ export async function fetchWorkflows(baseUrl = defaultBaseUrl): Promise<Workflow
 }
 
 export async function createWorkflow(
-  payload: { name: string; description?: string; nodes: WorkflowNode[] },
+  payload: { schemaVersion?: 1 | 2; name: string; description?: string; nodes: WorkflowNode[] },
   baseUrl = defaultBaseUrl,
 ): Promise<Workflow> {
   const response = await fetch(`${baseUrl}/workflows`, {
@@ -2110,11 +2152,12 @@ export async function runWorkflow(
   input: string,
   agentId?: string,
   baseUrl = defaultBaseUrl,
+  approvedToolIds: string[] = [],
 ): Promise<WorkflowRun> {
   const response = await fetch(`${baseUrl}/workflows/${encodeURIComponent(id)}/runs`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: JSON.stringify({ input, agentId }),
+    body: JSON.stringify({ input, agentId, approvedToolIds }),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -2219,7 +2262,7 @@ export async function createAdminUser(
 }
 
 export async function updateAdminUser(
-  userId: string, updates: { credits?: number; role?: string; emailVerified?: boolean }, baseUrl = defaultBaseUrl,
+  userId: string, updates: { credits?: number; role?: string; emailVerified?: boolean; expectedCredits?: number }, baseUrl = defaultBaseUrl,
 ): Promise<AdminUser> {
   const response = await fetch(`${baseUrl}/admin/users/${userId}`, {
     method: 'PATCH',
@@ -2345,11 +2388,12 @@ export async function fetchAdminSettings(baseUrl = defaultBaseUrl): Promise<Syst
   return payload.data ?? [];
 }
 
-export async function updateAdminSetting(key: string, value: string, baseUrl = defaultBaseUrl): Promise<void> {
+export async function updateAdminSetting(key: string, value: string, baseUrl = defaultBaseUrl, expectedValue?: string): Promise<void> {
   const response = await fetch(`${baseUrl}/admin/settings/${encodeURIComponent(key)}`, {
     method: 'PATCH',
     headers: buildHeaders(),
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ value, expectedValue }),
+    signal: AbortSignal.timeout(requestTimeoutMs),
     ...credOpts,
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -2481,6 +2525,43 @@ export interface ProviderConfigRow {
   updatedAt: string;
 }
 
+export interface BailianSyncPreview {
+  previewId: string; expiresAt: string; endpoint: string; catalogCount: number;
+  providers: Array<{
+    id: string; providerName: string; displayName: string; beforeCount: number; afterCount: number;
+    added: number; removed: number;
+    changes: Array<{ id: string; name: string; action: 'added' | 'removed'; reason: string; capabilities: string[]; contextWindow: number | null }>;
+  }>;
+  skipped: Array<{ displayName: string; reason: string }>;
+  credential?: BailianCredentialStatus;
+}
+export interface BailianCredentialStatus { remembered: boolean; keyPrefix?: string }
+export async function bailianCredentialRequest(action: 'status' | 'forget', scope: { region: string; workspaceId?: string }, baseUrl = defaultBaseUrl): Promise<BailianCredentialStatus> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/admin/bailian-models/credential/${action}`, {
+    method: 'POST', headers: buildHeaders(), body: JSON.stringify(scope), ...credOpts, signal: AbortSignal.timeout(12000),
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()).data;
+}
+export interface BailianSyncInput {
+  region: string; workspaceId?: string; apiKey?: string; rememberKey?: boolean; saveKey: boolean; removeMissing: boolean;
+}
+export async function previewBailianModels(input: BailianSyncInput, baseUrl = defaultBaseUrl): Promise<BailianSyncPreview> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/admin/bailian-models/preview`, {
+    method: 'POST', headers: buildHeaders(), body: JSON.stringify(input), ...credOpts, signal: AbortSignal.timeout(65000),
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()).data;
+}
+export interface BailianModelSelection { providerId: string; modelId: string; action: 'added' | 'removed' }
+export async function applyBailianModels(previewId: string, selections: BailianModelSelection[], baseUrl = defaultBaseUrl): Promise<{ added: number; removed: number; providers: number; warnings: string[] }> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/admin/bailian-models/apply`, {
+    method: 'POST', headers: buildHeaders(), body: JSON.stringify({ previewId, selections }), ...credOpts, signal: AbortSignal.timeout(65000),
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()).data;
+}
+
 export interface ProviderConfigInput {
   providerName: string;
   displayName: string;
@@ -2523,7 +2604,7 @@ export async function createAdminProviderConfig(
 
 export async function updateAdminProviderConfig(
   id: string,
-  input: Partial<ProviderConfigInput> & { enabled?: boolean },
+  input: Partial<ProviderConfigInput> & { enabled?: boolean; expectedUpdatedAt?: string },
   baseUrl = defaultBaseUrl,
 ): Promise<ProviderConfigRow> {
   const response = await fetch(
@@ -2564,6 +2645,7 @@ export interface TierPriceInfo {
 }
 
 export interface ModelTiersData {
+  versions?: Record<string, string>;
   tiers: Record<string, string[]>;
   prices: Record<string, TierPriceInfo>;
   labels: Record<string, string>;
@@ -2582,7 +2664,7 @@ export async function fetchAdminModelTiers(baseUrl = defaultBaseUrl): Promise<Mo
 }
 
 export async function updateAdminModelTiers(
-  data: { tiers: Record<string, string[]>; prices: Record<string, TierPriceInfo>; labels?: Record<string, string>; examples?: Record<string, string> },
+  data: { tiers: Record<string, string[]>; prices: Record<string, TierPriceInfo>; labels?: Record<string, string>; examples?: Record<string, string>; expected?: Record<string, string> },
   baseUrl = defaultBaseUrl,
 ): Promise<ModelTiersData> {
   const response = await fetch(`${baseUrl}/admin/model-tiers`, {
@@ -2699,4 +2781,15 @@ export async function checkRechargeOrder(
   if (!response.ok) throw new Error(await readError(response));
   const payload = (await response.json()) as { data: RechargeOrder };
   return payload.data;
+}
+
+export async function updateWorkflow(id: string, payload: { schemaVersion?: 1 | 2; name: string; description?: string; nodes: WorkflowNode[] }, baseUrl = defaultBaseUrl): Promise<Workflow> {
+  const response = await fetch(baseUrl + '/workflows/' + encodeURIComponent(id), { method: 'PATCH', headers: buildHeaders(), body: JSON.stringify(payload), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()).data;
+}
+export async function fetchWorkflowRun(id: string, baseUrl = defaultBaseUrl): Promise<WorkflowRun> {
+  const response = await fetch(baseUrl + '/workflows/runs/' + encodeURIComponent(id), { headers: buildHeaders(), ...credOpts });
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()).data;
 }

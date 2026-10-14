@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -45,30 +46,9 @@ const copyToClipboard = bind(app, 'copyToClipboard');
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left" style="gap:8px"><strong>语音生成</strong>
-            <el-select v-model="ttsModel" filterable placeholder="TTS模型" style="width:220px" size="small">
+        <WorkspaceHeader title="语音生成" :app="app"><el-select v-model="ttsModel" filterable placeholder="TTS模型" style="width:220px" size="small">
               <el-option v-for="m in ttsModels" :key="m.id" :label="m.id" :value="m.id" />
-            </el-select>
-          </div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-              <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-              <el-dropdown v-else trigger="click" @command="handleUserMenu">
-                <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item v-if="userInvitationCode" disabled>
-                      <span style="color:#666;">邀请码：{{ userInvitationCode }}</span>
-                      <el-button size="small" style="margin-left:8px" @click.stop="copyToClipboard(userInvitationCode)">复制</el-button>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="logout"><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
-          </div>
-        </div>
+            </el-select><template #status><span v-if="ttsAudioLoading" class="ui-header-caption" role="status">进行中</span></template></WorkspaceHeader>
 
         <div class="tts-layout">
           <!-- Left: Controls -->
@@ -91,33 +71,34 @@ const copyToClipboard = bind(app, 'copyToClipboard');
             <div v-if="!ttsSingingMode" class="tts-section">
               <div class="tts-section-title">风格标签</div>
               <div class="tts-tag-grid">
-                <div v-for="tag in TTS_STYLE_TAGS" :key="tag.value"
+                <button type="button" :aria-pressed="ttsStyleTag === tag.value" v-for="tag in TTS_STYLE_TAGS" :key="tag.value"
                   class="tts-tag-item" :class="{ active: ttsStyleTag === tag.value }"
                   @click="ttsStyleTag = ttsStyleTag === tag.value ? '' : tag.value">
                   {{ tag.label }}
-                </div>
+                </button>
               </div>
             </div>
 
             <div class="tts-section">
               <div class="tts-section-title">音频标签 <span style="font-weight:400;font-size:12px;color:#909399">点击插入文本</span></div>
               <div class="tts-tag-grid">
-                <div v-for="tag in TTS_AUDIO_TAGS" :key="tag.value" class="tts-tag-item tts-audio-tag" @click="insertTtsTag(tag.value)">
+                <button type="button" v-for="tag in TTS_AUDIO_TAGS" :key="tag.value" class="tts-tag-item tts-audio-tag" @click="insertTtsTag(tag.value)">
                   [{{ tag.label }}]
-                </div>
+                </button>
               </div>
             </div>
 
             <div class="tts-section">
               <div class="tts-section-title">风格指令 <span style="font-weight:400;font-size:12px;color:#909399">自然语言描述</span></div>
-              <el-input v-model="ttsStyleInstruction" type="textarea" :rows="3" placeholder="如：用欢快明亮的语气，语速稍快" resize="vertical" />
+              <el-input aria-label="语音风格指令" v-model="ttsStyleInstruction" type="textarea" :rows="3" placeholder="如：用欢快明亮的语气，语速稍快" resize="vertical" />
             </div>
           </div>
 
           <!-- Right: Text + Output -->
           <div class="tts-main">
             <el-card shadow="never" class="tts-card">
-              <el-input v-model="ttsText" type="textarea" :rows="8" resize="vertical"
+              <div class="ui-input-label">{{ ttsSingingMode ? '歌词' : '朗读文本' }}</div>
+              <el-input aria-label="语音生成文本" v-model="ttsText" type="textarea" :rows="8" resize="vertical"
                 :placeholder="ttsSingingMode ? '输入歌词（中文效果更佳）...' : '输入要合成的文本...\n可在文本中插入 [叹气] [笑] 等音频标签'" />
 
               <div class="tts-actions">

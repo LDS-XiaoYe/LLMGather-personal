@@ -3,6 +3,8 @@ export interface Hardware {
   platform:string;arch:string;cpu:string;cpuCount:number;memoryMiB:number;freeDiskMiB:number;
   docker:null|{os:string;arch:string;nvidiaRuntime:boolean;memoryMiB:number};
   gpus:{name:string;uuid:string;totalMiB:number;freeMiB:number;capability:string;driver:string}[];
+  gpuDiscovery?:{source:'native'|'docker';status:'available'|'not-detected'|'unavailable'|'runtime-unavailable';message:string};
+  gpuError?:string;
   apple:null|{chip:string;version:string;mlx:boolean;metal:boolean};
 }
 export interface ComputeNode {id:string;name:string;baseUrl:string;status:string;hardware:Hardware;lastSeen:string}
@@ -10,7 +12,7 @@ export interface DeploymentConfig {modelId:string;backend:'cpu'|'nvidia'|'apple'
 export interface ModelInstance {id:string;node_id:string;model_id:string;desired_state:string;actual_state:string;provider_registered:number;fingerprint:string;config:DeploymentConfig;spec:null|{revision:string;precision:string;dimensions:number;runtime:string;variant:string};operation_id:string|null}
 export interface DeploymentTask {id:string;instanceId:string;status:string;phase:string;error:string;progress:{downloadedBytes?:number;totalBytes?:number;source?:string;file?:string;cached?:boolean}}
 export interface ModelDefinition {id:string;name:string;type:string;dimensions:number;minMemoryMiB:number;minDiskMiB:number;minCpu:number;variants:Record<string,{revision:string;sources:string[];verification?:string}>}
-export interface ModelSnapshot {nodes:ComputeNode[];instances:ModelInstance[];tasks:DeploymentTask[];defaultInstanceId:string|null;registry:{models:ModelDefinition[];matrix:{backend:string;capability?:string;image:string;verification:string;experimental?:boolean}[]}}
+export interface ModelSnapshot {nodes:ComputeNode[];instances:ModelInstance[];tasks:DeploymentTask[];defaultInstanceId:string|null;localNode?:{status:'DISABLED'|'CONNECTING'|'ONLINE'|'UNAVAILABLE';nodeId?:string;message:string};registry:{models:ModelDefinition[];matrix:{backend:string;capability?:string;image:string;verification:string;experimental?:boolean}[]}}
 export async function modelRequest<T>(base:string,route:string,body?:unknown):Promise<T>{
   const res=await fetch(`${base.replace(/\/$/,'')}${route}`,{method:body===undefined?'GET':'POST',credentials:'include',
     headers:{'Content-Type':'application/json',Authorization:'Bearer '+getStoredToken()},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(70000)});

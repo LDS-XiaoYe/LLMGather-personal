@@ -9,6 +9,7 @@ export interface AgentForm {
   maxTokens: number;
   memoryEnabled: boolean;
   toolIds: string[];
+  toolPermissions?: Record<string, 'auto' | 'confirm' | 'disabled'>;
   knowledgeBaseIds: string[];
   skillIds: string[];
   workflowIds: string[];

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
-import { computed as vueComputed, isRef, unref } from 'vue';
+import { computed as vueComputed, isRef, unref, ref, watch } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -33,52 +34,59 @@ const openRechargeDialog = bind(app, 'openRechargeDialog');
 const loadRechargeOrders = bind(app, 'loadRechargeOrders');
 const consolePricingRows = bind(app, 'consolePricingRows');
 const loadConsoleDailyUsage = bind(app, 'loadConsoleDailyUsage');
+const detailTab = ref('usage');
+const ledgerPage = ref(1), rechargePage = ref(1);
+const ledgerPageRows = vueComputed(() => billingLedger.value.slice((ledgerPage.value - 1) * 20, ledgerPage.value * 20));
+const rechargePageRows = vueComputed(() => rechargeOrders.value.slice((rechargePage.value - 1) * 10, rechargePage.value * 10));
+watch(() => billingLedger.value.length, () => { ledgerPage.value = 1; });
+watch(() => rechargeOrders.value.length, () => { rechargePage.value = 1; });
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left"><strong>控制台</strong></div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-            <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-            <el-dropdown v-else trigger="click" @command="handleUserMenu">
-              <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="logout"><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            </template>
-          </div>
-        </div>
+        <WorkspaceHeader title="控制台" :app="app"></WorkspaceHeader>
 
         <div class="console-page">
           <el-alert v-if="isAuthLoaded && !isAuthenticated" type="warning" :closable="false" show-icon title="请先登录以查看控制台" style="margin-bottom: 16px" />
           <template v-else-if="isAuthenticated">
-            <el-card shadow="never" class="console-section">
-              <template #header><strong>账户信息</strong></template>
-              <div class="console-stats-grid">
-                <div class="console-stat-card"><div class="console-stat-label">用户名</div><div class="console-stat-value">{{ authUser?.username }}</div></div>
-                <div class="console-stat-card highlight"><div class="console-stat-label">余额</div><div class="console-stat-value">￥{{ authCreditsText }}</div></div>
-                <div class="console-stat-card"><div class="console-stat-label">累计消费</div><div class="console-stat-value">￥{{ authSpentText }}</div></div>
-                <div class="console-stat-card"><div class="console-stat-label">注册时间</div><div class="console-stat-value">{{ formatTime(authUser?.createdAt) }}</div></div>
-              </div>
-              <el-divider />
-              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                <span style="font-size:14px;color:#374151">在线充值：</span>
-                <el-button type="primary" @click="openRechargeDialog()">支付宝当面付</el-button>
-              </div>
-            </el-card>
-
-            <el-card shadow="never" class="console-section">
+            <section class="ui-account-overview">
+   <div class="ui-section-toolbar"><div><h2>账户余额</h2><p class="ui-muted">{{ authUser?.username }} · 注册于 {{ formatTime(authUser?.createdAt) }}</p></div><el-button type="primary" @click="openRechargeDialog()">充值</el-button></div>
+   <div class="ui-account-metrics"><div><span>可用余额</span><strong>￥{{ authCreditsText }}</strong></div><div><span>累计消费</span><strong>￥{{ authSpentText }}</strong></div></div>
+ </section><el-card shadow="never" class="console-section">
               <template #header>
                 <div style="display:flex;align-items:center;justify-content:space-between">
-                  <strong>充值记录</strong>
-                  <el-button text size="small" @click="loadRechargeOrders()" :loading="rechargeOrdersLoading">刷新</el-button>
+                  <strong>用量趋势</strong>
+                  <el-segmented
+                    :model-value="String(consoleChartDays)"
+                    @change="(val: string | number) => { consoleChartDays = Number(val); loadConsoleDailyUsage(); }"
+                    :options="[
+                      { label: '7天', value: '7' },
+                      { label: '30天', value: '30' },
+                      { label: '90天', value: '90' },
+                    ]"
+                    size="small"
+                  />
                 </div>
               </template>
-              <el-table v-if="rechargeOrders.length > 0" :data="rechargeOrders" size="small" max-height="240">
+              <div v-if="consoleDailyUsage.length > 0" id="console-chart" style="width:100%;height:260px"></div>
+              <el-empty v-else description="暂无用量数据" :image-size="48" style="padding:30px 0" />
+            </el-card><el-tabs v-model="detailTab" class="ui-console-detail-tabs">
+  <el-tab-pane label="用量明细" name="usage"><p class="ui-muted">当前已加载 {{ billingLedger.length }} 条记录</p><el-card shadow="never" class="console-section">
+
+              <el-table :data="ledgerPageRows" stripe style="width:100%">
+                <template #empty><el-empty description="暂无用量记录" :image-size="48" /></template>
+                <el-table-column prop="model" label="模型" min-width="220" />
+                <el-table-column prop="requestType" label="请求类型" min-width="120" />
+                <el-table-column prop="promptTokens" label="输入 Token" min-width="130" />
+                <el-table-column prop="completionTokens" label="输出 Token" min-width="130" />
+                <el-table-column prop="cost" label="费用（元）" min-width="110" />
+                <el-table-column label="时间" min-width="200">
+                  <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+                </el-table-column>
+              </el-table>
+            <div class="ui-pagination"><el-pagination hide-on-single-page v-model:current-page="ledgerPage" :page-size="20" :total="billingLedger.length" layout="prev, pager, next" /></div></el-card></el-tab-pane>
+  <el-tab-pane label="充值记录" name="recharge"><div class="ui-section-toolbar"><span class="ui-muted">当前已加载 {{ rechargeOrders.length }} 条记录</span><el-button size="small" plain @click="loadRechargeOrders()" :loading="rechargeOrdersLoading">刷新记录</el-button></div><el-card shadow="never" class="console-section">
+
+              <el-table v-if="rechargeOrders.length > 0" :data="rechargePageRows" size="small" >
                 <el-table-column prop="amount" label="金额" width="80">
                   <template #default="{ row }">￥{{ row.amount }}</template>
                 </el-table-column>
@@ -100,35 +108,9 @@ const loadConsoleDailyUsage = bind(app, 'loadConsoleDailyUsage');
                 </el-table-column>
               </el-table>
               <el-empty v-else description="暂无充值记录" :image-size="48" style="padding:20px 0" />
-            </el-card>
+            <div class="ui-pagination"><el-pagination hide-on-single-page v-model:current-page="rechargePage" :page-size="10" :total="rechargeOrders.length" layout="prev, pager, next" /></div></el-card></el-tab-pane>
+  <el-tab-pane label="计费规则" name="pricing"><p class="ui-muted">价格单位：元 / 千 Token</p><el-card shadow="never" class="console-section">
 
-            <el-card shadow="never" class="console-section">
-              <template #header>
-                <div style="display:flex;align-items:center;justify-content:space-between">
-                  <strong>用量趋势</strong>
-                  <el-segmented
-                    :model-value="String(consoleChartDays)"
-                    @change="(val: string | number) => { consoleChartDays = Number(val); loadConsoleDailyUsage(); }"
-                    :options="[
-                      { label: '7天', value: '7' },
-                      { label: '30天', value: '30' },
-                      { label: '90天', value: '90' },
-                    ]"
-                    size="small"
-                  />
-                </div>
-              </template>
-              <div v-if="consoleDailyUsage.length > 0" id="console-chart" style="width:100%;height:260px"></div>
-              <el-empty v-else description="暂无用量数据" :image-size="48" style="padding:30px 0" />
-            </el-card>
-
-            <el-card shadow="never" class="console-section">
-              <template #header>
-                <div style="display:flex;align-items:center;justify-content:space-between">
-                  <strong>计费规则</strong>
-                  <span style="font-size:11px;color:#9ca3af">元 / 千 token</span>
-                </div>
-              </template>
               <el-table :data="consolePricingRows" stripe style="width:100%">
                 <el-table-column label="档位" width="120">
                   <template #default="{ row }">
@@ -146,22 +128,8 @@ const loadConsoleDailyUsage = bind(app, 'loadConsoleDailyUsage');
                 </el-table-column>
                 <template #empty><el-empty description="暂无计费规则" :image-size="48" /></template>
               </el-table>
-            </el-card>
-
-            <el-card shadow="never" class="console-section">
-              <template #header><strong>用量明细</strong></template>
-              <el-table :data="billingLedger" stripe style="width:100%">
-                <template #empty><el-empty description="暂无用量记录，使用 API 后将自动记录" :image-size="48" /></template>
-                <el-table-column prop="model" label="模型" min-width="220" />
-                <el-table-column prop="requestType" label="请求类型" min-width="120" />
-                <el-table-column prop="promptTokens" label="输入Token" min-width="130" />
-                <el-table-column prop="completionTokens" label="输出Token" min-width="130" />
-                <el-table-column prop="cost" label="费用" min-width="110" />
-                <el-table-column label="时间" min-width="200">
-                  <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
-                </el-table-column>
-              </el-table>
-            </el-card>
+            </el-card></el-tab-pane>
+ </el-tabs>
           </template>
         </div>
 </template>

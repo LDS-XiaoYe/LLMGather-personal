@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
-import { computed as vueComputed, isRef, unref } from 'vue';
+import { computed as vueComputed, isRef, unref, onMounted, onUnmounted, watch } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -17,7 +18,6 @@ const Cpu = bind(app, 'Cpu');
 const DataAnalysis = bind(app, 'DataAnalysis');
 const Delete = bind(app, 'Delete');
 const Promotion = bind(app, 'Promotion');
-const Refresh = bind(app, 'Refresh');
 const Sunny = bind(app, 'Sunny');
 const SwitchButton = bind(app, 'SwitchButton');
 const User = bind(app, 'User');
@@ -27,8 +27,8 @@ const authUser = bind(app, 'authUser');
 const userInvitationCode = bind(app, 'userInvitationCode');
 const selectedModel = bind(app, 'selectedModel');
 const chatThinkingMode = bind(app, 'chatThinkingMode');
-const chatAgentMode = bind(app, 'chatAgentMode');
 const isLoadingModels = bind(app, 'isLoadingModels');
+const modelRefreshError = bind(app, 'modelRefreshError');
 const status = bind(app, 'status');
 const isAuthLoaded = bind(app, 'isAuthLoaded');
 const draft = bind(app, 'draft');
@@ -49,46 +49,37 @@ const chatModels = bind(app, 'chatModels');
 const copyToClipboard = bind(app, 'copyToClipboard');
 const openAgentRunTrace = bind(app, 'openAgentRunTrace');
 const switchPage = bind(app, 'switchPage');
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let lastRefreshAt = -Infinity;
+let lastRefreshScope = '';
+function refreshChatModels(open: boolean | Event = true) {
+  if (!open || !isAuthenticated.value || document.visibilityState !== 'visible' || isSubmitting.value || isLoadingModels.value) return;
+  const scope = `${unref(app.authUser)?.id}|${unref(app.backendBaseUrl)}`;
+  if (scope === lastRefreshScope && Date.now() - lastRefreshAt < 5000) return;
+  lastRefreshScope = scope;
+  lastRefreshAt = Date.now();
+  void loadModels.value({ silent: true });
+}
+watch([() => unref(app.authUser)?.id, () => unref(app.backendBaseUrl)], () => refreshChatModels());
+onMounted(() => {
+  refreshChatModels();
+  refreshTimer = setInterval(() => refreshChatModels(), 60_000);
+  window.addEventListener('focus', refreshChatModels);
+  document.addEventListener('visibilitychange', refreshChatModels);
+});
+onUnmounted(() => {
+  if (refreshTimer !== null) clearInterval(refreshTimer);
+  window.removeEventListener('focus', refreshChatModels);
+  document.removeEventListener('visibilitychange', refreshChatModels);
+});
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left">
-            <el-select v-model="selectedModel" placeholder="选择模型" filterable :style="{ width: '240px' }">
-              <el-option label="🤖 自动（智能路由）" value="auto">
-                <span style="font-weight:600">🤖 自动</span>
-                <el-tag size="small" type="danger" style="margin-left:6px">智能路由</el-tag>
-              </el-option>
-              <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id">
-                <span>{{ model.id }}</span>
-                <el-tag v-if="getModelTags(model.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
-                <el-tag v-if="getModelTags(model.id).includes('audio')" size="small" type="success" style="margin-left:4px">音频</el-tag>
-              </el-option>
-            </el-select>
-            <el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button>
-          </div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-            <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-            <el-dropdown v-else trigger="click" @command="handleUserMenu">
-              <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                  <el-dropdown-item v-if="userInvitationCode" disabled>
-                    <span style="color:#666;">邀请码：{{ userInvitationCode }}</span>
-                    <el-button size="small" style="margin-left:8px" @click.stop="copyToClipboard(userInvitationCode)">复制</el-button>
-                  </el-dropdown-item>
-                  <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-tag :type="status.includes('完成') || status.includes('已加载') ? 'success' : undefined">{{ status }}</el-tag>
-            </template>
-          </div>
-        </div>
+        <WorkspaceHeader title="聊天" :app="app"><template #status><span v-if="isSubmitting" class="ui-header-caption" role="status">进行中</span></template></WorkspaceHeader>
 
         <div ref="threadRef" class="thread">
+          <div v-if="!activeMessages.length" class="ui-empty-conversation"><h2>开始一段对话</h2><p>直接提问，或选择适合任务的模型。</p></div>
           <div
             v-for="msg in activeMessages"
             :key="msg.id"
@@ -123,14 +114,14 @@ const switchPage = bind(app, 'switchPage');
                       >追踪</el-button>
                     </div>
                     <!-- Debug panel per-message -->
-                    <div v-if="msg.routerInfo.debug && msg.routerInfo.debug.classifierModel" style="margin-top:6px;padding:8px 10px;background:#fefce8;border:1px dashed #f59e0b;border-radius:4px;font-family:monospace;font-size:11px;line-height:1.6;color:#92400e">
+                    <details v-if="msg.routerInfo.debug && msg.routerInfo.debug.classifierModel" class="ui-routing-details"><summary>路由详情</summary>
                       <div><strong>分类模型:</strong> {{ msg.routerInfo.debug.classifierModel }}</div>
                       <div><strong>分类器输出:</strong> <code style="background:#fef3c7;padding:1px 4px;border-radius:2px">{{ msg.routerInfo.debug.rawOutput || '(空)' }}</code></div>
-                      <div><strong>匹配方式:</strong> {{ msg.routerInfo.debug.matchedBy === 'label' ? '✅ 精确匹配' : msg.routerInfo.debug.matchedBy === 'fuzzy' ? '⚠️ 模糊匹配' : '❌ 降级通用' }}</div>
+                      <div><strong>匹配方式:</strong> {{ msg.routerInfo.debug.matchedBy === 'label' ? '精确匹配' : msg.routerInfo.debug.matchedBy === 'fuzzy' ? '模糊匹配' : '降级通用' }}</div>
                       <div style="margin-top:4px"><strong>提示词:</strong><pre style="margin:2px 0 0;white-space:pre-wrap;font-size:10px;color:#78716c">{{ msg.routerInfo.debug.prompt }}</pre></div>
-                    </div>
+                    </details>
                   </div>
-                  <details v-if="msg.reasoning && !msg.routerInfo" open class="reasoning-box">
+                  <details v-if="msg.reasoning && !msg.routerInfo" class="reasoning-box">
                     <summary><el-icon><Sunny /></el-icon> 思考过程</summary>
                     <p>{{ msg.reasoning }}</p>
                   </details>
@@ -164,160 +155,64 @@ const switchPage = bind(app, 'switchPage');
             />
             <div class="composer-bar">
               <div class="composer-meta">
-                <el-text v-if="requestId" type="info" size="small">request id: {{ requestId }}</el-text>
+                <el-segmented
+                  v-model="chatThinkingMode"
+                  class="chat-mode-select"
+                  aria-label="回答模式"
+                  name="chat-response-mode"
+                  :options="[{ label: '思考', value: true }, { label: '直答', value: false }]"
+                  :disabled="isSubmitting"
+                  :title="isSubmitting ? '回复生成中，结束后可切换' : '选择是否启用模型思考'"
+                />
+                <el-text v-if="requestId" :title="requestId" type="info" size="small">请求 ID：{{ requestId }}</el-text>
               </div>
               <div class="composer-actions">
-                <button
-                  type="button"
-                  class="thinking-mode-toggle"
-                  :class="{ active: chatThinkingMode }"
-                  :aria-pressed="chatThinkingMode"
-                  :title="chatThinkingMode ? '当前为思考模式，点击切换直答' : '当前为直答模式，点击开启思考'"
-                  @click="chatThinkingMode = !chatThinkingMode"
-                >
-                  <span class="thinking-toggle-thumb" />
-                  <span class="thinking-toggle-option thinking-on">
-                    <el-icon><Sunny /></el-icon>
-                    思考
-                  </span>
-                  <span class="thinking-toggle-option thinking-off">直答</span>
-                </button>
-                <button
-                  type="button"
-                  class="agent-mode-toggle"
-                  :class="{ active: chatAgentMode }"
-                  :aria-pressed="chatAgentMode"
-                  title="开启后会先判断是否需要调用 Agent；命中任务型意图才调起 Agent，否则普通回复"
-                  @click="chatAgentMode = !chatAgentMode"
-                >
-                  <span class="agent-toggle-dot" />
-                  Agent 模式
-                </button>
+                <el-select class="chat-model-select" aria-label="聊天模型" v-model="selectedModel" placeholder="选择模型" filterable :loading="isLoadingModels" :disabled="isSubmitting" @visible-change="refreshChatModels">
+                  <el-option label="自动选择（智能路由）" value="auto">
+                    <span style="font-weight:600">自动选择</span>
+                    <el-tag size="small" type="info" style="margin-left:6px">智能路由</el-tag>
+                  </el-option>
+                  <el-option v-for="model in chatModels" :key="model.id" :label="model.id" :value="model.id">
+                    <span>{{ model.id }}</span>
+                    <el-tag v-if="getModelTags(model.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
+                    <el-tag v-if="getModelTags(model.id).includes('audio')" size="small" type="success" style="margin-left:4px">音频</el-tag>
+                  </el-option>
+                </el-select>
                 <el-button :icon="Delete" @click="clearChat()">清空</el-button>
                 <el-button v-if="isSubmitting" type="danger" :icon="SwitchButton" @click="stopChatGeneration()">停止</el-button>
                 <el-button v-else type="primary" :icon="Promotion" @click="submitPrompt()" :disabled="!draft.trim()">发送</el-button>
               </div>
             </div>
+            <el-text v-if="modelRefreshError" class="chat-model-error" type="danger" size="small" role="status">{{ modelRefreshError }}</el-text>
           </el-card>
         </div>
 </template>
 
 <style scoped>
-.thinking-mode-toggle {
-  position: relative;
-  display: inline-grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: center;
+.chat-mode-select {
+  --el-border-radius-base: 999px;
+  --el-segmented-item-selected-bg-color: color-mix(in srgb, var(--el-color-primary) 14%, var(--el-fill-color-blank));
+  --el-segmented-item-selected-color: var(--el-color-primary);
+  --el-segmented-item-selected-disabled-bg-color: var(--el-fill-color);
+  border: 1px solid var(--el-border-color);
   flex: 0 0 auto;
-  width: 128px;
+  width: 132px;
   height: 32px;
-  padding: 2px;
-  border: 1px solid #d7dce8;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
-  color: #64748b;
-  cursor: pointer;
-  overflow: hidden;
-  vertical-align: middle;
-  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(15, 23, 42, .05);
-}
-
-.thinking-mode-toggle:hover {
-  border-color: #b7c3d8;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 4px 14px rgba(15, 23, 42, .08);
-}
-
-.thinking-toggle-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: calc(50% - 2px);
-  height: calc(100% - 4px);
-  border-radius: 999px;
-  background: linear-gradient(135deg, #334155 0%, #0f766e 100%);
-  box-shadow: 0 2px 7px rgba(15, 23, 42, .18);
-  transform: translateX(100%);
-  transition: transform .2s ease, background .2s ease;
-}
-
-.thinking-mode-toggle.active {
-  border-color: #9d8cff;
-  background: linear-gradient(180deg, #fbfaff 0%, #f4f1ff 100%);
-}
-
-.thinking-mode-toggle.active .thinking-toggle-thumb {
-  transform: translateX(0);
-  background: linear-gradient(135deg, #7b68ee 0%, #5f8cff 100%);
-}
-
-.thinking-toggle-option {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-width: 0;
-  height: 100%;
   font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
-  transition: color .18s ease;
 }
-
-.thinking-mode-toggle.active .thinking-on,
-.thinking-mode-toggle:not(.active) .thinking-off {
-  color: #ffffff;
-}
-
-.agent-mode-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid #d7dce8;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
-  color: #475569;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: border-color .18s ease, box-shadow .18s ease, color .18s ease, background .18s ease;
-}
-
-.agent-mode-toggle:hover {
-  border-color: #b7c3d8;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, .08);
-}
-
-.agent-mode-toggle.active {
-  color: #065f46;
-  border-color: #6ee7b7;
-  background: linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%);
-}
-
-.agent-toggle-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #94a3b8;
-  box-shadow: 0 0 0 3px rgba(148, 163, 184, .14);
-}
-
-.agent-mode-toggle.active .agent-toggle-dot {
-  background: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, .18);
-}
-
-.thinking-mode-toggle:not(.active) .thinking-on {
-  color: #64748b;
-}
-
-.thinking-mode-toggle.active .thinking-off {
-  color: #8a93a3;
+.chat-mode-select :deep(.el-segmented__item.is-selected) { font-weight: 500; }
+.chat-mode-select :deep(.el-segmented__item.is-disabled) { color: var(--el-text-color-placeholder); }
+.composer-meta { min-width: 0; flex: 1 1 180px; gap: 12px; }
+.composer-meta :deep(.el-text) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-actions { display: grid; grid-template-columns: minmax(140px, 240px) auto auto; align-items: center; flex: 0 1 auto; }
+.chat-model-select { width: 100%; min-width: 0; }
+.chat-model-error { display: block; margin-top: 8px; }
+.composer-actions :deep(.el-button) { margin: 0; }
+@media (max-width: 480px) {
+  .composer-bar { gap: 8px; }
+  .composer-meta { flex: 1 1 100%; }
+  .composer-meta :deep(.el-text) { display: none; }
+  .composer-actions { gap: 6px; width: 100%; grid-template-columns: minmax(0, 1fr) auto auto; }
+  .composer-actions :deep(.el-button) { padding: 8px 12px; }
 }
 </style>

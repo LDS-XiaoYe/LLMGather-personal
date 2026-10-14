@@ -1,10 +1,15 @@
 <script setup lang="ts">
 // @ts-nocheck
-import { computed as vueComputed, isRef, unref } from 'vue';
+import { computed as vueComputed, isRef, unref, ref as vueRef } from 'vue';
+import { formatTraceDisplayValue } from '../../../utils/agent-trace';
+import AgentRunTrace from '../../agent/AgentRunTrace.vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
+import { useAgentAutoRefresh } from '../../../composables/useAgentAutoRefresh';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
 const app = props.app;
+useAgentAutoRefresh(app);
 const bind = (target: Record<string, any>, key: string) => vueComputed({
   get: () => unref(target[key]),
   set: (value) => {
@@ -18,7 +23,6 @@ const Delete = bind(app, 'Delete');
 const MagicStick = bind(app, 'MagicStick');
 const Plus = bind(app, 'Plus');
 const Promotion = bind(app, 'Promotion');
-const Refresh = bind(app, 'Refresh');
 const Search = bind(app, 'Search');
 const SwitchButton = bind(app, 'SwitchButton');
 const renderMarkdown = bind(app, 'renderMarkdown');
@@ -29,11 +33,14 @@ const agentLoading = bind(app, 'agentLoading');
 const agentSaving = bind(app, 'agentSaving');
 const agentPublishing = bind(app, 'agentPublishing');
 const agentRunning = bind(app, 'agentRunning');
+const invokeView = vueRef('task');
+const selectAgentById = bind(app, 'selectAgentById');
 const agentGenerating = bind(app, 'agentGenerating');
 const agentPrompt = bind(app, 'agentPrompt');
 const agentImageUrlInput = bind(app, 'agentImageUrlInput');
 const agentInvokeMaxSteps = bind(app, 'agentInvokeMaxSteps');
 const agentConversationId = bind(app, 'agentConversationId');
+const agentContinueConversation = bind(app, 'agentContinueConversation');
 const agentInvokePanelTab = bind(app, 'agentInvokePanelTab');
 const agentImageInputOpen = bind(app, 'agentImageInputOpen');
 const agentLastPrompt = bind(app, 'agentLastPrompt');
@@ -70,6 +77,13 @@ const dagTemplates = bind(app, 'dagTemplates');
 const getDagNodeInfo = bind(app, 'getDagNodeInfo');
 const applyWorkflowDagTemplate = bind(app, 'applyWorkflowDagTemplate');
 const availableTools = bind(app, 'availableTools');
+const allAgentTools = bind(app, 'allAgentTools');
+const filteredBuiltinTools = bind(app, 'filteredBuiltinTools');
+const filteredCustomTools = bind(app, 'filteredCustomTools');
+const agentToolSearch = bind(app, 'agentToolSearch');
+const bindToolToCurrentAgent = bind(app, 'bindToolToCurrentAgent');
+const dagBranchTargets = bind(app, 'dagBranchTargets');
+const dagBranchRows = bind(app, 'dagBranchRows');
 const knowledgeBases = bind(app, 'knowledgeBases');
 const agentMemories = bind(app, 'agentMemories');
 const agentUserPreferenceMemories = bind(app, 'agentUserPreferenceMemories');
@@ -119,6 +133,7 @@ const agentStats = bind(app, 'agentStats');
 const agentEvaluationLoading = bind(app, 'agentEvaluationLoading');
 const agentEvaluationSaving = bind(app, 'agentEvaluationSaving');
 const beginnerAssistTarget = bind(app, 'beginnerAssistTarget');
+const beginnerGeneratedDraftReady = bind(app, 'beginnerGeneratedDraftReady');
 const evaluationForm = bind(app, 'evaluationForm');
 const generatorForm = bind(app, 'generatorForm');
 const agentCreateWizardStep = bind(app, 'agentCreateWizardStep');
@@ -172,13 +187,10 @@ const workflowConnectingNode = vueComputed(() => {
 const agentPublicEndpoint = bind(app, 'agentPublicEndpoint');
 const agentApiEndpoint = bind(app, 'agentApiEndpoint');
 const agentGuideCards = bind(app, 'agentGuideCards');
-const isLoadingModels = bind(app, 'isLoadingModels');
 const status = bind(app, 'status');
 const isAuthLoaded = bind(app, 'isAuthLoaded');
 const isComposing = bind(app, 'isComposing');
 const isAuthenticated = bind(app, 'isAuthenticated');
-const loadModels = bind(app, 'loadModels');
-const refreshAgentStudio = bind(app, 'refreshAgentStudio');
 const loadAgentResources = bind(app, 'loadAgentResources');
 const createAgentDraft = bind(app, 'createAgentDraft');
 const applyAgentTemplate = bind(app, 'applyAgentTemplate');
@@ -282,67 +294,17 @@ const switchPage = bind(app, 'switchPage');
 const getModelTags = bind(app, 'getModelTags');
 const chatModels = bind(app, 'chatModels');
 
-function formatTraceDisplayValue(value: unknown) {
-  if (value === null || value === undefined || value === '') return '无';
-  if (Array.isArray(value) && value.length === 0) return '无';
-  if (typeof value !== 'string') return JSON.stringify(value, null, 2);
-  const raw = value.trim();
-  if (!raw) return '无';
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length === 0) return '无';
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const payload = parsed as Record<string, unknown>;
-      if ('result' in payload || 'stdout' in payload || 'logs' in payload) {
-        if (payload.result && typeof payload.result === 'object') return JSON.stringify(payload.result, null, 2);
-        if (typeof payload.stdout === 'string' && payload.stdout.trim()) {
-          try {
-            const stdoutPayload = JSON.parse(payload.stdout.trim());
-            return typeof stdoutPayload === 'string' ? stdoutPayload : JSON.stringify(stdoutPayload, null, 2);
-          } catch {
-            return payload.stdout.trim();
-          }
-        }
-      }
-    }
-    return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
-  } catch {
-    return value
-      .replace(/\\r\\n/g, '\n')
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '  ');
-  }
-}
+
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left" style="gap:8px">
-            <strong>Agent 工作台</strong>
-            <el-button :icon="Refresh" :loading="agentLoading || agentResourceLoading" @click="refreshAgentStudio()">刷新 Agent</el-button>
-            <el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button>
-          </div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-              <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-              <el-dropdown v-else trigger="click" @command="handleUserMenu">
-                <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                    <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-              <el-tag>{{ status }}</el-tag>
-            </template>
-          </div>
-        </div>
+        <WorkspaceHeader title="Agent 工作台" :app="app"><template #status><span v-if="agentRunning" class="ui-header-caption" role="status">进行中</span></template></WorkspaceHeader>
 
         <div class="agent-studio-shell">
           <el-alert v-if="isAuthLoaded && !isAuthenticated" type="warning" :closable="false" show-icon title="请先登录以创建和运行 Agent" />
 
           <template v-else>
+            <el-card class="agent-workspace-context" shadow="never">
             <div class="agent-workspace-switch">
               <div class="agent-current-info">
                 <div class="agent-current-avatar">
@@ -364,6 +326,7 @@ function formatTraceDisplayValue(value: unknown) {
                 <el-button size="small" type="primary" plain :disabled="!agentForm.id" @click="exportAgentAsJson()">导出 JSON 包</el-button>
               </div>
             </div>
+            </el-card>
 
             <div class="agent-mode-nav">
               <div class="agent-workspace-tabs">
@@ -433,7 +396,8 @@ function formatTraceDisplayValue(value: unknown) {
                   </button>
                 </aside>
 
-                <main class="agent-starter-main">
+                <section class="agent-starter-main">
+                  <el-alert v-if="beginnerGeneratedDraftReady" class="agent-starter-ai-notice" type="success" :closable="false" show-icon title="AI 草稿已生成。保存时会保留当前提示词，可在「基础」或「提示词」中查看和修改。" />
                   <section v-show="agentCreateWizardStep === 0" class="agent-starter-section">
                     <div class="agent-starter-title">
                       <div>
@@ -464,7 +428,7 @@ function formatTraceDisplayValue(value: unknown) {
                         <strong>你可以用大白话告诉这个 Agent 要帮谁、做什么</strong>
                         <p>这里不是写代码，也不是写提示词。像交代一个可靠的新同事一样就行。</p>
                       </div>
-                      <el-button :icon="MagicStick" type="primary" plain :loading="agentGenerating" @click="generateBeginnerAgentDraft()">AI 生成整套草稿</el-button>
+                      <el-button :icon="MagicStick" type="primary" plain :loading="agentGenerating" :disabled="!!beginnerAssistTarget" @click="generateBeginnerAgentDraft()">AI 生成整套草稿</el-button>
                     </div>
                     <div class="agent-starter-form-grid agent-starter-brief-grid">
                       <label class="agent-starter-field">
@@ -475,14 +439,14 @@ function formatTraceDisplayValue(value: unknown) {
                         <span>它要帮你做什么？</span>
                         <el-input v-model="beginnerAgentForm.job" type="textarea" :rows="3" resize="vertical" placeholder="例如：根据产品资料回答客户问题，并整理可直接发送的回复" @change="applyBeginnerFormToAgent()" />
                         <div class="agent-starter-field-actions">
-                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'goal'" @click="improveBeginnerText('goal')">AI 扩写</el-button>
+                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'goal'" :disabled="agentGenerating || !!beginnerAssistTarget" @click="improveBeginnerText('goal')">AI 扩写</el-button>
                         </div>
                       </label>
                       <label class="agent-starter-field">
                         <span>怎样算做得好？</span>
                         <el-input v-model="beginnerAgentForm.success" placeholder="例如：回答准确、能给下一步建议、客户能看懂" @change="applyBeginnerFormToAgent()" />
                         <div class="agent-starter-field-actions">
-                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'success'" @click="improveBeginnerText('success')">AI 补标准</el-button>
+                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'success'" :disabled="agentGenerating || !!beginnerAssistTarget" @click="improveBeginnerText('success')">AI 补标准</el-button>
                         </div>
                       </label>
                       <label class="agent-starter-field">
@@ -493,7 +457,7 @@ function formatTraceDisplayValue(value: unknown) {
                         <span>哪些事不要做？</span>
                         <el-input v-model="beginnerAgentForm.avoid" placeholder="例如：不要编造政策，不确定时先问我" @change="applyBeginnerFormToAgent()" />
                         <div class="agent-starter-field-actions">
-                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'avoid'" @click="improveBeginnerText('avoid')">AI 补边界</el-button>
+                          <el-button size="small" type="primary" plain :icon="MagicStick" :loading="beginnerAssistTarget === 'avoid'" :disabled="agentGenerating || !!beginnerAssistTarget" @click="improveBeginnerText('avoid')">AI 补边界</el-button>
                         </div>
                       </label>
                     </div>
@@ -519,7 +483,7 @@ function formatTraceDisplayValue(value: unknown) {
                         <span>工具</span>
                         <small>让 Agent 计算、处理文本或执行动作。</small>
                         <el-select v-model="agentForm.toolIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="可不选" style="width:100%">
-                          <el-option v-for="tool in availableTools" :key="tool.id" :label="tool.displayName" :value="tool.id" />
+                          <el-option v-for="tool in allAgentTools" :key="tool.id" :label="tool.displayName" :value="tool.id" />
                         </el-select>
                       </div>
                       <div>
@@ -543,7 +507,7 @@ function formatTraceDisplayValue(value: unknown) {
                         <strong>最后试一句</strong>
                         <p>保存后会进入调用页，用这句话检查它是不是按你的想法工作。</p>
                       </div>
-                      <el-button :icon="MagicStick" type="primary" plain :loading="beginnerAssistTarget === 'sample'" @click="improveBeginnerText('sample')">AI 填试用问题</el-button>
+                      <el-button :icon="MagicStick" type="primary" plain :loading="beginnerAssistTarget === 'sample'" :disabled="agentGenerating || !!beginnerAssistTarget" @click="improveBeginnerText('sample')">AI 填试用问题</el-button>
                     </div>
                     <div class="agent-starter-final">
                       <label>
@@ -566,13 +530,13 @@ function formatTraceDisplayValue(value: unknown) {
                   <div class="agent-starter-actions">
                     <el-button @click="createAgentDraft" :icon="Plus">重新开始</el-button>
                     <el-button :disabled="agentCreateWizardStep === 0" @click="previousAgentWizardStep()">上一步</el-button>
-                    <el-button v-if="agentCreateWizardStep < 3" type="primary" @click="agentCreateWizardStep === 1 ? (applyBeginnerFormToAgent(), nextAgentWizardStep()) : nextAgentWizardStep()">下一步</el-button>
+                    <el-button v-if="agentCreateWizardStep < 3" type="primary" :disabled="agentGenerating || !!beginnerAssistTarget" @click="agentCreateWizardStep === 1 ? (applyBeginnerFormToAgent(), nextAgentWizardStep()) : nextAgentWizardStep()">下一步</el-button>
                     <template v-else>
-                      <el-button type="primary" :loading="agentSaving" @click="applyBeginnerFormToAgent(); saveAgentFromWizard(false)">保存草稿</el-button>
-                      <el-button type="success" :loading="agentSaving" @click="applyBeginnerFormToAgent(); saveAgentFromWizard(true)">保存并去试用</el-button>
+                      <el-button type="primary" :loading="agentSaving" :disabled="agentGenerating || !!beginnerAssistTarget" @click="applyBeginnerFormToAgent(); saveAgentFromWizard(false)">保存草稿</el-button>
+                      <el-button type="success" :loading="agentSaving" :disabled="agentGenerating || !!beginnerAssistTarget" @click="applyBeginnerFormToAgent(); saveAgentFromWizard(true)">保存并去试用</el-button>
                     </template>
                   </div>
-                </main>
+                </section>
 
                 <aside class="agent-starter-guide">
                   <div class="agent-guide-box">
@@ -663,15 +627,15 @@ function formatTraceDisplayValue(value: unknown) {
                   <el-empty v-if="agentVersions.length === 0" description="暂无版本" :image-size="72" />
                 </div>
                 <div v-if="agentVersions.length >= 2" class="agent-version-compare-row">
-                  <el-select v-model="versionForm.compareLeftId" placeholder="选择基准版本" size="small" style="width: 180px">
+                  <el-select v-model="versionForm.compareLeftId" placeholder="选择基准版本" size="small" style="width: min(180px, 100%)">
                     <el-option v-for="version in agentVersions" :key="version.id" :label="`v${version.versionNumber} · ${version.label}`" :value="version.id" />
                   </el-select>
-                  <el-select v-model="versionForm.compareRightId" placeholder="选择目标版本" size="small" style="width: 180px">
+                  <el-select v-model="versionForm.compareRightId" placeholder="选择目标版本" size="small" style="width: min(180px, 100%)">
                     <el-option v-for="version in agentVersions" :key="version.id" :label="`v${version.versionNumber} · ${version.label}`" :value="version.id" />
                   </el-select>
                   <el-button size="small" :loading="versionSaving" @click="compareVersions()">对比版本</el-button>
                 </div>
-                <el-dialog v-model="showVersionCreateDialog" title="创建版本快照" width="520px" :close-on-click-modal="false" append-to-body>
+                <el-dialog class="agent-workbench-dialog" v-model="showVersionCreateDialog" title="创建版本快照" width="min(520px, calc(100vw - 24px))" :close-on-click-modal="false" append-to-body>
                   <el-form label-position="top">
                     <el-form-item label="版本标签">
                       <el-input v-model="versionForm.label" placeholder="例如 release-1，留空则自动生成" maxlength="120" />
@@ -685,7 +649,7 @@ function formatTraceDisplayValue(value: unknown) {
                     <el-button type="primary" :loading="versionSaving" :disabled="!agentForm.id" @click="createVersionFromForm()">创建</el-button>
                   </template>
                 </el-dialog>
-                <el-dialog v-model="showVersionPublishDialog" title="发布版本" width="560px" :close-on-click-modal="false" append-to-body>
+                <el-dialog class="agent-workbench-dialog" v-model="showVersionPublishDialog" title="发布版本" width="min(560px, calc(100vw - 24px))" :close-on-click-modal="false" append-to-body>
                   <el-form label-position="top">
                     <el-form-item label="发布方式">
                       <el-segmented v-model="versionForm.releaseMode" :options="[
@@ -708,7 +672,7 @@ function formatTraceDisplayValue(value: unknown) {
                     <el-button type="primary" :loading="versionSaving" :disabled="!agentForm.id" @click="publishVersionFromForm()">确认发布</el-button>
                   </template>
                 </el-dialog>
-                <el-dialog v-model="agentVersionCompareVisible" title="版本对比" width="760px" append-to-body>
+                <el-dialog class="agent-workbench-dialog" v-model="agentVersionCompareVisible" title="版本对比" width="min(760px, calc(100vw - 24px))" append-to-body>
                   <el-table :data="agentVersionCompare?.changes || []" empty-text="两个版本没有关键差异" style="width:100%">
                     <el-table-column label="字段" prop="field" width="140" />
                     <el-table-column label="基准版本" min-width="240">
@@ -747,7 +711,7 @@ function formatTraceDisplayValue(value: unknown) {
                   </div>
                   <el-empty v-if="!agentEvaluationLoading && agentEvaluations.length === 0" description="暂无评测记录" :image-size="72" />
                 </div>
-                <el-dialog v-model="showEvaluationDialog" title="评测当前运行" width="620px" :close-on-click-modal="false">
+                <el-dialog class="agent-workbench-dialog" v-model="showEvaluationDialog" title="评测当前运行" width="min(620px, calc(100vw - 24px))" :close-on-click-modal="false">
                   <el-form label-position="top">
                     <el-form-item label="评测模式">
                       <el-segmented
@@ -1091,10 +1055,10 @@ function formatTraceDisplayValue(value: unknown) {
                     <div class="agent-resource-content">{{ memory.content }}</div>
                   </div>
                   <el-empty v-if="agentScopedMemories.length === 0" description="暂无 Agent 专属记忆" :image-size="56" />
-                  <el-dialog
+                  <el-dialog class="agent-workbench-dialog"
                     v-model="showMemoryCreateDialog"
                     :title="editingMemoryId ? '编辑长期记忆' : '写入长期记忆'"
-                    width="560px"
+                    width="min(560px, calc(100vw - 24px))"
                     :close-on-click-modal="false"
                     @closed="resetMemoryEditor()"
                   >
@@ -1149,7 +1113,7 @@ function formatTraceDisplayValue(value: unknown) {
                 <el-button type="primary" :loading="agentSaving" @click="saveAgent()">保存能力配置</el-button>
               </div>
 
-              <el-dialog v-model="showSkillCreateDialog" title="创建技能" width="600px" :close-on-click-modal="false">
+              <el-dialog class="agent-workbench-dialog" v-model="showSkillCreateDialog" title="创建技能" width="min(600px, calc(100vw - 24px))" :close-on-click-modal="false">
                 <el-form label-position="top">
                   <el-form-item label="名称" required>
                     <el-input v-model="skillForm.name" placeholder="技能名称" maxlength="80" />
@@ -1260,7 +1224,7 @@ function formatTraceDisplayValue(value: unknown) {
                   <el-empty v-if="agentTeams.length === 0" description="暂无 Agent 团队" :image-size="72" />
                 </div>
 
-                <el-dialog v-model="showTeamCreateDialog" title="创建团队" width="640px" :close-on-click-modal="false">
+                <el-dialog class="agent-workbench-dialog" v-model="showTeamCreateDialog" title="创建团队" width="min(640px, calc(100vw - 24px))" :close-on-click-modal="false">
                   <el-form label-position="top">
                     <el-form-item label="团队名称">
                       <el-input v-model="teamForm.name" placeholder="例如：客服质检团队" maxlength="80" />
@@ -1284,7 +1248,7 @@ function formatTraceDisplayValue(value: unknown) {
                     <el-form-item label="协作 Agent">
                       <div class="agent-team-member-editor">
                         <div v-for="(member, index) in teamForm.members" :key="index" class="agent-team-member-row">
-                          <el-select v-model="member.agentId" filterable placeholder="选择 Agent" style="width: 220px">
+                          <el-select v-model="member.agentId" filterable placeholder="选择 Agent" style="width: 100%">
                             <el-option
                               v-for="agent in agents"
                               :key="agent.id"
@@ -1365,11 +1329,11 @@ function formatTraceDisplayValue(value: unknown) {
                     <span>正在从 {{ workflowConnectingNode.label }} 连线</span>
                     <el-button size="small" text type="primary" @click="workflowCanvasConnecting = ''">取消</el-button>
                   </div>
-                  
+
                   <div class="dag-workbench">
                     <aside class="dag-node-palette">
                       <div class="dag-palette-title">节点库</div>
-                      <el-scrollbar height="100%">
+                      <el-scrollbar class="dag-palette-scroll">
                         <div v-for="category in dagNodeCategories" :key="category.id" class="dag-category">
                           <div class="dag-category-title">
                             <span>{{ category.icon }}</span>
@@ -1394,7 +1358,7 @@ function formatTraceDisplayValue(value: unknown) {
                       </el-scrollbar>
                     </aside>
 
-                    <main class="dag-canvas-stage">
+                    <section class="dag-canvas-stage">
                       <div
                         class="dag-canvas"
                         @dragover.prevent
@@ -1421,7 +1385,7 @@ function formatTraceDisplayValue(value: unknown) {
                             v-for="node in workflowCanvasNodes"
                             :key="node.id"
                             class="dag-canvas-node"
-                            :class="{ 
+                            :class="{
                               connecting: workflowCanvasConnecting === node.id,
                               [`node-${getDagNodeInfo(node.type)?.category}`]: true
                             }"
@@ -1451,7 +1415,7 @@ function formatTraceDisplayValue(value: unknown) {
                           <span class="dag-canvas-hint">或选择模板快速开始</span>
                         </div>
                       </div>
-                    </main>
+                    </section>
                   </div>
 
                   <div class="dag-runner">
@@ -1475,7 +1439,7 @@ function formatTraceDisplayValue(value: unknown) {
                   </div>
                 </div>
 
-                <el-dialog v-model="dagNodeConfigVisible" title="节点配置与检查" width="860px" :close-on-click-modal="false">
+                <el-dialog class="agent-workbench-dialog" v-model="dagNodeConfigVisible" title="节点配置与检查" width="min(860px, calc(100vw - 24px))" :close-on-click-modal="false">
                   <template v-if="activeDagNode">
                     <div class="dag-node-config-header">
                       <span class="config-node-icon">{{ getDagNodeInfo(activeDagNode.type)?.icon }}</span>
@@ -1491,7 +1455,7 @@ function formatTraceDisplayValue(value: unknown) {
                           <el-input v-model="activeDagNode.name" placeholder="例如：判断问题类型" />
                           <div class="dag-field-help">给自己看的名字，会显示在画布节点上。</div>
                         </el-form-item>
-                      
+
                       <template v-if="activeDagNode.type === 'intent_detection'">
                         <el-form-item label="使用模型">
                           <el-select v-model="dagNodeConfig.model" placeholder="选择模型" style="width:100%">
@@ -1553,7 +1517,7 @@ function formatTraceDisplayValue(value: unknown) {
                         </el-form-item>
                         <el-form-item label="入参映射 JSON">
                           <el-input v-model="dagNodeConfig.argsText" type="textarea" :rows="5" placeholder="{ &quot;text&quot;: &quot;{{input}}&quot; }" />
-                          <div class="dag-field-help">必须是 JSON 对象。常用 {{input}} 代表上一节点结果。</div>
+                          <div v-pre class="dag-field-help">必须是 JSON 对象。常用 {{input}} 代表上一节点结果。</div>
                         </el-form-item>
                         <el-form-item label="超时时间(秒)">
                           <el-input-number v-model="dagNodeConfig.timeout" :min="1" :max="300" />
@@ -1608,7 +1572,7 @@ function formatTraceDisplayValue(value: unknown) {
                       <template v-if="activeDagNode.type === 'prompt_builder'">
                         <el-form-item label="提示词模板">
                           <el-input v-model="dagNodeConfig.template" type="textarea" :rows="6" placeholder="使用 {{variable}} 作为变量占位符" />
-                          <div class="dag-field-help">写给模型看的完整指令。用 {{input}} 引用上游内容。</div>
+                          <div v-pre class="dag-field-help">写给模型看的完整指令。用 {{input}} 引用上游内容。</div>
                         </el-form-item>
                       </template>
 
@@ -1621,7 +1585,7 @@ function formatTraceDisplayValue(value: unknown) {
                       <template v-if="activeDagNode.type === 'variable_assigner'">
                         <el-form-item label="变量定义 JSON">
                           <el-input v-model="dagNodeConfig.variablesText" type="textarea" :rows="7" placeholder="{ &quot;query&quot;: &quot;{{input}}&quot;, &quot;source&quot;: &quot;workflow&quot; }" />
-                          <div class="dag-field-help">必须是 JSON 对象，值可以写固定文本或 {{input}}。</div>
+                          <div v-pre class="dag-field-help">必须是 JSON 对象，值可以写固定文本或 {{input}}。</div>
                         </el-form-item>
                       </template>
 
@@ -1637,7 +1601,7 @@ function formatTraceDisplayValue(value: unknown) {
                         </el-form-item>
                         <el-form-item label="请求地址">
                           <el-input v-model="dagNodeConfig.url" placeholder="https://api.example.com/search?q={{input}}" />
-                          <div class="dag-field-help">必须以 http:// 或 https:// 开头。可以用 {{input}} 拼接上游输入。</div>
+                          <div v-pre class="dag-field-help">必须以 http:// 或 https:// 开头。可以用 {{input}} 拼接上游输入。</div>
                         </el-form-item>
                         <el-form-item label="请求头 JSON">
                           <el-input v-model="dagNodeConfig.headersText" type="textarea" :rows="4" placeholder="{ &quot;Authorization&quot;: &quot;Bearer xxx&quot; }" />
@@ -1673,6 +1637,16 @@ function formatTraceDisplayValue(value: unknown) {
                           <el-input v-model="dagNodeConfig.expression" placeholder="例如：订单、退款、{{input}} 中会匹配的关键词" />
                           <div class="dag-field-help">写一个关键词或判断说明；命中走 true，未命中走 false。</div>
                         </el-form-item>
+                        <el-form-item label="命中时执行">
+                          <el-select v-model="dagNodeConfig.trueNextIds" multiple placeholder="选择目标节点；留空结束此分支">
+                            <el-option v-for="node in dagBranchTargets" :key="node.id" :value="node.id" :label="node.name || node.id" />
+                          </el-select>
+                        </el-form-item>
+                        <el-form-item label="未命中时执行">
+                          <el-select v-model="dagNodeConfig.falseNextIds" multiple placeholder="选择目标节点；留空结束此分支">
+                            <el-option v-for="node in dagBranchTargets" :key="node.id" :value="node.id" :label="node.name || node.id" />
+                          </el-select>
+                        </el-form-item>
                         <el-form-item label="命中分支输出模板">
                           <el-input v-model="dagNodeConfig.trueTemplate" type="textarea" :rows="4" placeholder="{{input}}" />
                         </el-form-item>
@@ -1685,6 +1659,16 @@ function formatTraceDisplayValue(value: unknown) {
                         <el-form-item label="分类分支">
                           <el-input v-model="dagNodeConfig.branchesText" type="textarea" :rows="6" placeholder="售前咨询=价格&#10;订单查询=订单&#10;售后退款=退款" />
                           <div class="dag-field-help">一行一个分支，格式：分支名=关键词。关键词为空可当默认分支。</div>
+                        </el-form-item>
+                        <el-form-item v-for="branch in dagBranchRows" :key="branch.id" :label="branch.name + '执行目标'">
+                          <el-select v-model="dagNodeConfig.branchTargetIds[branch.id]" multiple placeholder="选择目标节点；留空结束此分支">
+                            <el-option v-for="node in dagBranchTargets" :key="node.id" :value="node.id" :label="node.name || node.id" />
+                          </el-select>
+                        </el-form-item>
+                        <el-form-item label="未匹配时执行">
+                          <el-select v-model="dagNodeConfig.defaultNextIds" multiple placeholder="选择默认目标；留空结束">
+                            <el-option v-for="node in dagBranchTargets" :key="node.id" :value="node.id" :label="node.name || node.id" />
+                          </el-select>
                         </el-form-item>
                         <el-form-item label="分类提示词">
                           <el-input v-model="dagNodeConfig.template" type="textarea" :rows="4" placeholder="按分支关键词判断用户问题：{{input}}" />
@@ -1768,7 +1752,7 @@ function formatTraceDisplayValue(value: unknown) {
 	                  <el-empty v-if="mcpServers.length === 0" description="暂无 MCP 服务" :image-size="72" />
 	                </div>
 	              </div>
-              <el-dialog v-model="showMcpCreateDialog" title="添加 MCP 服务" width="560px" :close-on-click-modal="false">
+              <el-dialog class="agent-workbench-dialog" v-model="showMcpCreateDialog" title="添加 MCP 服务" width="min(560px, calc(100vw - 24px))" :close-on-click-modal="false">
                 <el-form label-position="top">
                   <el-form-item label="服务类型">
                     <el-select v-model="mcpForm.serverType" placeholder="选择 MCP 服务" style="width:100%">
@@ -1799,7 +1783,7 @@ function formatTraceDisplayValue(value: unknown) {
                   </el-button>
                 </template>
               </el-dialog>
-              <el-dialog v-model="showMcpTestDialog" title="测试 MCP 服务" width="520px" :close-on-click-modal="false">
+              <el-dialog class="agent-workbench-dialog" v-model="showMcpTestDialog" title="测试 MCP 服务" width="min(520px, calc(100vw - 24px))" :close-on-click-modal="false">
                 <el-form label-position="top">
                   <el-form-item label="测试查询">
                     <el-input v-model="mcpForm.query" type="textarea" :rows="3" resize="vertical" placeholder="留空则使用 test" maxlength="200" show-word-limit />
@@ -1950,7 +1934,7 @@ function formatTraceDisplayValue(value: unknown) {
 
               <div class="tools-container">
                 <div class="tools-header">
-                  <el-input placeholder="搜索工具..." prefix-icon="Search" style="width: 300px" />
+                  <el-input v-model="agentToolSearch" placeholder="搜索工具..." clearable prefix-icon="Search" style="width: min(300px, 100%)" />
                   <el-button type="primary" @click="openToolCreateDialog()">
                     <el-icon><Plus /></el-icon> 创建工具
                   </el-button>
@@ -1959,7 +1943,7 @@ function formatTraceDisplayValue(value: unknown) {
                 <el-tabs>
                   <el-tab-pane label="平台内置">
                     <div class="tool-grid">
-                      <div v-for="tool in availableTools" :key="tool.id" class="tool-card">
+                      <div v-for="tool in filteredBuiltinTools" :key="tool.id" class="tool-card">
                         <div class="tool-card-header">
                           <strong>{{ tool.displayName }}</strong>
                           <el-tag size="small" type="success">内置</el-tag>
@@ -1970,14 +1954,14 @@ function formatTraceDisplayValue(value: unknown) {
                         </div>
                         <div class="tool-card-actions">
                           <el-button size="small" text @click="previewTool(tool as any)">预览</el-button>
-                          <el-button size="small" text type="primary">绑定</el-button>
+                          <el-button size="small" text type="primary" :loading="agentSaving" @click="bindToolToCurrentAgent(tool)">{{ agentForm.toolIds.includes(tool.id) ? '已绑定' : '绑定' }}</el-button>
                         </div>
                       </div>
                     </div>
                   </el-tab-pane>
                   <el-tab-pane label="自定义工具">
                     <div class="tool-grid">
-                      <div v-for="tool in customTools" :key="tool.id" class="tool-card">
+                      <div v-for="tool in filteredCustomTools" :key="tool.id" class="tool-card">
                         <div class="tool-card-header">
                           <strong>{{ tool.displayName }}</strong>
                           <div>
@@ -1998,6 +1982,7 @@ function formatTraceDisplayValue(value: unknown) {
                         <div class="tool-card-actions">
                           <el-button size="small" text @click="previewTool(tool)">预览</el-button>
                           <el-button size="small" text @click="openToolTest(tool)">测试</el-button>
+                          <el-button size="small" text type="primary" :loading="agentSaving" @click="bindToolToCurrentAgent(tool)">{{ agentForm.toolIds.includes(tool.id) ? '已绑定' : '绑定' }}</el-button>
                           <el-button size="small" text type="primary" @click="editTool(tool)">编辑</el-button>
                           <el-button size="small" text :type="tool.status === 'enabled' ? 'warning' : 'success'" @click="toggleToolStatus(tool)">
                             {{ tool.status === 'enabled' ? '禁用' : '启用' }}
@@ -2005,14 +1990,14 @@ function formatTraceDisplayValue(value: unknown) {
                           <el-button size="small" text type="danger" @click="deleteTool(tool.id)">删除</el-button>
                         </div>
                       </div>
-                      <el-empty v-if="customTools.length === 0" description="暂无自定义工具，点击上方按钮创建" :image-size="72" />
+                      <el-empty v-if="filteredCustomTools.length === 0" description="暂无匹配的自定义工具" :image-size="72" />
                     </div>
                   </el-tab-pane>
                 </el-tabs>
               </div>
 
               <!-- 工具创建/编辑对话框 -->
-              <el-dialog v-model="toolCreateDialogVisible" :title="toolEditingId ? '编辑工具' : '创建工具'" width="700px" :close-on-click-modal="false">
+              <el-dialog class="agent-workbench-dialog" v-model="toolCreateDialogVisible" :title="toolEditingId ? '编辑工具' : '创建工具'" width="min(700px, calc(100vw - 24px))" :close-on-click-modal="false">
                 <el-form label-position="top">
                   <el-row :gutter="16">
                     <el-col :span="12">
@@ -2054,7 +2039,7 @@ function formatTraceDisplayValue(value: unknown) {
                       </el-form-item>
                     </el-col>
                   </el-row>
-                  
+
                   <el-form-item label="工具代码">
                     <el-input v-model="toolForm.code" type="textarea" :rows="12" class="tool-code-editor" placeholder="def run(input, context): ..." />
                   </el-form-item>
@@ -2087,7 +2072,7 @@ function formatTraceDisplayValue(value: unknown) {
               </el-dialog>
 
               <!-- 工具预览抽屉 -->
-              <el-drawer v-model="toolPreviewVisible" title="工具预览" size="500px">
+              <el-drawer class="agent-workbench-drawer" v-model="toolPreviewVisible" title="工具预览" size="min(500px, 100vw)">
                 <template v-if="activeTool">
                   <div class="tool-preview">
                     <div class="tool-preview-header">
@@ -2138,7 +2123,7 @@ function formatTraceDisplayValue(value: unknown) {
               </el-drawer>
 
               <!-- 工具测试对话框 -->
-              <el-dialog v-model="toolTestVisible" title="工具测试" width="600px">
+              <el-dialog class="agent-workbench-dialog" v-model="toolTestVisible" title="工具测试" width="min(600px, calc(100vw - 24px))">
                 <template v-if="activeTool">
                   <div style="margin-bottom: 16px;">
                     <strong>{{ activeTool.displayName }}</strong>
@@ -2148,14 +2133,14 @@ function formatTraceDisplayValue(value: unknown) {
                     <el-input v-model="toolTestInput" type="textarea" :rows="4" placeholder='{"key": "value"}' />
                   </el-form-item>
                   <el-button type="primary" :loading="toolTesting" @click="runToolTest()">运行测试</el-button>
-                  
+
                   <div v-if="toolTestResult" style="margin-top: 16px;">
                     <el-divider />
                     <div style="margin-bottom: 8px;">
-                      <el-tag :type="toolTestResult.success ? 'success' : 'danger'">
-                        {{ toolTestResult.success ? '成功' : '失败' }}
+                      <el-tag :type="toolTestResult.status === 'succeeded' ? 'success' : 'danger'">
+                        {{ toolTestResult.status === 'succeeded' ? '成功' : '失败' }}
                       </el-tag>
-                      <el-tag type="info" style="margin-left: 8px;">{{ toolTestResult.duration }}ms</el-tag>
+                      <el-tag type="info" style="margin-left: 8px;">{{ toolTestResult.latencyMs ?? 0 }}ms</el-tag>
                     </div>
                     <div class="tool-config-section">
                       <div class="section-title">输出结果</div>
@@ -2248,7 +2233,7 @@ function formatTraceDisplayValue(value: unknown) {
                     </div>
                     <el-empty v-if="marketplaceTemplates.length === 0" description="暂无模板" :image-size="72" />
                   </div>
-                  <el-dialog v-model="showMarketplacePublishDialog" title="发布 Agent 模板" width="560px" :close-on-click-modal="false">
+                  <el-dialog class="agent-workbench-dialog" v-model="showMarketplacePublishDialog" title="发布 Agent 模板" width="min(560px, calc(100vw - 24px))" :close-on-click-modal="false">
                     <el-form label-position="top">
                       <el-form-item label="模板名称">
                         <el-input v-model="marketplaceForm.name" placeholder="留空则使用当前 Agent 名称" maxlength="80" />
@@ -2351,8 +2336,15 @@ function formatTraceDisplayValue(value: unknown) {
                   </div>
                 </template>
 
-                <div class="agent-invoke-console">
+                <div class="agent-invoke-console" :class="`agent-invoke-view-${invokeView}`">
+                  <div class="agent-invoke-view-switch" role="group" aria-label="调用页面视图">
+                    <el-button :type="invokeView === 'task' ? 'primary' : 'default'" :aria-pressed="invokeView === 'task'" @click="invokeView = 'task'; pauseAgentTraceReplay()">任务与结果</el-button>
+                    <el-button :type="invokeView === 'trace' ? 'primary' : 'default'" :aria-pressed="invokeView === 'trace'" @click="invokeView = 'trace'">过程与历史</el-button>
+                  </div>
                   <section class="agent-invoke-statusbar">
+                    <el-select class="agent-invoke-agent-select" :model-value="agentForm.id" @change="selectAgentById($event)" aria-label="选择调用的 Agent" placeholder="选择 Agent">
+                      <el-option v-for="item in agents" :key="item.id" :label="item.name" :value="item.id" />
+                    </el-select>
                     <div class="agent-profile-top compact">
                       <el-avatar :size="32" class="agent-avatar" :style="{ backgroundColor: '#2563eb', lineHeight: '32px'}">
                   {{ agentForm.name ? agentForm.name.charAt(0).toUpperCase() : 'A' }}
@@ -2371,7 +2363,7 @@ function formatTraceDisplayValue(value: unknown) {
                     </div>
                   </section>
 
-                  <main class="agent-invoke-main">
+                  <section class="agent-invoke-main" aria-label="任务与结果">
                     <section class="agent-compose-panel">
                       <div class="agent-compose-toolbar">
                         <div>
@@ -2381,8 +2373,8 @@ function formatTraceDisplayValue(value: unknown) {
                         <div class="agent-compose-actions">
                           <el-button size="small" plain @click="fillAgentPromptExample()">示例</el-button>
                           <el-button size="small" plain :disabled="!agentPrompt && !agentImageUrlInput" @click="clearAgentPrompt()">清空</el-button>
-                          <el-button size="small" plain :disabled="!agentLastPrompt && !activeAgentRun" @click="rerunLastAgentPrompt()">重跑</el-button>
-                          <el-button v-if="agentRunning" size="small" type="danger" plain @click="stopCurrentAgentRun()">停止</el-button>
+                          <el-button size="small" plain :disabled="agentRunning || !activeAgentRun" @click="rerunLastAgentPrompt()" title="填入所选任务，确认后使用当前已保存配置运行新会话">重跑任务</el-button>
+                          <el-button v-if="agentRunning" size="small" type="danger" plain @click="stopCurrentAgentRun()" title="仅断开实时连接，不取消后台任务">断开连接</el-button>
                         </div>
                       </div>
                       <el-input
@@ -2393,10 +2385,12 @@ function formatTraceDisplayValue(value: unknown) {
                         resize="vertical"
                         placeholder="给这个 Agent 一个明确任务，例如：根据我们的产品手册，生成一份客服答复。"
                         :disabled="agentRunning"
-                        @keydown.enter.exact.prevent="runCurrentAgent()"
+                        @keydown.ctrl.enter.prevent="runCurrentAgent($event)"
+                        @keydown.meta.enter.prevent="runCurrentAgent($event)"
                         @compositionstart="isComposing = true"
                         @compositionend="isComposing = false"
                       />
+                      <p class="agent-trace-note">Enter 换行，Ctrl / Command + Enter 运行。</p>
                       <div class="agent-multimodal-toggle">
                         <el-button size="small" plain @click="agentImageInputOpen = !agentImageInputOpen">
                           {{ agentImageInputOpen ? '收起多模态输入' : '添加图片 URL' }}
@@ -2413,6 +2407,7 @@ function formatTraceDisplayValue(value: unknown) {
                       />
                       <div class="agent-run-actions">
                         <div class="agent-run-config-summary">
+                          <el-checkbox v-if="activeAgentRun" v-model="agentContinueConversation" :disabled="agentRunning" title="取消勾选后不带入历史会话">继续所选会话</el-checkbox>
                           <el-tag size="small" type="info">模型自主选择工具</el-tag>
                           <el-tag size="small" type="info">{{ agentInvokeMaxSteps }} 步</el-tag>
                         </div>
@@ -2433,7 +2428,7 @@ function formatTraceDisplayValue(value: unknown) {
                     <section class="agent-output-panel">
                       <div class="agent-output-head">
                         <div>
-                          <div class="agent-section-title">输出</div>
+                          <div class="agent-section-title">{{ activeAgentRun?.status === 'running' ? '所选运行 · 生成中' : '所选运行输出' }}</div>
                           <div v-if="activeAgentRun" class="agent-run-meta">
                             <el-tag :type="agentRunTagType(activeAgentRun.status)">{{ agentRunStatusLabel(activeAgentRun.status) }}</el-tag>
                             <el-tag type="info">{{ activeAgentRun.model }}</el-tag>
@@ -2455,17 +2450,18 @@ function formatTraceDisplayValue(value: unknown) {
                         :title="activeAgentRun.error"
                       />
                       <div v-if="activeAgentRun?.output" class="agent-output-render markdown-content" v-html="renderMarkdown(activeAgentRun.output)"></div>
-                      <div v-if="activeAgentToolResultCards.length" class="agent-tool-results-panel">
-                        <div class="agent-section-title">工具运行结果</div>
+                      <details v-if="activeAgentToolResultCards.length" class="agent-tool-results-panel">
+                        <summary>工具运行结果</summary>
                         <div v-for="toolResult in activeAgentToolResultCards" :key="toolResult.id" class="agent-tool-result-card">
                           <div class="agent-resource-title">
                             <span>{{ toolResult.name }}</span>
                             <div class="agent-inline-actions">
                               <el-tag v-if="toolResult.deterministic" size="small" type="success">代码计算</el-tag>
                               <el-tag size="small" :type="agentRunTagType(toolResult.status)">{{ agentRunStatusLabel(toolResult.status) }}</el-tag>
-                              <el-tag size="small" type="info">{{ toolResult.latencyMs }} ms</el-tag>
+                                <el-tag size="small" type="info">{{ toolResult.latencyMs == null ? '耗时未记录' : toolResult.latencyMs + ' ms' }}</el-tag>
                             </div>
                           </div>
+                          <el-alert v-if="toolResult.error" :title="toolResult.error" type="error" :closable="false" show-icon />
                           <div class="agent-tool-io-grid">
                             <div>
                               <span>输入</span>
@@ -2477,284 +2473,22 @@ function formatTraceDisplayValue(value: unknown) {
                             </div>
                           </div>
                         </div>
-                      </div>
+                      </details>
                       <div v-if="!activeAgentRun?.output && !activeAgentToolResultCards.length" class="agent-output-empty">
                         <el-empty description="运行 Agent 后，这里会显示流式输出。" :image-size="96" />
                       </div>
                     </section>
 
-                  </main>
+                  </section>
 
                   <aside class="agent-invoke-inspector">
-                    <div
-                      class="agent-run-state-banner"
-                      :class="activeAgentRun?.status || (agentRunning ? 'running' : 'idle')"
-                    >
-                      <div>
-                        <span>运行状态</span>
-                        <strong>{{ agentRunStatusLabel(activeAgentRun?.status || (agentRunning ? 'running' : 'idle')) }}</strong>
-                      </div>
-                      <div class="agent-run-state-meta">
-                        <el-tag size="small" :type="agentRunTagType(activeAgentRun?.status || (agentRunning ? 'running' : ''))">
-                          {{ activeAgentRun?.steps.length || 0 }} 步
-                        </el-tag>
-                        <el-tag size="small" type="info">{{ activeAgentRun?.latencyMs || 0 }} ms</el-tag>
-                      </div>
-                    </div>
-                    <el-tabs v-model="agentInvokePanelTab" stretch>
-                      <el-tab-pane label="追踪" name="trace">
-                        <el-alert
-                          v-if="activeAgentRun?.error"
-                          type="error"
-                          :closable="false"
-                          show-icon
-                          :title="activeAgentRun.error"
-                        />
-                        <div v-if="activeAgentRun" class="agent-diagnosis-section">
-                          <strong>运行摘要</strong>
-                          <div class="agent-diagnosis-tags">
-                            <el-tag size="small" :type="agentFailedTraceSteps.length ? 'danger' : 'success'">失败 {{ agentFailedTraceSteps.length }}</el-tag>
-                            <el-tag size="small" :type="agentSlowTraceSteps.length ? 'warning' : 'success'">慢步骤 {{ agentSlowTraceSteps.length }}</el-tag>
-                            <el-tag size="small" type="info">知识 {{ agentContextSourceSummary.knowledge || 0 }}</el-tag>
-                            <el-tag size="small" type="info">记忆 {{ agentContextSourceSummary.memory || 0 }}</el-tag>
-                            <el-tag size="small" type="info">技能 {{ agentContextSourceSummary.skill || 0 }}</el-tag>
-                          </div>
-                        </div>
-                        <div v-if="agentFailedTraceSteps.length" class="agent-diagnosis-section">
-                          <strong>失败步骤</strong>
-                          <button
-                            v-for="step in agentFailedTraceSteps"
-                            :key="`failed-${step.id}`"
-                            type="button"
-                            class="agent-diagnosis-step"
-                            @click="selectAgentTraceStep(step.id)"
-                          >
-                            <span>{{ step.name }}</span>
-                            <small>{{ agentStepTypeLabel(step.stepType) }} · {{ step.error || '失败' }}</small>
-                          </button>
-                        </div>
-                        <div v-if="agentSlowTraceSteps.length" class="agent-diagnosis-section">
-                          <strong>耗时异常</strong>
-                          <button
-                            v-for="step in agentSlowTraceSteps"
-                            :key="`slow-${step.id}`"
-                            type="button"
-                            class="agent-diagnosis-step"
-                            @click="selectAgentTraceStep(step.id)"
-                          >
-                            <span>{{ step.name }}</span>
-                            <small>{{ agentStepTypeLabel(step.stepType) }} · {{ step.latencyMs }} ms</small>
-                          </button>
-                        </div>
-                        <div v-if="agentImprovementSuggestions" class="agent-diagnosis-section">
-                          <strong>优化建议</strong>
-                          <p>{{ agentImprovementSuggestions.summary }}</p>
-                          <div class="agent-suggestion-group">
-                            <span>提示词</span>
-                            <ul><li v-for="item in agentImprovementSuggestions.promptSuggestions" :key="item">{{ item }}</li></ul>
-                          </div>
-                          <div class="agent-suggestion-group">
-                            <span>能力</span>
-                            <ul><li v-for="item in agentImprovementSuggestions.capabilitySuggestions" :key="item">{{ item }}</li></ul>
-                          </div>
-                          <div class="agent-suggestion-group">
-                            <span>测试</span>
-                            <ul><li v-for="item in agentImprovementSuggestions.testSuggestions" :key="item">{{ item }}</li></ul>
-                          </div>
-                        </div>
-                        <el-divider />
-                        <div class="agent-trace-metrics">
-                          <div>
-                            <span>成本</span>
-                            <strong>¥{{ agentHarnessMetrics.cost.toFixed(4) }}</strong>
-                          </div>
-                          <div>
-                            <span>延迟</span>
-                            <strong>{{ agentHarnessMetrics.latency }} ms</strong>
-                          </div>
-                          <div>
-                            <span>成功率</span>
-                            <strong>{{ agentHarnessMetrics.successRate }}%</strong>
-                          </div>
-                          <div>
-                            <span>平均 Token</span>
-                            <strong>{{ agentHarnessMetrics.averageTokens }}</strong>
-                          </div>
-                        </div>
-
-                        <div class="execution-trace-flow">
-                          <button
-                            v-for="stage in agentExecutionTraceFlow"
-                            :key="stage.id"
-                            type="button"
-                            class="execution-trace-node"
-                            :class="[stage.status, { active: activeAgentTraceStep?.id === stage.step?.id, current: stage.current }]"
-                            @click="stage.step && selectAgentTraceStep(stage.step.id)"
-                          >
-                            <span>{{ stage.label }}</span>
-                            <strong>{{ stage.title }}</strong>
-                            <small>{{ stage.latencyMs }} ms · {{ agentRunStatusLabel(stage.status) }}</small>
-                            <em v-if="stage.current">当前阶段</em>
-                            <p>{{ stage.detail }}</p>
-                          </button>
-                        </div>
-
-                        <div class="agent-trace-controlbar compact debugger">
-                          <el-button size="small" :disabled="!activeAgentRun?.steps.length" @click="pauseAgentTraceReplay()">暂停</el-button>
-                          <el-button size="small" type="primary" plain :disabled="!activeAgentRun?.steps.length" @click="resumeAgentTraceReplay()">继续</el-button>
-                          <el-button size="small" :disabled="!agentTraceDebuggerState.canStepInto" @click="stepIntoAgentTrace()">进入步骤</el-button>
-                          <el-button size="small" :disabled="!agentTraceDebuggerState.canStepOver" @click="stepOverAgentTrace()">跳过步骤</el-button>
-                          <el-button size="small" type="warning" plain :disabled="!agentTraceDebuggerState.canRestartFromNode" @click="restartAgentFromTraceNode()">从当前步骤重启</el-button>
-                          <span>{{ agentTraceReplayIndex + 1 }} / {{ activeAgentRun?.steps.length || 1 }}</span>
-                        </div>
-
-                        <div class="agent-debug-grid">
-                          <div v-if="agentTraceStageGroups.length" class="agent-stage-grid invoke">
-                            <div v-for="stage in agentTraceStageGroups" :key="stage.id" class="agent-stage-column">
-                              <div class="agent-stage-title">{{ stage.label }}</div>
-                              <button
-                                v-for="node in stage.nodes"
-                                :key="node.id"
-                                type="button"
-                                class="trace-node"
-                                :class="[node.status, { active: node.active }]"
-                                @click="selectAgentTraceStep(Number(node.id))"
-                              >
-                                <span>{{ node.label }}</span>
-                                <small>{{ agentStepTypeLabel(node.type) }} · {{ node.latencyMs }} ms</small>
-                              </button>
-                            </div>
-                          </div>
-                          <div class="agent-snapshot-panel">
-                            <div class="agent-section-title">快照</div>
-                            <el-descriptions :column="1" border size="small">
-                              <el-descriptions-item label="模型">{{ agentTraceSnapshot.model || '-' }}</el-descriptions-item>
-                              <el-descriptions-item label="参数">{{ JSON.stringify(agentTraceSnapshot.parameters) }}</el-descriptions-item>
-                            </el-descriptions>
-                            <div class="snapshot-block">
-                              <strong>提示词</strong>
-                              <pre>{{ agentTraceSnapshot.prompt || '无' }}</pre>
-                            </div>
-                            <div class="snapshot-block">
-                              <strong>消息</strong>
-                              <pre>{{ JSON.stringify(agentTraceSnapshot.messages, null, 2) }}</pre>
-                            </div>
-                            <div class="snapshot-block">
-                              <strong>工具输入 / 输出</strong>
-                              <div class="agent-tool-io-grid">
-                                <div>
-                                  <span>输入</span>
-                                  <pre>{{ formatTraceDisplayValue(agentTraceSnapshot.toolInput) }}</pre>
-                                </div>
-                                <div>
-                                  <span>输出</span>
-                                  <pre>{{ formatTraceDisplayValue(agentTraceSnapshot.toolOutput) }}</pre>
-                                </div>
-                              </div>
-                            </div>
-                            <div class="snapshot-block">
-                              <strong>记忆状态</strong>
-                              <pre>{{ formatTraceDisplayValue(agentTraceSnapshot.memoryState) }}</pre>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div class="comparative-replay-panel">
-                          <div class="agent-section-title">对比回放</div>
-                          <div class="replay-diff-grid">
-                            <div>
-                              <span>提示词差异</span>
-                              <pre>{{ JSON.stringify(agentComparativeReplay.promptDiff, null, 2) }}</pre>
-                            </div>
-                            <div>
-                              <span>模型差异</span>
-                              <pre>{{ JSON.stringify(agentComparativeReplay.modelDiff, null, 2) }}</pre>
-                            </div>
-                            <div>
-                              <span>技能差异</span>
-                              <pre>{{ JSON.stringify(agentComparativeReplay.skillDiff, null, 2) }}</pre>
-                            </div>
-                            <div>
-                              <span>工作流差异</span>
-                              <pre>{{ JSON.stringify(agentComparativeReplay.workflowDiff, null, 2) }}</pre>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div class="agent-step-inspector compact">
-                          <div class="agent-section-title">步骤检查器</div>
-                          <template v-if="activeAgentTraceStep">
-                            <div class="agent-step-head">
-                              <strong>{{ activeAgentTraceStep.name }}</strong>
-                              <div>
-                                <el-tag size="small" :type="agentRunTagType(activeAgentTraceStep.status)">{{ agentRunStatusLabel(activeAgentTraceStep.status) }}</el-tag>
-                                <el-tag size="small" type="info">{{ agentStepTypeLabel(activeAgentTraceStep.stepType) }}</el-tag>
-                              </div>
-                            </div>
-                            <div class="agent-step-meta-line">
-                              <span>{{ formatAgentDate(activeAgentTraceStep.startedAt) }}</span>
-                              <span>{{ activeAgentTraceStep.latencyMs }} ms</span>
-                            </div>
-                            <el-alert v-if="activeAgentTraceStep.error" type="error" :closable="false" show-icon :title="activeAgentTraceStep.error" />
-                            <div class="agent-inspector-section">
-                              <strong>输入</strong>
-                              <pre class="agent-step-meta">{{ activeAgentTraceStep.input || '无' }}</pre>
-                            </div>
-                            <div class="agent-inspector-section">
-                              <strong>输出</strong>
-                              <pre class="agent-step-meta">{{ activeAgentTraceStep.output || '无' }}</pre>
-                            </div>
-                            <div v-if="formatStepMetadata(activeAgentTraceStep.metadata)" class="agent-inspector-section">
-                              <strong>元数据</strong>
-                              <pre class="agent-step-meta">{{ formatStepMetadata(activeAgentTraceStep.metadata) }}</pre>
-                            </div>
-                            <el-button size="small" plain @click="agentPrompt = activeAgentTraceStep.input">用此输入重跑</el-button>
-                          </template>
-                          <el-empty v-else description="暂无步骤" :image-size="72" />
-                        </div>
-
-                        <el-empty v-if="!agentTraceStageGroups.length" description="暂无追踪节点" :image-size="72" />
-                      </el-tab-pane>
-
-                      <el-tab-pane label="历史" name="history">
-                        <div class="agent-history-toolbar">
-                          <el-segmented
-                            v-model="agentRunHistoryFilter"
-                            :options="[
-                              { label: '全部', value: 'all' },
-                              { label: '成功', value: 'succeeded' },
-                              { label: '失败', value: 'failed' },
-                            ]"
-                          />
-                          <el-select v-model="agentRunHistorySort" size="small">
-                            <el-option label="按时间" value="created" />
-                            <el-option label="按耗时" value="latency" />
-                            <el-option label="按 Token" value="tokens" />
-                          </el-select>
-                        </div>
-                        <el-scrollbar class="agent-history-list compact">
-                          <button
-                            v-for="run in filteredAgentRuns"
-                            :key="run.id"
-                            type="button"
-                            class="agent-history-item"
-                            :class="[run.status, { active: activeAgentRun?.id === run.id }]"
-                            @click="selectAgentRun(run)"
-                          >
-                            <span>{{ run.input || '空输入' }}</span>
-                            <small>{{ run.totalTokens }} Token · {{ formatAgentDate(run.createdAt) }}</small>
-                          </button>
-                          <el-empty v-if="filteredAgentRuns.length === 0" description="暂无运行历史" :image-size="72" />
-                        </el-scrollbar>
-                      </el-tab-pane>
-
-                    </el-tabs>
+                    <AgentRunTrace :app="app" />
                   </aside>
                 </div>
               </el-card>
             </div>
 
-            <el-drawer v-model="skillPreviewOpen" size="520px" title="技能预览" :destroy-on-close="true">
+            <el-drawer class="agent-workbench-drawer" v-model="skillPreviewOpen" size="min(520px, 100vw)" title="技能预览" :destroy-on-close="true">
               <template v-if="activeSkill">
                 <div class="skill-preview">
                   <div class="skill-preview-header">
@@ -2808,7 +2542,7 @@ function formatTraceDisplayValue(value: unknown) {
               <el-empty v-else description="正在加载技能详情" :image-size="72" />
             </el-drawer>
 
-            <el-dialog v-model="showAgentExportDialog" title="导出 Agent JSON 包" width="620px" :close-on-click-modal="false">
+            <el-dialog class="agent-workbench-dialog" v-model="showAgentExportDialog" title="导出 Agent JSON 包" width="min(620px, calc(100vw - 24px))" :close-on-click-modal="false">
               <div class="agent-export-dialog">
                 <div class="agent-export-summary">
                   <div>

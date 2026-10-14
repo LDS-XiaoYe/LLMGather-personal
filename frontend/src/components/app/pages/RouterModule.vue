@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -41,23 +42,7 @@ const submitRouterPrompt = bind(app, 'submitRouterPrompt');
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left"><strong>智能路由</strong></div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-            <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-            <el-dropdown v-else trigger="click" @command="handleUserMenu">
-              <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                  <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            </template>
-          </div>
-        </div>
+        <WorkspaceHeader title="智能路由" :app="app"><template #status><span v-if="routerLoading" class="ui-header-caption" role="status">进行中</span></template></WorkspaceHeader>
 
         <div class="thread" style="flex:1">
           <el-empty v-if="!isAuthenticated" description="请先登录以使用智能路由" :image-size="96" />
@@ -119,7 +104,7 @@ const submitRouterPrompt = bind(app, 'submitRouterPrompt');
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
               <span style="font-size:12px;color:#909399">智能路由</span>
               <el-switch v-model="routerEnabled" size="small" />
-              <span style="font-size:12px;color:#909399" v-if="routerEnabled">开启 — 自动选择最佳模型</span>
+              <span style="font-size:12px;color:#909399" v-if="routerEnabled">开启 — 按意图选择模型</span>
               <span style="font-size:12px;color:#909399" v-else>关闭 — 使用下方选择的模型</span>
             </div>
             <div v-if="!routerEnabled" style="margin-bottom:8px">
@@ -132,7 +117,7 @@ const submitRouterPrompt = bind(app, 'submitRouterPrompt');
               type="textarea"
               :rows="2"
               resize="vertical"
-              placeholder="输入消息，智能路由将自动分析意图并选择最佳模型..."
+              placeholder="输入任务，查看模型选择过程"
               :disabled="isSubmitting || routerLoading"
               @keydown.enter.exact.prevent="submitRouterPrompt()"
               @compositionstart="isComposing = true"

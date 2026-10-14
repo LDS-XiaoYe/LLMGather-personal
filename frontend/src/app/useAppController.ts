@@ -1,10 +1,14 @@
 // @ts-nocheck
+import { traceStepFailed, traceTools, traceSnapshot, traceSources, traceComparison, traceRecordedConfig } from '../utils/agent-trace';
+import { isKnowledgeHash } from '../utils/knowledge-navigation';
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Cpu, ChatDotRound, DataAnalysis, Delete, Document, EditPen, Headset, InfoFilled, Lightning, MoreFilled, Monitor, Picture, PictureFilled, Plus, Promotion, Refresh, Search, Setting, Star, Sunny, SwitchButton, TrendCharts, User, UserFilled, VideoCamera, Coin, Upload } from '@element-plus/icons-vue';
 import * as echarts from 'echarts';
 import { useDagNodes } from '../composables/useDagNodes';
+import { createRagLabSession } from '../utils/rag-lab-session';
 import {
+  ApiError,
   clearStoredToken,
   addKnowledgeDocument as apiAddKnowledgeDocument,
   createAgent as apiCreateAgent,
@@ -20,6 +24,8 @@ import {
   createMcpServer as apiCreateMcpServer,
   createTool as apiCreateTool,
   createWorkflow as apiCreateWorkflow,
+  updateWorkflow as apiUpdateWorkflow,
+  fetchWorkflowRun as apiFetchWorkflowRun,
   deleteAdminUser,
   deleteAgent as apiDeleteAgent,
   deleteAgentMarketplaceTemplate as apiDeleteAgentMarketplaceTemplate,
@@ -82,7 +88,7 @@ import {
   runAgentTeam as apiRunAgentTeam,
   runWorkflow as apiRunWorkflow,
   sendVerificationCode,
-  searchKnowledgeBase as apiSearchKnowledgeBase,
+  searchKnowledgeBaseDetailed as apiSearchKnowledgeBase,
   addUserLibraryFileToKnowledge as apiAddUserLibraryFileToKnowledge,
   createRechargeOrder,
   createUserLibraryFile as apiCreateUserLibraryFile,
@@ -91,7 +97,6 @@ import {
   fetchRechargeOrders,
   checkRechargeOrder,
   type RechargeOrder,
-  setStoredToken,
   syncConversations,
   testSkill as apiTestSkill,
   testTool as apiTestTool,
@@ -189,7 +194,6 @@ export function useAppController() {
   const BASE_URL_KEY = 'llm_gather_base_url';
   const THEME_KEY = 'llm_gather_theme';
   const CHAT_THINKING_KEY = 'llm_gather_chat_thinking';
-  const CHAT_AGENT_MODE_KEY = 'llm_gather_chat_agent_mode';
 
   type ThemeMode = 'light' | 'dark' | 'auto';
 
@@ -236,12 +240,12 @@ export function useAppController() {
   const backendBaseUrl = ref(getStoredValue(BASE_URL_KEY) || '/v1');
   const isSettingsOpen = ref(false);
   const chatThinkingMode = ref(getStoredValue(CHAT_THINKING_KEY) !== 'off');
-  const chatAgentMode = ref(getStoredValue(CHAT_AGENT_MODE_KEY) === 'on');
   const isAuthDialogOpen = ref(false);
   const authUser = ref<AuthUser | null>(null);
   const authMode = ref<'login' | 'register'>('login');
   const authUsername = ref('');
   const authPassword = ref('');
+  const authRememberMe = ref(true);
   const authEmail = ref('');
   const authVerificationCode = ref('');
   const authInvitationCode = ref('');
@@ -290,6 +294,26 @@ export function useAppController() {
   const agentInvokePanelTab = ref<'trace' | 'history'>('trace');
   const agentImageInputOpen = ref(false);
   const agentLastPrompt = ref('');
+  const agentComparisonRunId = ref('');
+  const agentTraceFollowLive = ref(true);
+  const agentContinueConversation = ref(true);
+  const executingAgentRun = ref<AgentRun | null>(null);
+  let agentHistoryGeneration = 0;
+  let agentExecutionGeneration = 0;
+  watch([() => authUser.value?.id, () => backendBaseUrl.value], () => {
+    ++agentHistoryGeneration;
+    ++agentExecutionGeneration;
+    agentRunAbortController?.abort();
+    agentRunAbortController = null;
+    agentRunning.value = false;
+    executingAgentRun.value = null;
+    activeAgentRun.value = null;
+    agentRuns.value = [];
+    agentConversationId.value = '';
+    agentTraceReplayPlaying.value = false;
+    agentTraceFollowLive.value = false;
+    agentComparisonRunId.value = '';
+  });
   const agentRunHistoryFilter = ref<'all' | 'succeeded' | 'failed'>('all');
   const agentRunHistorySort = ref<'created' | 'latency' | 'tokens'>('created');
   const agentImprovementSuggestions = ref<AgentImprovementSuggestions | null>(null);
@@ -406,6 +430,8 @@ export function useAppController() {
   const agentEvaluationLoading = ref(false);
   const agentEvaluationSaving = ref(false);
   const beginnerAssistTarget = ref<'goal' | 'success' | 'avoid' | 'sample' | ''>('');
+  const beginnerGeneratedDraftSource = ref('');
+  const beginnerGeneratedDraftReady = computed(() => beginnerGeneratedDraftSource.value === beginnerDraftSourceKey());
   const evaluationForm = ref({
     expectedOutput: '',
     rubric: '',
@@ -542,9 +568,25 @@ export function useAppController() {
     query: '',
     mode: 'hybrid' as 'hybrid' | 'keyword' | 'vector',
     limit: 5,
+    thresholdEnabled: false,
+    minDenseScore: 0.2,
   });
   const ragLabSearching = ref(false);
-  const ragLabResults = ref<Awaited<ReturnType<typeof apiSearchKnowledgeBase>>>([]);
+  const ragLabResults = ref<Awaited<ReturnType<typeof apiSearchKnowledgeBase>>['data']>([]);
+  const ragLabMeta = ref(null);
+  const ragLabSnapshot = ref(null);
+  const ragLabError = ref('');
+  const ragLabSession = createRagLabSession({ results: ragLabResults, meta: ragLabMeta,
+    snapshot: ragLabSnapshot, error: ragLabError, searching: ragLabSearching },
+    (request) => apiSearchKnowledgeBase(request.kbId, request.query,
+      { mode: request.mode, limit: request.limit, minDenseScore: request.minDenseScore }, backendBaseUrl.value));
+  watch(ragLabForm, () => {
+    const hadResult = ragLabSnapshot.value || ragLabError.value;
+    ragLabSession.invalidate();
+    if (hadResult) status.value = '检索条件已变更，请重新测试';
+  }, { deep: true, flush: 'sync' });
+  watch([() => authUser.value?.id, backendBaseUrl], () => ragLabSession.invalidate());
+  const invalidateRagLab = () => ragLabSession.invalidate();
   const memoryForm = ref({
     content: '',
     importance: 3,
@@ -1013,11 +1055,12 @@ export function useAppController() {
   // Navigation
   const pageMode = ref<PageMode>(
     window.location.hash === '#/agent' ? 'agent'
-    : window.location.hash === '#/rag' ? 'rag'
+    : isKnowledgeHash(window.location.hash) ? 'rag'
     : window.location.hash === '#/battle' ? 'battle'
     : window.location.hash === '#/group' ? 'group'
     : window.location.hash === '#/console' ? 'console'
     : window.location.hash === '#/api' ? 'api'
+    : window.location.hash === '#/admin' ? 'admin'
     : window.location.hash === '#/vision' ? 'vision'
     : window.location.hash === '#/tts' ? 'tts'
     : window.location.hash === '#/multimodal' ? 'multimodal'
@@ -1094,6 +1137,7 @@ export function useAppController() {
   const adminBillingFilterModel = ref('');
   const adminBillingFilterProvider = ref('');
   const adminEditUserDialog = ref(false);
+  const adminEditUserOriginal = ref<AdminUser | null>(null);
   const adminEditUserId = ref('');
   const adminEditUserCredits = ref(0);
   const adminEditUserRole = ref('user');
@@ -1109,7 +1153,7 @@ export function useAppController() {
     emailVerified: true,
   });
   const adminCreateUserSaving = ref(false);
-  const adminTab = ref<'dashboard' | 'users' | 'billing' | 'modelstats' | 'modeltiers' | 'providers' | 'apikeys' | 'settings' | 'router'>('dashboard');
+  const adminTab = ref<'dashboard' | 'users' | 'billing' | 'modelstats' | 'modeltiers' | 'providers' | 'apikeys' | 'knowledge-models' | 'settings' | 'router'>('dashboard');
   const adminDailyUsage = ref<DailyUsage[]>([]);
   const adminChartDays = ref(30);
   const adminTodayStats = ref<TodayStats | null>(null);
@@ -1134,6 +1178,12 @@ export function useAppController() {
   // System settings state
   const adminSettings = ref<SystemSetting[]>([]);
   const adminEditSettingDialog = ref(false);
+  const adminSettingSaving = ref(false);
+  const adminSettingsLoading = ref(false);
+  const adminSettingsError = ref('');
+  const adminEditSettingOriginal = ref('');
+  const adminTierEditVersions = ref<Record<string, string>>({});
+  let adminSettingsRequest = 0;
   const adminEditSettingKey = ref('');
   const adminEditSettingValue = ref('');
   const adminEditSettingDesc = ref('');
@@ -1173,6 +1223,7 @@ export function useAppController() {
   // Provider config admin state
   const adminProviderConfigs = ref<ProviderConfigRow[]>([]);
   const adminEditConfigDialog = ref(false);
+  const adminEditConfigOriginalUpdatedAt = ref('');
   const adminEditConfigId = ref('');
   const adminEditConfigForm = ref<ProviderConfigInput>({
     providerName: '',
@@ -1254,12 +1305,11 @@ export function useAppController() {
 
   watch(backendBaseUrl, (val) => setStoredValue(BASE_URL_KEY, val));
   watch(chatThinkingMode, (value) => setStoredValue(CHAT_THINKING_KEY, value ? 'on' : 'off'));
-  watch(chatAgentMode, (value) => setStoredValue(CHAT_AGENT_MODE_KEY, value ? 'on' : 'off'));
 
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash;
     if (hash === '#/agent') pageMode.value = 'agent';
-      else if (hash === '#/rag') pageMode.value = 'rag';
+      else if (isKnowledgeHash(hash)) pageMode.value = 'rag';
       else if (hash === '#/battle') pageMode.value = 'battle';
       else if (hash === '#/group') pageMode.value = 'group';
       else if (hash === '#/console') pageMode.value = 'console';
@@ -1280,7 +1330,7 @@ export function useAppController() {
       void loadAgents();
       void loadAgentResources();
     } else if (mode === 'rag') {
-      void loadAgentResources();
+      // Knowledge workspace owns its scoped requests.
     } else if (mode === 'console') {
       onConsoleEnter();
     } else if (mode === 'api') {
@@ -1301,7 +1351,7 @@ export function useAppController() {
       void loadAgents();
       void loadAgentResources();
     } else if (authed && pageMode.value === 'rag') {
-      void loadAgentResources();
+      // Knowledge workspace loads after authentication.
     }
   });
 
@@ -1351,41 +1401,120 @@ export function useAppController() {
   }
 
   /* ---------- Methods ---------- */
-  async function loadModels() {
+  const modelRefreshError = ref('');
+  let modelListGeneration = 0;
+  let modelListOwner = '';
+  let modelListRequest: { scope: string; promise: Promise<void> } | null = null;
+  watch([() => authUser.value?.id, backendBaseUrl], () => {
+    ++modelListGeneration;
+    modelListRequest = null;
+    modelListOwner = '';
+    isLoadingModels.value = false;
+    modelRefreshError.value = '';
+    models.value = [];
+  });
+  async function loadModels(options: { silent?: boolean } = {}) {
     if (!isAuthenticated.value) {
+      ++modelListGeneration;
       models.value = [];
-      status.value = '请先登录以加载模型';
+      isLoadingModels.value = false;
+      modelRefreshError.value = '';
+      if (!options.silent) status.value = '请先登录以加载模型';
       return;
     }
-
+    const base = backendBaseUrl.value;
+    const userId = authUser.value?.id;
+    const scope = `${userId}|${base}`;
+    if (modelListRequest?.scope === scope) return modelListRequest.promise;
+    const generation = ++modelListGeneration;
+    const valid = () => generation === modelListGeneration && base === backendBaseUrl.value && userId === authUser.value?.id && isAuthenticated.value;
     isLoadingModels.value = true;
-    status.value = '正在加载模型列表';
-    try {
-      const data = await fetchModels(backendBaseUrl.value);
-      models.value = data;
-      restoreSelectedModel();
-      if (data.length > 0 && !data.some((m) => m.id === selectedModel.value) && selectedModel.value !== 'auto') {
-        selectedModel.value = data[0].id;
+    modelRefreshError.value = '';
+    if (!options.silent) status.value = '正在加载模型列表';
+    const promise = refresh();
+    modelListRequest = { scope, promise };
+    return promise;
+
+    async function refresh() {
+      try {
+        const [data, config] = await Promise.all([
+          fetchModels(base),
+          options.silent ? fetchPageModels(base, { applySettings: false }) : Promise.resolve(null),
+        ]);
+        if (!valid()) return;
+        if (config) pageModelsConfig.value = config;
+        models.value = data;
+        const firstLoad = modelListOwner !== scope;
+        if (firstLoad) restoreSelectedModel();
+        // A background catalogue update must not change an in-flight chat's model.
+        if (!isSubmitting.value && selectedModel.value !== 'auto' && !chatModels.value.some((m) => m.id === selectedModel.value)) {
+          selectedModel.value = chatModels.value[0]?.id || 'auto';
+        }
+        if (firstLoad || !options.silent) {
+          restoreMmModel(data);
+          restoreTtsModel(data);
+          restoreVisionModel(data);
+        }
+        modelListOwner = scope;
+        if (!options.silent) status.value = `已加载 ${data.length} 个模型`;
+      } catch (error) {
+        if (!valid()) return;
+        const msg = error instanceof Error ? error.message : '加载模型失败';
+        if (error instanceof ApiError && error.status === 401) {
+          status.value = '登录已过期，请重新登录';
+          authUser.value = null;
+          models.value = [];
+          clearStoredToken();
+        } else {
+          modelRefreshError.value = `更新模型列表失败：${msg}`;
+          if (!options.silent) status.value = msg;
+        }
+      } finally {
+        if (generation === modelListGeneration) {
+          isLoadingModels.value = false;
+          modelListRequest = null;
+        }
       }
-      restoreMmModel(data);
-      restoreTtsModel(data);
-      restoreVisionModel(data);
-      status.value = `已加载 ${data.length} 个模型`;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : '加载模型失败';
-      if (msg.includes('Token') || msg.includes('API Key') || msg.includes('登录')) {
-        status.value = '登录已过期，请重新登录';
-        authUser.value = null;
-        clearStoredToken();
-      } else {
-        status.value = msg;
-      }
-    } finally {
-      isLoadingModels.value = false;
     }
   }
 
+  let agentEditorEpoch = 0;
+  let agentFormBaseline = '';
+  let workflowCanvasBaseline = '';
+  const agentResourceGenerations: Record<string, number> = {};
+  const allAgentTools = computed(() => [...availableTools.value, ...customTools.value.map(tool => ({ ...tool, schema: tool.inputSchema, enabled: tool.status === 'enabled', implementationType: 'custom_code', source: 'custom' }))]);
+  const agentToolSearch = ref('');
+  const filterAgentTools = (items: any[]) => items.filter(tool => !agentToolSearch.value.trim() || [tool.name, tool.displayName, tool.description].join(' ').toLowerCase().includes(agentToolSearch.value.trim().toLowerCase()));
+  const filteredBuiltinTools = computed(() => filterAgentTools(availableTools.value));
+  const filteredCustomTools = computed(() => filterAgentTools(customTools.value));
+  const dagBranchRows = computed(() => parseDagBranches(dagNodeConfig.value.branchesText));
+  const dagBranchTargets = computed(() => workflowCanvasNodes.value.filter(node => node.id !== activeDagNode.value?.id));
+  function captureAgentEditorScope(id = agentForm.value.id) {
+    return { id, epoch: agentEditorEpoch, userId: authUser.value?.id, base: backendBaseUrl.value };
+  }
+  function agentAccountMatches(scope: ReturnType<typeof captureAgentEditorScope>) {
+    return scope.userId === authUser.value?.id && scope.base === backendBaseUrl.value && isAuthenticated.value;
+  }
+  function agentEditorMatches(scope: ReturnType<typeof captureAgentEditorScope>) {
+    return agentAccountMatches(scope) && scope.id === agentForm.value.id && scope.epoch === agentEditorEpoch;
+  }
+  function agentDraftDirty() { return Boolean(agentFormBaseline && JSON.stringify(agentForm.value) !== agentFormBaseline); }
+  function agentCanvasDirty() { return Boolean(workflowCanvasBaseline && JSON.stringify(workflowCanvasNodes.value) !== workflowCanvasBaseline); }
+  function confirmAgentDiscard() { return !(agentDraftDirty() || agentCanvasDirty()) || window.confirm('当前有未保存的更改，确认切换并放弃这些更改？'); }
+  function upsertAgentCache(saved: AgentDefinition) {
+    const index = agents.value.findIndex(item => item.id === saved.id);
+    if (index >= 0) agents.value.splice(index, 1, saved); else agents.value.unshift(saved);
+  }
+  watch([() => authUser.value?.id, backendBaseUrl], () => { ++agentEditorEpoch; });
+
   function resetAgentForm() {
+    beginnerGeneratedDraftSource.value = '';
+    ++agentHistoryGeneration;
+    ++agentEditorEpoch;
+    agentLastPrompt.value = '';
+    agentComparisonRunId.value = '';
+    agentTraceFollowLive.value = false;
+    agentContinueConversation.value = true;
     const defaultModel = selectedModel.value && selectedModel.value !== 'auto'
       ? selectedModel.value
       : (chatModels.value[0]?.id || models.value[0]?.id || '');
@@ -1416,9 +1545,18 @@ export function useAppController() {
     agentTraceReplayPlaying.value = false;
     agentInvokePanelTab.value = 'trace';
     agentMemories.value = [];
+    agentEvaluations.value = [];
+    agentVersions.value = [];
+    agentStats.value = null;
+    activeWorkflowId.value = '';
+    activeWorkflowRun.value = null;
+    workflowCanvasNodes.value = [];
+    agentFormBaseline = JSON.stringify(agentForm.value);
+    workflowCanvasBaseline = JSON.stringify(workflowCanvasNodes.value);
   }
 
   function fillAgentForm(agent: AgentDefinition) {
+    beginnerGeneratedDraftSource.value = '';
     agentForm.value = {
       id: agent.id,
       name: agent.name,
@@ -1429,6 +1567,7 @@ export function useAppController() {
       maxTokens: Number(agent.maxTokens),
       memoryEnabled: agent.memoryEnabled !== false,
       toolIds: [...(agent.toolIds ?? [])],
+      toolPermissions: { ...(agent.toolPermissions ?? {}) },
       knowledgeBaseIds: [...(agent.knowledgeBaseIds ?? [])],
       skillIds: [...(agent.skillIds ?? [])],
       workflowIds: [...(agent.workflowIds ?? [])],
@@ -1438,6 +1577,7 @@ export function useAppController() {
       publicSlug: agent.publicSlug ?? '',
       status: agent.status,
     };
+    agentFormBaseline = JSON.stringify(agentForm.value);
     activeWorkflowId.value = agentForm.value.workflowIds[0] ?? '';
     if (activeWorkflowId.value && workflows.value.some((item) => item.id === activeWorkflowId.value)) {
       syncWorkflowCanvasFromSelected();
@@ -1445,14 +1585,12 @@ export function useAppController() {
       workflowCanvasNodes.value = [];
       workflowCanvasConnecting.value = '';
       workflowCanvasDrag.value = null;
+      workflowCanvasBaseline = JSON.stringify(workflowCanvasNodes.value);
     }
   }
 
-  async function refreshAgentStudio() {
-    await Promise.all([
-      loadAgents(),
-      loadAgentResources(),
-    ]);
+  async function refreshAgentStudio(options: { background?: boolean } = {}) {
+    await loadAgents(options);
   }
 
   async function loadAgentResources() {
@@ -1475,6 +1613,9 @@ export function useAppController() {
       return;
     }
 
+    const scope = captureAgentEditorScope();
+    const generation = agentResourceGenerations.resources = (agentResourceGenerations.resources ?? 0) + 1;
+    const current = () => agentAccountMatches(scope) && generation === agentResourceGenerations.resources;
     agentResourceLoading.value = true;
     try {
       const [tools, bases, skills, teamItems, mcpItems, templates, builtinItems, workflowItems] = await Promise.all([
@@ -1487,6 +1628,7 @@ export function useAppController() {
         fetchBuiltinAgents(backendBaseUrl.value),
         fetchWorkflows(backendBaseUrl.value),
       ]);
+      if (!current()) return;
       availableTools.value = tools.filter((tool) => tool.source !== 'custom');
       customTools.value = tools.filter((tool) => tool.source === 'custom').map(toolDefinitionToCustomTool);
       knowledgeBases.value = bases;
@@ -1500,7 +1642,7 @@ export function useAppController() {
       if (!ragLabForm.value.kbId && bases[0]) ragLabForm.value.kbId = bases[0].id;
       if (!userLibraryTargetKbId.value && bases[0]) userLibraryTargetKbId.value = bases[0].id;
       if (!activeTeamId.value && teamItems[0]) activeTeamId.value = teamItems[0].id;
-      if (activeWorkflowId.value && workflowItems.some((item) => item.id === activeWorkflowId.value)) {
+      if (!agentEditorMatches(scope) || agentCanvasDirty()) { /* Keep the local graph while refreshing resource catalogs. */ } else if (activeWorkflowId.value && workflowItems.some((item) => item.id === activeWorkflowId.value)) {
         syncWorkflowCanvasFromSelected();
       } else {
         activeWorkflowId.value = '';
@@ -1508,15 +1650,14 @@ export function useAppController() {
         workflowCanvasConnecting.value = '';
         activeWorkflowRun.value = null;
       }
-      await loadAgentMemories();
-      await loadAgentEvaluations();
-      await loadAgentVersions();
+      await Promise.all([loadAgentMemories(), loadAgentEvaluations(), loadAgentVersions()]);
+      if (!current()) return;
       if (knowledgeDocForm.value.kbId) await loadKnowledgeDocuments(knowledgeDocForm.value.kbId);
       await loadUserLibraryFiles();
     } catch (error) {
       console.error('[loadAgentResources] failed:', error);
     } finally {
-      agentResourceLoading.value = false;
+      if (current()) agentResourceLoading.value = false;
     }
   }
 
@@ -1525,8 +1666,13 @@ export function useAppController() {
       agentMemories.value = [];
       return;
     }
+    const scope = captureAgentEditorScope(agentId);
+    const generation = agentResourceGenerations.memories = (agentResourceGenerations.memories ?? 0) + 1;
+    const current = () => agentEditorMatches(scope) && generation === agentResourceGenerations.memories;
+    agentMemories.value = [];
     try {
-      agentMemories.value = await fetchMemories(agentId, backendBaseUrl.value);
+      const items = await fetchMemories(agentId, scope.base);
+      if (current()) agentMemories.value = items;
     } catch (error) {
       console.error('[loadAgentMemories] failed:', error);
     }
@@ -1538,18 +1684,23 @@ export function useAppController() {
       agentStats.value = null;
       return;
     }
+    const scope = captureAgentEditorScope(agentId);
+    const generation = agentResourceGenerations.evaluations = (agentResourceGenerations.evaluations ?? 0) + 1;
+    const current = () => agentEditorMatches(scope) && generation === agentResourceGenerations.evaluations;
+    agentEvaluations.value = []; agentStats.value = null;
     agentEvaluationLoading.value = true;
     try {
       const [evaluations, stats] = await Promise.all([
         fetchAgentEvaluations(agentId, backendBaseUrl.value),
         fetchAgentStats(agentId, backendBaseUrl.value),
       ]);
+      if (!current()) return;
       agentEvaluations.value = evaluations;
       agentStats.value = stats;
     } catch (error) {
       console.error('[loadAgentEvaluations] failed:', error);
     } finally {
-      agentEvaluationLoading.value = false;
+      if (current()) agentEvaluationLoading.value = false;
     }
   }
 
@@ -1558,69 +1709,88 @@ export function useAppController() {
       agentVersions.value = [];
       return;
     }
+    const scope = captureAgentEditorScope(agentId);
+    const generation = agentResourceGenerations.versions = (agentResourceGenerations.versions ?? 0) + 1;
+    const current = () => agentEditorMatches(scope) && generation === agentResourceGenerations.versions;
+    agentVersions.value = [];
     try {
-      agentVersions.value = await fetchAgentVersions(agentId, backendBaseUrl.value);
+      const items = await fetchAgentVersions(agentId, scope.base);
+      if (current()) agentVersions.value = items;
     } catch (error) {
       console.error('[loadAgentVersions] failed:', error);
     }
   }
 
-  async function loadAgents() {
+  async function loadAgents(options: { background?: boolean } = {}) {
     if (!isAuthenticated.value) {
       agents.value = [];
       resetAgentForm();
       return;
     }
+    const scope = captureAgentEditorScope();
+    const catalogueAtStart = options.background ? JSON.stringify(agents.value) : '';
+    const generation = agentResourceGenerations.agents = (agentResourceGenerations.agents ?? 0) + 1;
+    const current = () => (options.background ? agentAccountMatches(scope) : agentEditorMatches(scope)) && generation === agentResourceGenerations.agents;
     agentLoading.value = true;
     try {
       const data = await fetchAgents(backendBaseUrl.value);
+      if (!current()) return;
+      if (options.background && JSON.stringify(agents.value) !== catalogueAtStart) return;
       agents.value = data;
+      // Background catalogue refreshes must not reset drafts, canvases or replay selection.
+      if (options.background) return;
       const existing = activeAgentId.value ? data.find((agent) => agent.id === activeAgentId.value) : null;
       const next = existing ?? data[0] ?? null;
+      if (agentDraftDirty() || agentCanvasDirty()) {
+        await loadAgentResources();
+        return;
+      }
       if (next) {
         activeAgentId.value = next.id;
         fillAgentForm(next);
         await loadAgentRuns(next.id);
-        await loadAgentMemories(next.id);
-        await loadAgentEvaluations(next.id);
-        await loadAgentVersions(next.id);
+
       } else {
         activeAgentId.value = '';
         resetAgentForm();
       }
-      void loadAgentResources();
+      await loadAgentResources();
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '加载 Agent 失败';
+      const message = error instanceof Error ? error.message : '加载 Agent 失败';
+      if (current()) status.value = options.background ? `更新 Agent 列表失败：${message}` : message;
     } finally {
-      agentLoading.value = false;
+      if (generation === agentResourceGenerations.agents) agentLoading.value = false;
     }
   }
 
   async function loadAgentRuns(agentId = activeAgentId.value) {
+    const generation = ++agentHistoryGeneration;
+    const base = backendBaseUrl.value;
+    const userId = authUser.value?.id;
+    agentTraceReplayPlaying.value = false;
+    agentComparisonRunId.value = '';
     if (!agentId || !isAuthenticated.value) {
-      agentRuns.value = [];
-      activeAgentRun.value = null;
-      agentConversationId.value = '';
-      activeAgentTraceStepId.value = null;
+      agentRuns.value = []; activeAgentRun.value = null;
+      agentConversationId.value = ''; activeAgentTraceStepId.value = null;
       return;
     }
-    agentRuns.value = [];
-    activeAgentRun.value = null;
-    activeAgentTraceStepId.value = null;
+    agentRuns.value = []; activeAgentRun.value = null;
+    agentConversationId.value = ''; activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
-    agentTraceReplayPlaying.value = false;
     try {
-      agentRuns.value = (await fetchAgentRuns(agentId, backendBaseUrl.value)).filter((run) => run.agentId === agentId);
-      activeAgentRun.value = agentRuns.value[0] ?? activeAgentRun.value;
-      agentConversationId.value = activeAgentRun.value?.conversationId || activeAgentRun.value?.id || agentConversationId.value;
-      activeAgentTraceStepId.value = activeAgentRun.value?.steps[0]?.id ?? null;
-    } catch (error) {
-      console.error('[loadAgentRuns] failed:', error);
-    }
+      const runs = await fetchAgentRuns(agentId, base);
+      if (generation !== agentHistoryGeneration || activeAgentId.value !== agentId || base !== backendBaseUrl.value || userId !== authUser.value?.id || !isAuthenticated.value) return;
+      agentRuns.value = runs.filter(run => run.agentId === agentId);
+      if (agentRunning.value && executingAgentRun.value?.agentId === agentId) {
+        agentRuns.value = [executingAgentRun.value, ...agentRuns.value.filter(run => run.id !== executingAgentRun.value!.id)];
+      }
+      if (agentRuns.value[0]) selectAgentRun(agentRuns.value[0]);
+    } catch (error) { console.error('[loadAgentRuns] failed:', error); }
   }
 
   function createAgentDraft() {
     activeAgentId.value = '';
+    if (!confirmAgentDiscard()) return;
     resetAgentForm();
     agentCreateWizardStep.value = 0;
     selectedAgentTemplateId.value = 'general';
@@ -1657,6 +1827,7 @@ export function useAppController() {
   }
 
   function applyAgentTemplate(templateId = selectedAgentTemplateId.value) {
+    beginnerGeneratedDraftSource.value = '';
     selectedAgentTemplateId.value = templateId;
     const template = resolveAgentTemplate();
     const defaultModel = agentForm.value.model || (selectedModel.value && selectedModel.value !== 'auto'
@@ -1754,7 +1925,22 @@ export function useAppController() {
     return lines.join('\n');
   }
 
+  function beginnerDraftSourceKey() {
+    const form = beginnerAgentForm.value;
+    return JSON.stringify([authUser.value?.id, backendBaseUrl.value, agentForm.value.id, selectedAgentTemplateId.value,
+      form.audience, form.job, form.tone, form.success, form.avoid]);
+  }
+
+  function resolveBeginnerAssistModel() {
+    const available = new Set(chatModels.value.map(model => model.id));
+    return [agentForm.value.model, selectedModel.value, ...chatModels.value.map(model => model.id)]
+      .find(model => model && model !== 'auto' && available.has(model)) || '';
+  }
+
   function applyBeginnerFormToAgent() {
+    // The save/next buttons reuse this function: preserve AI output while its source brief is unchanged.
+    if (beginnerGeneratedDraftSource.value === beginnerDraftSourceKey()) return;
+    beginnerGeneratedDraftSource.value = '';
     const template = resolveAgentTemplate();
     const form = beginnerAgentForm.value;
     const defaultModel = agentForm.value.model || (selectedModel.value && selectedModel.value !== 'auto'
@@ -1806,19 +1992,29 @@ export function useAppController() {
   }
 
   async function generateBeginnerAgentDraft() {
-    if (agentGenerating.value) return;
-    const model = agentForm.value.model || selectedModel.value || chatModels.value[0]?.id || models.value[0]?.id || '';
+    if (agentGenerating.value || beginnerAssistTarget.value) return;
+    const model = resolveBeginnerAssistModel();
     if (!model || model === 'auto') {
-      status.value = '请先选择一个具体模型，AI 才能帮你生成草稿';
+      status.value = 'AI 生成失败：暂无可用聊天模型，请先检查模型配置';
       return;
     }
     agentGenerating.value = true;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
+    const beginnerDraft = JSON.stringify(beginnerAgentForm.value);
+    const templateId = selectedAgentTemplateId.value;
+    const unchanged = () => agentEditorMatches(scope) && JSON.stringify(agentForm.value) === draft
+      && JSON.stringify(beginnerAgentForm.value) === beginnerDraft && selectedAgentTemplateId.value === templateId;
     try {
       const generated = await apiGenerateAgent({
         requirement: buildBeginnerRequirement(),
         model,
         persist: false,
       }, backendBaseUrl.value) as any;
+      if (!unchanged()) {
+        if (agentEditorMatches(scope)) status.value = '生成期间内容已修改，AI 草稿未应用，请重试';
+        return;
+      }
       agentForm.value.name = generated.name || agentForm.value.name || resolveAgentTemplate().name;
       agentForm.value.description = generated.description || agentForm.value.description;
       agentForm.value.model = model;
@@ -1829,42 +2025,29 @@ export function useAppController() {
       agentForm.value.toolIds = Array.from(new Set([...(generated.toolIds ?? []), ...agentForm.value.toolIds]));
       agentForm.value.skillIds = Array.from(new Set([...(generated.skillIds ?? []), ...agentForm.value.skillIds]));
       if (!agentPrompt.value.trim()) agentPrompt.value = beginnerAgentForm.value.sampleInput || resolveAgentTemplate().example;
+      beginnerGeneratedDraftSource.value = beginnerDraftSourceKey();
       agentCreateWizardStep.value = 2;
       status.value = 'AI 已生成可编辑草稿，还没有保存';
     } catch (error) {
-      applyBeginnerFormToAgent();
-      status.value = error instanceof Error ? `${error.message}，已先用本地规则补全草稿` : 'AI 生成失败，已先用本地规则补全草稿';
+      if (!unchanged()) {
+        if (agentEditorMatches(scope)) status.value = '生成期间内容已修改，原有内容已保留，请重试';
+        return;
+      }
+      status.value = `AI 生成失败：${error instanceof Error ? error.message : '请求异常'}。原有内容已保留，请重试`;
     } finally {
       agentGenerating.value = false;
     }
   }
 
-  function fallbackImproveBeginnerText(target: 'goal' | 'success' | 'avoid' | 'sample') {
-    const template = resolveAgentTemplate();
-    const form = beginnerAgentForm.value;
-    if (target === 'goal') {
-      form.job = form.job.trim()
-        ? `${form.job.trim()}。处理时先判断用户真正想要什么，再给出可直接使用的结果。`
-        : template.description;
-    } else if (target === 'success') {
-      form.success = form.success.trim()
-        ? `${form.success.trim()}；输出要让新手也知道下一步该做什么。`
-        : '回答准确、结构清楚、能直接复制使用；缺少信息时会主动追问。';
-    } else if (target === 'avoid') {
-      form.avoid = form.avoid.trim()
-        ? `${form.avoid.trim()}；不要编造资料里没有的信息。`
-        : '不要编造事实，不要跳过关键限制，不确定时先说明原因并提问。';
-    } else {
-      form.sampleInput = form.sampleInput.trim() || template.example;
-    }
-    applyBeginnerFormToAgent();
-  }
-
   async function completeBeginnerAssist(prompt: string, model: string) {
     let output = '';
+    let completed = false;
+    let finishReason = '';
+    let streamError = '';
     await streamCompletion(
       {
         model,
+        cache_enabled: false,
         messages: [
           {
             role: 'system',
@@ -1873,26 +2056,34 @@ export function useAppController() {
           { role: 'user', content: prompt },
         ],
         temperature: 0.35,
-        max_tokens: 220,
+        max_tokens: 512,
+        extra_body: { enable_thinking: false },
       },
       {
         onChunk: (chunk) => {
+          const choice = chunk.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          if (finishReason === 'error') streamError = choice?.delta?.content || '模型流式请求失败';
+          if ((chunk as any).error) streamError = String((chunk as any).error.message || '模型请求失败');
           const token = chunk.choices?.[0]?.delta?.content;
           if (token) output += token;
         },
+        onDone: () => { completed = true; },
       },
       backendBaseUrl.value,
       new AbortController().signal,
     );
+    if (streamError) throw new Error(streamError);
+    if (finishReason === 'length') throw new Error('模型输出被截断');
+    if (!completed && finishReason !== 'stop') throw new Error('模型流式响应未正常结束');
     return output.trim().replace(/^["“]|["”]$/g, '');
   }
 
   async function improveBeginnerText(target: 'goal' | 'success' | 'avoid' | 'sample') {
-    if (beginnerAssistTarget.value) return;
-    const model = agentForm.value.model || selectedModel.value || chatModels.value[0]?.id || models.value[0]?.id || '';
+    if (beginnerAssistTarget.value || agentGenerating.value) return;
+    const model = resolveBeginnerAssistModel();
     if (!model || model === 'auto') {
-      fallbackImproveBeginnerText(target);
-      status.value = '未选择具体模型，已先用本地规则补全';
+      status.value = 'AI 补全失败：暂无可用聊天模型，请先检查模型配置';
       return;
     }
     const template = resolveAgentTemplate();
@@ -1903,9 +2094,17 @@ export function useAppController() {
       avoid: `请基于以下信息，生成“哪些事不要做”这个字段。要求：写清边界和不确定时怎么处理，一句话，不超过80字。\n${current}`,
       sample: `请基于以下 Agent 场景，生成一个适合保存后试运行的用户输入。要求：像真实用户会输入的一句话，不超过60字。\n默认示例：${template.example}\n${current}`,
     };
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
+    const beginnerDraft = JSON.stringify(beginnerAgentForm.value);
+    const unchanged = () => agentEditorMatches(scope) && draft === JSON.stringify(agentForm.value) && beginnerDraft === JSON.stringify(beginnerAgentForm.value);
     beginnerAssistTarget.value = target;
     try {
       const text = await completeBeginnerAssist(prompts[target], model);
+      if (!unchanged()) {
+        if (agentEditorMatches(scope)) status.value = '补全期间内容已修改，AI 结果未覆盖你的新内容，请重试';
+        return;
+      }
       if (!text) throw new Error('模型返回为空');
       if (target === 'goal') beginnerAgentForm.value.job = text;
       else if (target === 'success') beginnerAgentForm.value.success = text;
@@ -1917,15 +2116,18 @@ export function useAppController() {
       applyBeginnerFormToAgent();
       status.value = 'AI 已补全当前字段';
     } catch (error) {
-      fallbackImproveBeginnerText(target);
-      status.value = error instanceof Error ? `${error.message}，已用本地规则补全` : 'AI 补全失败，已用本地规则补全';
+      if (!unchanged()) {
+        if (agentEditorMatches(scope)) status.value = '补全期间内容已修改，原有内容已保留，请重试';
+        return;
+      }
+      status.value = `AI 补全失败：${error instanceof Error ? error.message : '请求异常'}。原有内容已保留，请重试`;
     } finally {
       beginnerAssistTarget.value = '';
     }
   }
 
   function nextAgentWizardStep() {
-    if (agentCreateWizardStep.value === 0) {
+    if (agentCreateWizardStep.value === 0 && !beginnerGeneratedDraftReady.value) {
       applyAgentTemplate();
     }
     agentCreateWizardStep.value = Math.min(3, agentCreateWizardStep.value + 1);
@@ -1953,7 +2155,15 @@ export function useAppController() {
   }
 
   function selectAgent(agent: AgentDefinition) {
+    if (!confirmAgentDiscard()) return;
+    ++agentEditorEpoch;
+    agentMemories.value = []; agentEvaluations.value = []; agentVersions.value = []; agentStats.value = null;
     activeAgentId.value = agent.id;
+    agentLastPrompt.value = '';
+    agentPrompt.value = '';
+    agentImageUrlInput.value = '';
+    agentComparisonRunId.value = '';
+    agentContinueConversation.value = true;
     fillAgentForm(agent);
     agentRuns.value = [];
     activeAgentRun.value = null;
@@ -1963,7 +2173,6 @@ export function useAppController() {
     agentTraceReplayPlaying.value = false;
     agentImprovementSuggestions.value = null;
     agentInvokePanelTab.value = 'trace';
-    workflowCanvasNodes.value = [];
     workflowCanvasConnecting.value = '';
     workflowCanvasDrag.value = null;
     activeWorkflowRun.value = null;
@@ -1971,6 +2180,7 @@ export function useAppController() {
     void loadAgentMemories(agent.id);
     void loadAgentEvaluations(agent.id);
     void loadAgentVersions(agent.id);
+    status.value = `已选择 Agent：${agent.name}`;
   }
 
   function selectAgentById(agentId: string) {
@@ -1979,6 +2189,7 @@ export function useAppController() {
   }
 
   async function persistAgent(): Promise<AgentDefinition | null> {
+    if (agentSaving.value) return null;
     if (!isAuthenticated.value) {
       isAuthDialogOpen.value = true;
       return null;
@@ -1990,6 +2201,8 @@ export function useAppController() {
       return null;
     }
 
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     agentSaving.value = true;
     try {
       const basePayload = {
@@ -2014,15 +2227,18 @@ export function useAppController() {
         ? await apiUpdateAgent(agentForm.value.id, updatePayload, backendBaseUrl.value)
         : await apiCreateAgent(basePayload, backendBaseUrl.value);
 
+      if (!agentAccountMatches(scope)) return null;
       const idx = agents.value.findIndex((agent) => agent.id === saved.id);
       if (idx >= 0) agents.value.splice(idx, 1, saved);
       else agents.value.unshift(saved);
-      activeAgentId.value = saved.id;
-      fillAgentForm(saved);
-      status.value = 'Agent 已保存';
+      if (agentEditorMatches(scope) && JSON.stringify(agentForm.value) === draft) {
+        activeAgentId.value = saved.id;
+        fillAgentForm(saved);
+        status.value = 'Agent 已保存';
+      } else if (agentEditorMatches(scope)) status.value = '已保存提交时的配置；后续更改仍保留在草稿中';
       return saved;
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '保存 Agent 失败';
+      if (agentEditorMatches(scope)) status.value = error instanceof Error ? error.message : '保存 Agent 失败';
       return null;
     } finally {
       agentSaving.value = false;
@@ -2036,17 +2252,22 @@ export function useAppController() {
     }
     if (agentPublishing.value) return;
     agentPublishing.value = true;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     try {
       const saved = await apiUpdateAgentPublication(agentForm.value.id, {
         published: agentForm.value.published,
         apiEnabled: agentForm.value.apiEnabled,
         publicSlug: agentForm.value.publicSlug || agentForm.value.name,
       }, backendBaseUrl.value);
+      if (!agentAccountMatches(scope)) return;
       const idx = agents.value.findIndex((agent) => agent.id === saved.id);
       if (idx >= 0) agents.value.splice(idx, 1, saved);
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       fillAgentForm(saved);
       status.value = 'Agent 发布配置已保存';
     } catch (error) {
+      if (!agentEditorMatches(scope)) return;
       status.value = error instanceof Error ? error.message : '保存发布配置失败';
     } finally {
       agentPublishing.value = false;
@@ -2061,15 +2282,19 @@ export function useAppController() {
       return;
     }
     agentGenerating.value = true;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     try {
       const generated = await apiGenerateAgent({
         requirement: generatorForm.value.requirement.trim(),
         model,
         persist: true,
       }, backendBaseUrl.value);
+      if (!agentAccountMatches(scope)) return;
       const idx = agents.value.findIndex((agent) => agent.id === generated.id);
       if (idx >= 0) agents.value.splice(idx, 1, generated);
       else agents.value.unshift(generated);
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       activeAgentId.value = generated.id;
       fillAgentForm(generated);
       generatorForm.value.requirement = '';
@@ -2078,6 +2303,7 @@ export function useAppController() {
       agentPageTab.value = 'basic';
       status.value = 'Agent 已自动生成';
     } catch (error) {
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       status.value = error instanceof Error ? error.message : '自动生成 Agent 失败';
     } finally {
       agentGenerating.value = false;
@@ -2091,14 +2317,19 @@ export function useAppController() {
       return;
     }
     marketplaceInstalling.value = true;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     try {
       const installed = await apiInstallAgentMarketplaceTemplate({ templateId: template.id, model }, backendBaseUrl.value);
+      if (!agentAccountMatches(scope)) return;
       agents.value = [installed, ...agents.value.filter((item) => item.id !== installed.id)];
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       activeAgentId.value = installed.id;
       fillAgentForm(installed);
       agentConsoleTab.value = 'memory';
       status.value = `已安装模板：${template.name}`;
     } catch (error) {
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       status.value = error instanceof Error ? error.message : '安装模板失败';
     } finally {
       marketplaceInstalling.value = false;
@@ -2112,15 +2343,20 @@ export function useAppController() {
       return;
     }
     marketplaceInstalling.value = true;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     try {
       const installed = await apiInstallBuiltinAgent(spec.key, model, backendBaseUrl.value);
+      if (!agentAccountMatches(scope)) return;
       agents.value = [installed, ...agents.value.filter((item) => item.id !== installed.id)];
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       activeAgentId.value = installed.id;
       fillAgentForm(installed);
       agentWorkspaceMode.value = 'invoke';
       agentPrompt.value = `请用 ${spec.name} 帮我完成一个测试任务。`;
       status.value = `已复制内置 Agent：${spec.name}`;
     } catch (error) {
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       status.value = error instanceof Error ? error.message : '复制内置 Agent 失败';
     } finally {
       marketplaceInstalling.value = false;
@@ -2196,7 +2432,7 @@ export function useAppController() {
 
   async function confirmToolExecutionIfNeeded(): Promise<string[] | null> {
     const confirmToolIds = agentForm.value.toolIds
-      .filter((toolId) => isHighRiskTool(toolId));
+      .filter((toolId) => agentForm.value.toolPermissions?.[toolId] !== 'disabled' && (isHighRiskTool(toolId) || agentForm.value.toolPermissions?.[toolId] === 'confirm'));
     const confirmTools = confirmToolIds.map(getToolLabelById);
     if (confirmTools.length === 0) return [];
     try {
@@ -2241,7 +2477,7 @@ export function useAppController() {
   }
 
   function buildAgentRunPayload(input: string, imageUrls: string[], approvedToolIds?: string[]): AgentRunInput {
-    const lastRun = activeAgentRun.value || agentRuns.value.find((run) => run.agentId === agentForm.value.id) || null;
+    const lastRun = activeAgentRun.value?.agentId === agentForm.value.id ? activeAgentRun.value : null;
     const conversationId = agentConversationId.value || lastRun?.conversationId || lastRun?.id || '';
     const parentRunId = lastRun?.id || '';
     const payload: AgentRunInput = {
@@ -2249,59 +2485,80 @@ export function useAppController() {
       imageUrls,
       maxSteps: agentInvokeMaxSteps.value,
       retryPolicy: { maxRetries: 1, retryToolFailure: true, retryPlannerFailure: true },
-      continueFromLast: true,
+      continueFromLast: Boolean(agentContinueConversation.value && lastRun),
     };
-    if (conversationId) payload.conversationId = conversationId;
-    if (parentRunId) payload.parentRunId = parentRunId;
+    if (payload.continueFromLast && conversationId) payload.conversationId = conversationId;
+    if (payload.continueFromLast && parentRunId) payload.parentRunId = parentRunId;
     if (approvedToolIds) payload.approvedToolIds = approvedToolIds;
     return payload;
   }
 
-  async function runCurrentAgent() {
+  async function runCurrentAgent(event?: KeyboardEvent) {
     const input = agentPrompt.value.trim();
-    if (!input || agentRunning.value) return;
+    if (!input || agentRunning.value || isComposing.value || event?.isComposing) return;
     const agent = agentForm.value.id ? activeAgent.value : await persistAgent();
     if (!agent) return;
+    const base = backendBaseUrl.value;
+    const userId = authUser.value?.id;
+    const imageUrls = agentImageUrlInput.value.split(/\n|,/).map(item => item.trim()).filter(Boolean);
+    const payload = buildAgentRunPayload(input, imageUrls);
     const approvedToolIds = await confirmToolExecutionIfNeeded();
-    if (approvedToolIds === null) return;
-
+    if (approvedToolIds === null || agentRunning.value || agentForm.value.id !== agent.id || base !== backendBaseUrl.value || userId !== authUser.value?.id) return;
+    payload.approvedToolIds = approvedToolIds;
+    const generation = ++agentExecutionGeneration;
+    const sameSession = () => generation === agentExecutionGeneration && base === backendBaseUrl.value && userId === authUser.value?.id && isAuthenticated.value;
+    const sameView = () => sameSession() && activeAgentId.value === agent.id;
     agentRunning.value = true;
     agentLastPrompt.value = input;
+    executingAgentRun.value = null;
     activeAgentRun.value = null;
     activeAgentTraceStepId.value = null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
+    agentTraceFollowLive.value = true;
     agentInvokePanelTab.value = 'trace';
     status.value = 'Agent 正在执行';
-    agentRunAbortController = new AbortController();
+    const controller = new AbortController();
+    agentRunAbortController = controller;
     try {
-      const imageUrls = agentImageUrlInput.value
-        .split(/\n|,/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-      await streamAgentRun(agent.id, buildAgentRunPayload(input, imageUrls, approvedToolIds), {
-        onEvent: (event) => {
-          applyAgentRunStreamEvent(event);
-        },
+      await streamAgentRun(agent.id, payload, {
+        onEvent: event => { if (sameSession()) applyAgentRunStreamEvent(event, agent.id); },
         onDone: () => {
-          status.value = activeAgentRun.value?.status === 'failed' ? 'Agent 执行失败' : 'Agent 执行完成';
+          if (!sameView()) return;
+          if (executingAgentRun.value?.status === 'failed') status.value = 'Agent 执行失败';
+          else if (executingAgentRun.value?.status === 'succeeded') status.value = 'Agent 执行完成';
+          else if (executingAgentRun.value) {
+            status.value = '实时连接已结束，尚未收到任务结束状态，请从历史查看';
+            ElMessage.warning(status.value);
+          }
         },
         onAbort: () => {
-          status.value = 'Agent 执行已停止';
+          if (!sameView()) return;
+          status.value = '已断开实时连接，后台任务可能仍在执行，可在历史中重新查看';
+          ElMessage.warning(status.value);
         },
-      }, backendBaseUrl.value, agentRunAbortController.signal);
-      agentPrompt.value = '';
-      try { authUser.value = await fetchMe(backendBaseUrl.value); } catch {}
-      try { billingLedger.value = await fetchBillingLedger(backendBaseUrl.value); } catch {}
-      if (agent.id) {
-        try { agentRuns.value = await fetchAgentRuns(agent.id, backendBaseUrl.value); } catch {}
+      }, base, controller.signal);
+      if (!sameSession()) return;
+      if (sameView() && !controller.signal.aborted && agentPrompt.value.trim() === input) {
+        agentPrompt.value = ''; agentImageUrlInput.value = '';
       }
-      void loadAgents();
+      try { const user = await fetchMe(base); if (sameSession()) authUser.value = user; } catch {}
+      try { const ledger = await fetchBillingLedger(base); if (sameSession()) billingLedger.value = ledger; } catch {}
+      const historyGeneration = agentHistoryGeneration;
+      try {
+        const runs = await fetchAgentRuns(agent.id, base);
+        if (sameView() && historyGeneration === agentHistoryGeneration) {
+          agentRuns.value = runs.filter(run => run.agentId === agent.id);
+          const viewed = runs.find(run => run.id === activeAgentRun.value?.id);
+          if (viewed) activeAgentRun.value = viewed;
+        }
+      } catch {}
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '运行 Agent 失败';
+      if (sameView()) status.value = error instanceof Error ? error.message : '运行 Agent 失败';
     } finally {
-      agentRunning.value = false;
-      agentRunAbortController = null;
+      if (generation === agentExecutionGeneration) {
+        agentRunning.value = false; agentRunAbortController = null;
+      }
     }
   }
 
@@ -2325,10 +2582,15 @@ export function useAppController() {
   }
 
   function rerunLastAgentPrompt() {
-    const last = agentLastPrompt.value || activeAgentRun.value?.input || agentRuns.value[0]?.input || '';
-    if (!last) return;
-    agentPrompt.value = last;
-    void runCurrentAgent();
+    if (agentRunning.value) return;
+    const run = activeAgentRun.value;
+    if (!run || run.agentId !== agentForm.value.id) return;
+    agentPrompt.value = run.input;
+    const config = traceRecordedConfig(run);
+    agentImageUrlInput.value = (config?.imageUrls ?? []).join('\n');
+    agentContinueConversation.value = false;
+    status.value = '已填入所选任务；按当前已保存配置，在新会话中运行';
+    ElMessage.info(status.value);
   }
 
   async function copyActiveAgentOutput() {
@@ -2337,75 +2599,82 @@ export function useAppController() {
     try {
       await navigator.clipboard.writeText(output);
       status.value = '已复制 Agent 输出';
+      ElMessage.success(status.value);
     } catch {
       status.value = '复制失败，请手动选择输出内容';
+      ElMessage.error(status.value);
     }
   }
 
-  function applyAgentRunStreamEvent(event: any) {
+  function applyAgentRunStreamEvent(event: any, expectedAgentId = executingAgentRun.value?.agentId) {
+    if (!expectedAgentId) return;
+    const previous = executingAgentRun.value;
+    if (!previous && event.type === 'error') {
+      if (activeAgentId.value === expectedAgentId) status.value = event.error || 'Agent 执行失败';
+      return;
+    }
     if (event.type === 'run_created') {
-      activeAgentRun.value = event.run;
-      agentConversationId.value = event.run.conversationId || event.run.id || agentConversationId.value;
-      agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
-      status.value = 'Agent 追踪已开始';
-      return;
+      if (!event.run || event.run.agentId !== expectedAgentId || (previous && previous.id !== event.run.id)) return;
+      executingAgentRun.value = { ...event.run, steps: [...event.run.steps].sort(sortAgentRunSteps) };
+    } else {
+      const id = event.run?.id || event.step?.runId || event.runId;
+      if (!previous || previous.agentId !== expectedAgentId || id !== previous.id) return;
+      if (event.type === 'step_started' || event.type === 'step_updated' || event.type === 'step_completed') {
+        executingAgentRun.value = { ...previous, steps: [...previous.steps.filter(step => step.id !== event.step.id), event.step].sort(sortAgentRunSteps) };
+      } else if (event.type === 'llm_delta') {
+        executingAgentRun.value = { ...previous, output: event.output };
+      } else if (event.type === 'run_completed') {
+        if (event.run.agentId !== expectedAgentId) return;
+        executingAgentRun.value = { ...event.run, steps: [...event.run.steps].sort(sortAgentRunSteps) };
+      } else if (event.type === 'error') {
+        executingAgentRun.value = { ...previous, status: 'failed', error: event.error };
+      } else return;
     }
-    if (!activeAgentRun.value && event.runId) return;
-    if (event.type === 'step_started' || event.type === 'step_updated' || event.type === 'step_completed') {
-      const step = event.step;
-      if (!activeAgentRun.value) return;
-      const steps = activeAgentRun.value.steps.filter((item) => item.id !== step.id);
-      activeAgentRun.value = {
-        ...activeAgentRun.value,
-        steps: [...steps, step].sort(sortAgentRunSteps),
-      };
-      activeAgentTraceStepId.value = step.id;
-      agentTraceReplayIndex.value = Math.max(0, activeAgentRun.value.steps.findIndex((item) => item.id === step.id));
-      status.value = `${step.name} · ${step.status}`;
-      return;
-    }
-    if (event.type === 'llm_delta' && activeAgentRun.value) {
-      activeAgentRun.value = {
-        ...activeAgentRun.value,
-        output: event.output,
-      };
-      return;
-    }
-    if (event.type === 'run_completed') {
-      activeAgentRun.value = event.run;
-      agentConversationId.value = event.run.conversationId || event.run.id || agentConversationId.value;
-      const failedStep = event.run.steps.find((step) => step.status === 'failed' || step.error);
-      activeAgentTraceStepId.value = failedStep?.id ?? event.run.steps[event.run.steps.length - 1]?.id ?? null;
-      agentTraceReplayIndex.value = failedStep ? Math.max(0, event.run.steps.findIndex((step) => step.id === failedStep.id)) : Math.max(0, event.run.steps.length - 1);
-      agentRuns.value = [event.run, ...agentRuns.value.filter((item) => item.id !== event.run.id)].slice(0, 20);
-      agentInvokePanelTab.value = 'trace';
-      status.value = event.run.status === 'succeeded' ? 'Agent 执行完成' : 'Agent 执行失败';
-      return;
-    }
-    if (event.type === 'error') {
-      status.value = event.error || 'Agent 执行失败';
-      if (activeAgentRun.value) {
-        activeAgentRun.value = { ...activeAgentRun.value, status: 'failed', error: event.error || activeAgentRun.value.error };
-      }
+    const updated = executingAgentRun.value!;
+    if (activeAgentId.value !== expectedAgentId) return;
+    agentRuns.value = [updated, ...agentRuns.value.filter(run => run.id !== updated.id)].slice(0, 20);
+    // Viewing another history record never follows the currently executing run.
+    if (activeAgentRun.value && activeAgentRun.value.id !== updated.id) return;
+    if (!activeAgentRun.value && !agentTraceFollowLive.value) return;
+    activeAgentRun.value = updated;
+    agentConversationId.value = updated.conversationId || updated.id;
+    if (agentTraceFollowLive.value) {
+      const index = event.step ? updated.steps.findIndex(step => step.id === event.step.id) : updated.steps.length - 1;
+      setAgentTraceReplayIndex(Math.max(0, index));
+      agentTraceFollowLive.value = true;
     }
   }
 
   function selectAgentRun(run: AgentRun) {
-    activeAgentRun.value = run;
+    if (run.agentId !== activeAgentId.value) return;
+    if (agentComparisonRunId.value === run.id) agentComparisonRunId.value = '';
+    agentTraceFollowLive.value = false;
+    activeAgentRun.value = { ...run, steps: [...run.steps].sort(sortAgentRunSteps) };
     agentConversationId.value = run.conversationId || run.id || agentConversationId.value;
-    activeAgentTraceStepId.value = run.steps[0]?.id ?? null;
+    activeAgentTraceStepId.value = activeAgentRun.value.steps[0]?.id ?? null;
     agentTraceReplayIndex.value = 0;
     agentTraceReplayPlaying.value = false;
   }
 
   async function openAgentRunTrace(runId: string) {
     if (!runId) return;
+    const generation = ++agentHistoryGeneration;
+    const base = backendBaseUrl.value;
+    const userId = authUser.value?.id;
+    const selectedAgentId = activeAgentId.value;
+    const valid = () => generation === agentHistoryGeneration && base === backendBaseUrl.value && userId === authUser.value?.id && isAuthenticated.value;
     try {
-      const run = await fetchAgentRun(runId, backendBaseUrl.value);
+      const run = await fetchAgentRun(runId, base);
+      if (!valid() || selectedAgentId !== activeAgentId.value) return;
       if (run.agentId && run.agentId !== activeAgentId.value) {
         const owner = agents.value.find((agent) => agent.id === run.agentId);
+        if (!owner) return;
         if (owner) {
           activeAgentId.value = owner.id;
+          agentPrompt.value = '';
+          agentImageUrlInput.value = '';
+          agentLastPrompt.value = '';
+          agentComparisonRunId.value = '';
           fillAgentForm(owner);
           agentImprovementSuggestions.value = null;
           await Promise.all([
@@ -2415,12 +2684,13 @@ export function useAppController() {
           ]);
         }
       }
+      if (!valid() || run.agentId !== activeAgentId.value) return;
       selectAgentRun(run);
       agentRuns.value = [run, ...agentRuns.value.filter((item) => item.id !== run.id && item.agentId === run.agentId)].slice(0, 20);
       agentWorkspaceMode.value = 'invoke';
       status.value = '已打开运行追踪';
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '加载运行追踪失败';
+      if (valid()) status.value = error instanceof Error ? error.message : '加载运行追踪失败';
     }
   }
 
@@ -2439,6 +2709,7 @@ export function useAppController() {
       idle: '空闲',
       skipped: '已跳过',
       cancelled: '已取消',
+      interrupted: '已中断，可恢复',
     };
     return statusValue ? (labels[statusValue] ?? statusValue) : '空闲';
   }
@@ -2528,23 +2799,27 @@ export function useAppController() {
 
   async function evaluateActiveAgentRun() {
     if (!activeAgentRun.value || agentEvaluationSaving.value) return;
+    const scope = captureAgentEditorScope();
+    const run = activeAgentRun.value;
     agentEvaluationSaving.value = true;
     try {
-      const evaluation = await apiEvaluateAgentRun(activeAgentRun.value.id, {
+      const evaluation = await apiEvaluateAgentRun(run.id, {
         expectedOutput: evaluationForm.value.expectedOutput.trim() || undefined,
         rubric: evaluationForm.value.rubric.trim() || undefined,
         judgeModel: evaluationForm.value.judgeModel.trim() || activeAgentRun.value.model || agentForm.value.model || undefined,
         mode: evaluationForm.value.mode,
       }, backendBaseUrl.value);
+      if (!agentEditorMatches(scope) || activeAgentRun.value?.id !== run.id) return;
       agentEvaluations.value = [evaluation, ...agentEvaluations.value.filter((item) => item.id !== evaluation.id)];
       evaluationForm.value.expectedOutput = '';
       evaluationForm.value.rubric = '';
       evaluationForm.value.judgeModel = '';
       evaluationForm.value.mode = 'hybrid';
       showEvaluationDialog.value = false;
-      await loadAgentEvaluations(activeAgentRun.value.agentId);
+      await loadAgentEvaluations(run.agentId);
       status.value = `评测完成：${evaluation.score}/100`;
     } catch (error) {
+      if (!agentEditorMatches(scope)) return;
       status.value = error instanceof Error ? error.message : '评测失败';
     } finally {
       agentEvaluationSaving.value = false;
@@ -2553,15 +2828,19 @@ export function useAppController() {
 
   async function generateCurrentAgentImprovementSuggestions() {
     if (!agentForm.value.id || agentImprovementLoading.value) return;
+    const scope = captureAgentEditorScope();
     agentImprovementLoading.value = true;
     try {
-      agentImprovementSuggestions.value = await apiGenerateAgentImprovementSuggestions(agentForm.value.id, {
+      const suggestions = await apiGenerateAgentImprovementSuggestions(agentForm.value.id, {
         recentRunLimit: 8,
         judgeModel: evaluationForm.value.judgeModel.trim() || agentForm.value.model || undefined,
       }, backendBaseUrl.value);
+      if (!agentEditorMatches(scope)) return;
+      agentImprovementSuggestions.value = suggestions;
       agentInvokePanelTab.value = 'trace';
       status.value = '已生成 Agent 优化建议草案';
     } catch (error) {
+      if (!agentEditorMatches(scope)) return;
       status.value = error instanceof Error ? error.message : '生成优化建议失败';
     } finally {
       agentImprovementLoading.value = false;
@@ -2662,7 +2941,7 @@ export function useAppController() {
     }));
   });
 
-  const agentFailedTraceSteps = computed(() => (activeAgentRun.value?.steps ?? []).filter((step) => step.status === 'failed' || step.error));
+  const agentFailedTraceSteps = computed(() => (activeAgentRun.value?.steps ?? []).filter(traceStepFailed));
 
   const agentSlowTraceSteps = computed(() => (activeAgentRun.value?.steps ?? [])
     .filter((step) => step.latencyMs >= 5000)
@@ -2751,152 +3030,37 @@ export function useAppController() {
     return !summary || summary === '无结果' ? '未发现需要保存或遗忘的长期记忆。' : summary;
   }
 
-  const agentExecutionTraceFlow = computed(() => {
-    const run = activeAgentRun.value;
-    const steps = [...(run?.steps ?? [])].sort(sortAgentRunSteps);
-    const finalStep = [...steps].reverse().find((step) => isFinalAnswerStep(step)) ?? null;
-    const currentStep = activeAgentTraceStep.value
-      ?? steps[agentTraceReplayIndex.value]
-      ?? [...steps].reverse().find((step) => step.status === 'running')
-      ?? steps[steps.length - 1]
-      ?? null;
-    const currentIndex = currentStep ? steps.findIndex((step) => step.id === currentStep.id) : -1;
-    return traceStageDefinitions.map((stage) => {
-      const matched = stage.id === 'final'
-        ? finalStep
-        : [...steps].reverse().find((step) => stepMatchesTypes(step, stage.types) && !isFinalAnswerStep(step)) ?? null;
-      const matchedIndex = matched ? steps.findIndex((step) => step.id === matched.id) : -1;
-      const current = Boolean(currentStep && matched?.id === currentStep.id);
-      const inferredStatus = (() => {
-        if (matched?.status) return matched.status;
-        if (stage.id === 'input' && run) return 'succeeded';
-        if (stage.id === 'final' && run?.status && run.status !== 'running' && run.output) return run.status;
-        if (stage.id === 'llm' && run && run.status !== 'running') return 'skipped';
-        if (currentIndex >= 0) {
-          const nextMatchedIndex = steps.findIndex((step) => stepMatchesTypes(step, stage.types) && !isFinalAnswerStep(step));
-          if (nextMatchedIndex >= 0 && nextMatchedIndex < currentIndex) return 'succeeded';
-        }
-        if (matchedIndex >= 0 && currentIndex > matchedIndex) return 'succeeded';
-        return 'pending';
-      })();
-      const detailSource = stage.id === 'input'
-        ? (run?.input || agentPrompt.value || '等待输入')
-        : matched?.output || matched?.error || matched?.input
-          || (stage.id === 'final' && run?.output ? run.output : '')
-          || (stage.id === 'context' ? '等待上下文、记忆、知识库和 Skill 注入' : '')
-          || (stage.id === 'llm' && inferredStatus === 'skipped' ? '本次由确定性工具、工作流或已有结果直接完成，未调用 LLM。' : '')
-          || '等待上游节点完成';
-      return {
-        ...stage,
-        step: matched,
-        status: inferredStatus,
-        title: matched?.name || (stage.id === 'input' ? '用户输入' : stage.label),
-        detail: formatTraceSummary(detailSource) || '等待上游节点完成',
-        latencyMs: matched?.latencyMs ?? 0,
-        current,
-      };
-    });
-  });
+  const agentExecutionTraceFlow = computed(() => (activeAgentRun.value?.steps ?? []).map((step, index) => ({
+    id: String(step.id), label: `步骤 ${index + 1} · ${agentStepTypeLabel(step.stepType)}`, step,
+    status: traceStepFailed(step) ? 'failed' : step.status,
+    title: step.name, detail: formatTraceSummary(step.error || step.output || step.input),
+    latencyMs: step.latencyMs, current: activeAgentTraceStep.value?.id === step.id,
+  })));
 
-  const agentTraceSnapshot = computed(() => {
-    const run = activeAgentRun.value;
-    const step = activeAgentTraceStep.value;
-    const metadata = (() => {
-      try { return JSON.parse(step?.metadata || '{}') as Record<string, any>; } catch { return {}; }
-    })();
-    const isToolLikeStep = (item: AgentRun['steps'][number] | null | undefined) => {
-      const type = item?.stepType.toLowerCase() || '';
-      return type.includes('tool') || type.includes('observation') || type.includes('delegate_observation');
-    };
-    const toolStep = isToolLikeStep(step) ? step : (run?.steps ?? []).find((item) => isToolLikeStep(item));
-    const memorySteps = (run?.steps ?? []).filter((item) => item.stepType.includes('memory'));
-    return {
-      prompt: agentForm.value.systemPrompt || '',
-      messages: run ? [{ role: 'user', content: run.input }, { role: 'assistant', content: run.output }] : [],
-      model: run?.model || agentForm.value.model || '',
-      parameters: {
-        temperature: agentForm.value.temperature,
-        maxTokens: agentForm.value.maxTokens,
-        maxSteps: agentInvokeMaxSteps.value,
-      },
-      toolInput: toolStep?.input || '',
-      toolOutput: toolStep?.output || toolStep?.error || '',
-      memoryState: memorySteps.length
-        ? memorySteps.map((item) => ({ name: item.name, status: item.status, output: formatMemoryTraceOutput(item.output || item.error) }))
-        : '未发现需要保存或遗忘的长期记忆。',
-      metadata,
-    };
-  });
-
-  const activeAgentToolResultCards = computed(() => {
-    const steps = activeAgentRun.value?.steps ?? [];
-    return steps
-      .filter((step) => step.stepType.includes('tool') && (step.output || step.error))
-      .map((step) => {
-        let metadata: Record<string, any> = {};
-        try { metadata = JSON.parse(step.metadata || '{}') as Record<string, any>; } catch {}
-        return {
-          id: step.id,
-          name: step.name,
-          toolName: metadata.toolName || metadata.toolId || step.name,
-          deterministic: Boolean(metadata.deterministic),
-          status: step.status,
-          input: step.input,
-          output: step.output || step.error,
-          latencyMs: step.latencyMs,
-        };
-      });
-  });
+  const agentTraceSnapshot = computed(() => traceSnapshot(activeAgentRun.value, activeAgentTraceStep.value));
+  const activeAgentToolResultCards = computed(() => traceTools(activeAgentRun.value?.steps ?? []));
 
   const agentTraceDebuggerState = computed(() => ({
     paused: !agentTraceReplayPlaying.value,
-    canStepInto: Boolean(activeAgentTraceStep.value),
+    canStepInto: agentTraceReplayIndex.value > 0,
     canStepOver: agentTraceReplayIndex.value < agentTraceReplayMax.value,
-    canRestartFromNode: Boolean(activeAgentTraceStep.value),
+    canRestartFromNode: Boolean(activeAgentTraceStep.value) && !agentRunning.value,
     currentNode: activeAgentTraceStep.value?.name || '无',
   }));
 
-  const agentComparativeReplay = computed(() => {
-    const current = activeAgentRun.value ?? agentRuns.value[0] ?? null;
-    const baseline = agentRuns.value.find((run) => run.id !== current?.id) ?? null;
-    const currentSkills = availableSkills.value.filter((skill) => agentForm.value.skillIds.includes(skill.id)).map((skill) => skill.name);
-    return {
-      current,
-      baseline,
-      promptDiff: {
-        before: baseline?.input || '',
-        after: current?.input || '',
-      },
-      modelDiff: {
-        before: baseline?.model || '',
-        after: current?.model || agentForm.value.model || '',
-      },
-      skillDiff: {
-        before: [],
-        after: currentSkills,
-      },
-      workflowDiff: {
-        before: baseline ? `${baseline.steps.length} 步` : '',
-        after: current ? `${current.steps.length} 步` : '',
-      },
-    };
-  });
-
+  const agentComparativeReplay = computed(() => traceComparison(
+    activeAgentRun.value,
+    agentRuns.value.find(run => run.id === agentComparisonRunId.value && run.id !== activeAgentRun.value?.id && run.agentId === activeAgentId.value) ?? null,
+  ));
   const agentHarnessMetrics = computed(() => {
-    const runs = agentRuns.value;
+    const runs = agentRuns.value.filter(run => run.agentId === activeAgentId.value && run.status !== 'running');
     const total = runs.length;
-    const succeeded = runs.filter((run) => run.status === 'succeeded').length;
-    const latency = total ? Math.round(runs.reduce((sum, run) => sum + Number(run.latencyMs || 0), 0) / total) : 0;
-    const tokens = total ? Math.round(runs.reduce((sum, run) => sum + Number(run.totalTokens || 0), 0) / total) : 0;
-    const cost = billingLedger.value
-      .filter((item) => item.requestType === 'agent')
-      .slice(0, 50)
-      .reduce((sum, item) => sum + Number(item.cost || 0), 0);
     return {
-      cost: Number(cost.toFixed(4)),
-      latency,
-      successRate: total ? Number(((succeeded / total) * 100).toFixed(1)) : 0,
-      averageTokens: tokens,
+      latency: activeAgentRun.value?.latencyMs ?? 0,
+      tokens: activeAgentRun.value?.totalTokens ?? 0,
+      sampleCount: total,
+      successRate: total ? Number((runs.filter(run => run.status === 'succeeded').length / total * 100).toFixed(1)) : null,
+      averageTokens: total ? Math.round(runs.reduce((sum, run) => sum + run.totalTokens, 0) / total) : null,
     };
   });
 
@@ -2915,20 +3079,7 @@ export function useAppController() {
     }))
     .sort((a, b) => Number(b.bound) - Number(a.bound) || b.qualityScore - a.qualityScore));
 
-  const agentContextSourceSummary = computed(() => {
-    const counts: Record<string, number> = {};
-    for (const step of activeAgentRun.value?.steps ?? []) {
-      const metadata = (() => {
-        try { return JSON.parse(step.metadata || '{}') as Record<string, any>; } catch { return {}; }
-      })();
-      const sources = Array.isArray(metadata.contextSources) ? metadata.contextSources : [];
-      for (const source of sources) {
-        const type = String(source?.type || 'unknown');
-        counts[type] = (counts[type] || 0) + 1;
-      }
-    }
-    return counts;
-  });
+  const agentContextSourceSummary = computed(() => traceSources(activeAgentRun.value));
 
   const filteredAgentRuns = computed(() => {
     const items = agentRuns.value.filter((run) =>
@@ -2943,6 +3094,7 @@ export function useAppController() {
   });
 
   function selectAgentTraceStep(stepId: number) {
+    pauseAgentTraceReplay();
     const index = activeAgentRun.value?.steps.findIndex((step) => step.id === stepId) ?? -1;
     activeAgentTraceStepId.value = stepId;
     if (index >= 0) agentTraceReplayIndex.value = index;
@@ -2961,34 +3113,40 @@ export function useAppController() {
   }
 
   function pauseAgentTraceReplay() {
+    agentTraceFollowLive.value = false;
     agentTraceReplayPlaying.value = false;
   }
 
   function resumeAgentTraceReplay() {
     if (!activeAgentRun.value?.steps.length) return;
+    agentTraceFollowLive.value = false;
+    if (agentTraceReplayIndex.value >= agentTraceReplayMax.value) setAgentTraceReplayIndex(0);
     agentTraceReplayPlaying.value = true;
   }
 
   function stepIntoAgentTrace() {
     pauseAgentTraceReplay();
-    if (!activeAgentTraceStep.value) return;
-    activeAgentTraceStepId.value = activeAgentTraceStep.value.id;
-    status.value = `进入步骤：${activeAgentTraceStep.value.name}`;
+    setAgentTraceReplayIndex(agentTraceReplayIndex.value - 1);
   }
-
   function stepOverAgentTrace() {
     pauseAgentTraceReplay();
-    setAgentTraceReplayIndex(Math.min(agentTraceReplayIndex.value + 1, agentTraceReplayMax.value));
-    status.value = `跳过步骤：${activeAgentTraceStep.value?.name || '追踪结束'}`;
+    setAgentTraceReplayIndex(agentTraceReplayIndex.value + 1);
   }
-
+  function followAgentLiveTrace() {
+    if (executingAgentRun.value?.agentId !== activeAgentId.value) return;
+    selectAgentRun(executingAgentRun.value);
+    setAgentTraceReplayIndex(agentTraceReplayMax.value);
+    agentTraceFollowLive.value = true;
+  }
   function restartAgentFromTraceNode() {
     const step = activeAgentTraceStep.value;
-    if (!step) return;
+    if (!step || agentRunning.value) return;
     pauseAgentTraceReplay();
-    agentPrompt.value = step.input || activeAgentRun.value?.input || agentPrompt.value;
-    agentInvokePanelTab.value = 'trace';
-    status.value = `已从节点准备重跑：${step.name}`;
+    agentPrompt.value = step.input || '';
+    agentImageUrlInput.value = '';
+    agentContinueConversation.value = false;
+    status.value = '已填入步骤输入，请检查内容后运行新任务；这不是节点恢复';
+    ElMessage.info(status.value);
   }
 
   let agentTraceReplayTimer: ReturnType<typeof setInterval> | null = null;
@@ -3278,19 +3436,12 @@ export function useAppController() {
     const kbId = ragLabForm.value.kbId || knowledgeDocForm.value.kbId || knowledgeBases.value[0]?.id || '';
     const query = ragLabForm.value.query.trim();
     if (!kbId || !query || ragLabSearching.value) return;
-    ragLabSearching.value = true;
-    try {
-      ragLabResults.value = await apiSearchKnowledgeBase(kbId, query, {
-        mode: ragLabForm.value.mode,
-        limit: ragLabForm.value.limit,
-      }, backendBaseUrl.value);
-      ragLabForm.value.kbId = kbId;
-      status.value = `RAG 检索完成：${ragLabResults.value.length} 条片段`;
-    } catch (error) {
-      status.value = error instanceof Error ? error.message : 'RAG 检索失败';
-    } finally {
-      ragLabSearching.value = false;
-    }
+    ragLabForm.value.kbId = kbId;
+    const native = knowledgeBases.value.find(kb => kb.id === kbId)?.provider === 'native';
+    const current = await ragLabSession.run({ kbId, query, mode: ragLabForm.value.mode, limit: ragLabForm.value.limit,
+      minDenseScore: native && ragLabForm.value.mode !== 'keyword' && ragLabForm.value.thresholdEnabled ? ragLabForm.value.minDenseScore : undefined });
+    if (!current) return;
+    status.value = ragLabError.value || 'RAG 检索完成：' + ragLabResults.value.length + ' 条片段';
   }
 
   async function createAgentMemory() {
@@ -3539,10 +3690,10 @@ export function useAppController() {
   }
 
   function buildAgentExportBundle() {
-    const boundTools = availableTools.value.filter(t => agentForm.value.toolIds.includes(t.id));
+    const boundTools = allAgentTools.value.filter(t => agentForm.value.toolIds.includes(t.id));
     const boundSkills = availableSkills.value.filter(s => agentForm.value.skillIds.includes(s.id));
     const boundKBs = knowledgeBases.value.filter(kb => agentForm.value.knowledgeBaseIds.includes(kb.id));
-    const customToolByName = new Map(customTools.value.map((tool) => [tool.name, tool]));
+    const customToolById = new Map(customTools.value.map((tool) => [tool.id, tool]));
     return {
       schemaVersion: 'agent.portable.v1',
       exportedAt: new Date().toISOString(),
@@ -3566,7 +3717,7 @@ export function useAppController() {
         publicSlug: agentForm.value.publicSlug,
       },
       tools: boundTools.map((tool) => {
-        const customTool = customToolByName.get(tool.name);
+        const customTool = customToolById.get(tool.id);
         const portableTool: Record<string, unknown> = {
           name: tool.name,
           displayName: tool.displayName,
@@ -3667,7 +3818,7 @@ export function useAppController() {
       return;
     }
 
-    const boundTools = availableTools.value.filter(t => agentForm.value.toolIds.includes(t.id));
+    const boundTools = allAgentTools.value.filter(t => agentForm.value.toolIds.includes(t.id));
     const boundSkills = availableSkills.value.filter(s => agentForm.value.skillIds.includes(s.id));
     const boundKBs = knowledgeBases.value.filter(kb => agentForm.value.knowledgeBaseIds.includes(kb.id));
 
@@ -3823,11 +3974,18 @@ export function useAppController() {
   }
 
   async function bindSkillToCurrentAgent(skill: SkillDefinition) {
-    const agent = activeAgent.value || (agentForm.value.id ? null : await persistAgent());
-    if (!agentForm.value.id && !agent) return;
     agentForm.value.skillIds = Array.from(new Set([...agentForm.value.skillIds, skill.id]));
-    await saveAgent();
+    const scope = captureAgentEditorScope();
+    const saved = await persistAgent();
+    if (!saved || !agentEditorMatches(scope)) return;
     status.value = `已绑定 Skill：${skill.name}`;
+  }
+
+  async function bindToolToCurrentAgent(tool: ToolDefinition | CustomTool) {
+    agentForm.value.toolIds = [...new Set([...agentForm.value.toolIds, tool.id])];
+    const scope = captureAgentEditorScope();
+    const saved = await persistAgent();
+    if (saved && agentEditorMatches(scope)) status.value = '已绑定工具：' + tool.displayName;
   }
 
   function skillRiskTagType(risk: SkillDefinition['riskLevel']) {
@@ -3999,7 +4157,7 @@ export function useAppController() {
         timeout: toolForm.value.timeout,
         retries: toolForm.value.retries,
         permissions: { ...toolForm.value.permissions },
-        enabled: true,
+        enabled: !toolEditingId.value || customTools.value.find(tool => tool.id === toolEditingId.value)?.status !== 'disabled',
       };
       const saved = toolEditingId.value
         ? await apiUpdateTool(toolEditingId.value, payload, backendBaseUrl.value)
@@ -4083,6 +4241,10 @@ export function useAppController() {
       variablesText: formatConfigJson(config.variables ?? {}),
       argsText: formatConfigJson(config.args ?? config.paramMapping ?? {}),
       branchesText: formatDagBranches(config.branches),
+      branchTargetIds: Object.fromEntries((config.branches ?? []).map((branch: any, index: number) => [branch.id || `branch_${index + 1}`, branch.nextIds ?? []])),
+      trueNextIds: config.trueNextIds ?? [],
+      falseNextIds: config.falseNextIds ?? [],
+      defaultNextIds: config.defaultNextIds ?? [],
       intentsStr: Array.isArray(config.intents) ? config.intents.join('\n') : String(config.intentsStr ?? ''),
       paramsText: Array.isArray(config.params) ? config.params.join('\n') : String(config.paramsText ?? ''),
     };
@@ -4298,6 +4460,7 @@ export function useAppController() {
     delete config.variablesText;
     delete config.argsText;
     delete config.branchesText;
+    delete config.branchTargetIds;
 
     if (type === 'http_request') {
       config.headers = parseConfigJson(raw.headersText);
@@ -4319,10 +4482,15 @@ export function useAppController() {
       config.args = parseConfigJson(raw.argsText, { text: '{{input}}' });
     }
     if (type === 'question_classifier' || type === 'multi_branch') {
-      config.branches = parseDagBranches(raw.branchesText);
+      config.branches = parseDagBranches(raw.branchesText).map(branch => ({ ...branch, nextIds: raw.branchTargetIds?.[branch.id] ?? [] }));
+      config.defaultNextIds = raw.defaultNextIds ?? [];
+      config.nextIds = [...new Set([...(raw.nextIds ?? []), ...(config.branches as any[]).flatMap(branch => branch.nextIds), ...(config.defaultNextIds as string[])])];
     }
     if (type === 'if_else' || type === 'condition') {
       config.expression = String(raw.expression || '');
+      config.trueNextIds = raw.trueNextIds ?? [];
+      config.falseNextIds = raw.falseNextIds ?? [];
+      config.nextIds = [...new Set([...(raw.nextIds ?? []), ...(config.trueNextIds as string[]), ...(config.falseNextIds as string[])])];
       config.trueTemplate = String(raw.trueTemplate || '{{input}}');
       config.falseTemplate = String(raw.falseTemplate || '{{input}}');
     }
@@ -4458,9 +4626,11 @@ export function useAppController() {
       status.value = '请先保存 Agent，再创建版本';
       return;
     }
+    const scope = captureAgentEditorScope();
     versionSaving.value = true;
     try {
       const version = await apiCreateAgentVersion(agentForm.value.id, versionForm.value.label.trim(), versionForm.value.notes.trim(), backendBaseUrl.value);
+      if (!agentEditorMatches(scope)) return;
       agentVersions.value = [version, ...agentVersions.value.filter((item) => item.id !== version.id)];
       versionForm.value.label = '';
       versionForm.value.notes = '';
@@ -4476,6 +4646,8 @@ export function useAppController() {
   async function publishVersionFromForm(versionId = versionForm.value.targetVersionId) {
     if (!agentForm.value.id || versionSaving.value) return;
     versionSaving.value = true;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     try {
       const releaseMode = versionForm.value.releaseMode;
       const result = await apiPublishAgentVersion(agentForm.value.id, {
@@ -4488,8 +4660,10 @@ export function useAppController() {
         apiEnabled: agentForm.value.apiEnabled,
         publicSlug: agentForm.value.publicSlug || agentForm.value.name,
       }, backendBaseUrl.value);
+      if (!agentAccountMatches(scope)) return;
       const idx = agents.value.findIndex((agent) => agent.id === result.agent.id);
       if (idx >= 0) agents.value.splice(idx, 1, result.agent);
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       fillAgentForm(result.agent);
       await loadAgentVersions(result.agent.id);
       showVersionPublishDialog.value = false;
@@ -4512,6 +4686,7 @@ export function useAppController() {
         status.value = `Agent 稳定版本已发布，但市场同步失败：${message}`;
       }
     } catch (error) {
+      if (!agentEditorMatches(scope)) return;
       status.value = error instanceof Error ? error.message : '发布版本失败';
     } finally {
       versionSaving.value = false;
@@ -4529,9 +4704,14 @@ export function useAppController() {
 
   async function restoreVersion(versionId: string) {
     if (!agentForm.value.id || versionSaving.value) return;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     versionSaving.value = true;
     try {
       const restored = await apiRestoreAgentVersion(agentForm.value.id, versionId, backendBaseUrl.value);
+      if (!agentAccountMatches(scope)) return;
+      upsertAgentCache(restored);
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       fillAgentForm(restored);
       status.value = 'Agent 版本已恢复';
     } catch (error) {
@@ -4544,11 +4724,16 @@ export function useAppController() {
   async function rollbackVersion(versionId: string) {
     if (!agentForm.value.id || versionSaving.value) return;
     if (!window.confirm('确认回滚到这个版本？当前发布流量会切回该版本。')) return;
+    const scope = captureAgentEditorScope();
+    const draft = JSON.stringify(agentForm.value);
     versionSaving.value = true;
     try {
       const result = await apiRollbackAgentVersion(agentForm.value.id, versionId, backendBaseUrl.value);
       const idx = agents.value.findIndex((agent) => agent.id === result.agent.id);
       if (idx >= 0) agents.value.splice(idx, 1, result.agent);
+      if (!agentAccountMatches(scope)) return;
+      upsertAgentCache(result.agent);
+      if (!agentEditorMatches(scope) || JSON.stringify(agentForm.value) !== draft) return;
       fillAgentForm(result.agent);
       await loadAgentVersions(result.agent.id);
       status.value = `已回滚到 v${result.version.versionNumber}`;
@@ -4626,6 +4811,7 @@ export function useAppController() {
       workflowCanvasNodes.value = [];
       workflowCanvasConnecting.value = '';
       workflowCanvasDrag.value = null;
+      workflowCanvasBaseline = JSON.stringify(workflowCanvasNodes.value);
       return;
     }
     workflowCanvasNodes.value = workflow.nodes.map((node, index) => {
@@ -4635,13 +4821,14 @@ export function useAppController() {
       return {
         ...node,
         type: dagType as any,
-        config: { ...config },
+        config: JSON.parse(JSON.stringify(config)),
         x: typeof position.x === 'number' ? position.x : 40 + index * 210,
         y: typeof position.y === 'number' ? position.y : 80 + (index % 2) * 110,
       };
     });
     workflowCanvasConnecting.value = '';
     workflowCanvasDrag.value = null;
+    workflowCanvasBaseline = JSON.stringify(workflowCanvasNodes.value);
   }
 
   function createWorkflowNodeConfig(type: WorkflowNode['type']): Record<string, unknown> {
@@ -4786,47 +4973,74 @@ export function useAppController() {
       .filter((node) => node.id !== nodeId)
       .map((node) => {
         const nextIds = Array.isArray(node.config.nextIds) ? node.config.nextIds.map(String).filter((id) => id !== nodeId) : [];
-        return { ...node, config: { ...node.config, nextIds } };
+        const config = { ...node.config, nextIds };
+        for (const key of ['trueNextIds', 'falseNextIds', 'defaultNextIds']) if (Array.isArray(config[key])) config[key] = config[key].filter((id: string) => id !== nodeId);
+        if (Array.isArray(config.branches)) config.branches = config.branches.map((branch: any) => ({ ...branch, nextIds: (branch.nextIds ?? []).filter((id: string) => id !== nodeId) }));
+        return { ...node, config };
       });
     if (workflowCanvasConnecting.value === nodeId) workflowCanvasConnecting.value = '';
   }
 
   async function saveWorkflowCanvas() {
     if (workflowCanvasSaving.value || workflowCanvasNodes.value.length === 0) return;
+    const scope = captureAgentEditorScope();
+    const workflowId = activeWorkflowId.value;
+    const canvas = JSON.stringify(workflowCanvasNodes.value);
+    const capturedNodes = JSON.parse(canvas) as WorkflowCanvasNode[];
     workflowCanvasSaving.value = true;
     try {
-      const nodes: WorkflowNode[] = workflowCanvasNodes.value.map((node) => ({
-        id: node.id,
-        type: normalizeDagNodeType(String(node.type)),
-        name: node.name,
-        config: {
-          ...createWorkflowNodeConfig(normalizeDagNodeType(String(node.type))),
+      const nodes: WorkflowNode[] = capturedNodes.map((node) => {
+        const type = normalizeDagNodeType(String(node.type));
+        const config = {
+          ...createWorkflowNodeConfig(type),
           ...node.config,
           dagType: String(node.type),
           position: { x: node.x, y: node.y },
-          nextIds: Array.isArray(node.config.nextIds) ? node.config.nextIds.map(String) : [],
-        },
-      }));
-      const workflow = await apiCreateWorkflow({
-        name: `${agentForm.value.name || '可视化'} DAG 工作流`,
-        description: '通过可拖拽 DAG 编辑器创建，连线会决定执行顺序。',
+        } as any;
+        if (type === 'if_else') {
+          if (!Array.isArray(config.trueNextIds) || !Array.isArray(config.falseNextIds))
+            throw new Error('请先配置条件节点的命中与未命中目标');
+          config.nextIds = [
+            ...new Set([...(config.nextIds ?? []), ...config.trueNextIds, ...config.falseNextIds]),
+          ];
+        }
+        if (type === 'question_classifier')
+          config.nextIds = [
+            ...new Set([
+              ...(config.nextIds ?? []),
+              ...(config.branches ?? []).flatMap((b: any) => b.nextIds ?? []),
+              ...(config.defaultNextIds ?? []),
+            ]),
+          ];
+        return { id: node.id, type, name: node.name, config };
+      });
+      const payload = {
+        schemaVersion: 2 as const,
+        name: (agentForm.value.name || '可视化') + ' DAG 工作流',
+        description: '可视化 DAG 工作流，按连线与分支目标执行。',
         nodes,
-      }, backendBaseUrl.value);
+      };
+      const workflow = workflowId
+        ? await apiUpdateWorkflow(workflowId, payload, scope.base)
+        : await apiCreateWorkflow(payload, scope.base);
+      if (!agentAccountMatches(scope)) return;
       workflows.value = [workflow, ...workflows.value.filter((item) => item.id !== workflow.id)];
-      activeWorkflowId.value = workflow.id;
-      if (agentForm.value.id) {
-        agentForm.value.workflowIds = [workflow.id];
-        const saved = await apiUpdateAgent(agentForm.value.id, { workflowIds: [workflow.id] }, backendBaseUrl.value);
-        const idx = agents.value.findIndex((agent) => agent.id === saved.id);
-        if (idx >= 0) agents.value.splice(idx, 1, saved);
-        fillAgentForm(saved);
-      status.value = '工作流 DAG 已保存并绑定到当前 Agent';
-      } else {
-        agentForm.value.workflowIds = [workflow.id];
-        status.value = '工作流 DAG 已保存，创建 Agent 后会自动绑定';
+      if (scope.id) {
+        const saved = await apiUpdateAgent(scope.id, { workflowIds: [workflow.id] }, scope.base);
+        if (!agentAccountMatches(scope)) return;
+        upsertAgentCache(saved);
       }
+      if (!agentEditorMatches(scope)) return;
+      activeWorkflowId.value = workflow.id;
+      agentForm.value.workflowIds = [workflow.id];
+      if (agentFormBaseline)
+        agentFormBaseline = JSON.stringify({ ...JSON.parse(agentFormBaseline), workflowIds: [workflow.id] });
+      if (JSON.stringify(workflowCanvasNodes.value) === canvas) workflowCanvasBaseline = canvas;
+      status.value = scope.id
+        ? '工作流已保存并绑定；其他未保存配置保持不变'
+        : '工作流已保存，保存 Agent 后会自动绑定';
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '保存工作流 DAG 失败';
+      if (agentEditorMatches(scope)) status.value = error instanceof Error ? error.message : '保存工作流失败';
     } finally {
       workflowCanvasSaving.value = false;
     }
@@ -4835,14 +5049,28 @@ export function useAppController() {
   async function runSelectedWorkflow() {
     const input = workflowInput.value.trim();
     if (!activeWorkflowId.value || !input || workflowRunning.value) return;
+    const scope = captureAgentEditorScope();
+    const workflowId = activeWorkflowId.value;
+    const approved = await confirmToolExecutionIfNeeded();
+    if (approved === null || !agentEditorMatches(scope) || workflowId !== activeWorkflowId.value) return;
     workflowRunning.value = true;
     activeWorkflowRun.value = null;
     try {
-      activeWorkflowRun.value = await apiRunWorkflow(activeWorkflowId.value, input, agentForm.value.id || undefined, backendBaseUrl.value);
-      workflowInput.value = '';
-      status.value = activeWorkflowRun.value.status === 'succeeded' ? '工作流执行完成' : '工作流执行失败';
+      let run = await apiRunWorkflow(workflowId, input, scope.id || undefined, scope.base, approved);
+      const current = () => agentEditorMatches(scope) && workflowId === activeWorkflowId.value;
+      if (!current()) return;
+      activeWorkflowRun.value = run;
+      while (['pending', 'running'].includes(run.status) && current()) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (!current()) return;
+        run = await apiFetchWorkflowRun(run.id, scope.base);
+        if (current()) activeWorkflowRun.value = run;
+      }
+      if (!current()) return;
+      if (workflowInput.value.trim() === input) workflowInput.value = '';
+      status.value = '工作流：' + agentRunStatusLabel(run.status);
     } catch (error) {
-      status.value = error instanceof Error ? error.message : '运行工作流失败';
+      if (agentEditorMatches(scope)) status.value = error instanceof Error ? error.message : '运行工作流失败';
     } finally {
       workflowRunning.value = false;
     }
@@ -4851,13 +5079,24 @@ export function useAppController() {
   async function bootstrapAuth() {
     const token = getStoredToken();
     try {
-      authUser.value = await fetchMe(backendBaseUrl.value);
+      try { authUser.value = await fetchMe(backendBaseUrl.value); }
+      catch (error) {
+        // A stale legacy Bearer must not mask a valid remembered cookie.
+        if (token && error instanceof ApiError && error.status === 401) {
+          clearStoredToken();
+          authUser.value = await fetchMe(backendBaseUrl.value);
+        } else throw error;
+      }
       await loadUserData();
       await fetchUserInvitationCode();
-    } catch {
-      if (token) { clearStoredToken(); }
-      authUser.value = null;
-      status.value = '请先登录以使用中转 API';
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        clearStoredToken();
+        authUser.value = null;
+        status.value = '请先登录以使用中转 API';
+      } else {
+        status.value = '连接暂时失败，请刷新重试；登录记忆仍保留';
+      }
     } finally {
       isAuthLoaded.value = true;
     }
@@ -4988,8 +5227,8 @@ export function useAppController() {
       const invitationCode = authMode.value === 'register' ? authInvitationCode.value.trim() || undefined : undefined;
       const result = authMode.value === 'register'
         ? await register(username, password, authEmail.value.trim(), authVerificationCode.value.trim(), invitationCode, authTosAccepted.value, authSecurityPayload(), backendBaseUrl.value)
-        : await login(username, password, authSecurityPayload(), backendBaseUrl.value);
-      setStoredToken(result.accessToken);
+        : await login(username, password, authSecurityPayload(), backendBaseUrl.value, authRememberMe.value);
+      clearStoredToken();
       authUser.value = result.user;
       authPassword.value = '';
       authEmail.value = '';
@@ -5101,9 +5340,14 @@ export function useAppController() {
     else if (cmd === 'console') switchPage('console');
   }
 
-  function logout() {
+  let loggingOut = false;
+  async function logout() {
+    if (loggingOut) return;
+    loggingOut = true;
+    try { await apiLogout(backendBaseUrl.value); }
+    catch { ElMessage.error('退出登录失败，请重试'); return; }
+    finally { loggingOut = false; }
     clearStoredToken();
-    apiLogout(backendBaseUrl.value).catch(() => {});
     authUser.value = null;
     models.value = [];
     billingRules.value = [];
@@ -5301,11 +5545,7 @@ export function useAppController() {
     upsertActiveSession([...requestMessages, { id: assistantMsgId, role: 'assistant', content: '', reasoning: '', model: currentModel }], content);
     draft.value = '';
     isSubmitting.value = true;
-    status.value = chatAgentMode.value
-      ? 'Agent 模式：分析是否需要调用 Agent...'
-      : currentModel === 'auto'
-        ? '智能路由分析中...'
-        : '正在连接模型';
+    status.value = currentModel === 'auto' ? '智能路由分析中...' : '正在连接模型';
     requestId.value = '';
 
     chatAbortController = new AbortController();
@@ -5315,19 +5555,20 @@ export function useAppController() {
     let routedModel = currentModel;
     let keyRotationNotice = '';
     const thinkingEnabledForRequest = chatThinkingMode.value;
-    const agentModeEnabledForRequest = chatAgentMode.value;
+    let memoryNotice = '';
 
-    if (currentModel === 'auto' || agentModeEnabledForRequest) {
+    if (currentModel === 'auto') {
       // ── Auto routing: direct fetch with SSE parsing ──
       try {
-        const res = await fetch(`${backendBaseUrl.value}${agentModeEnabledForRequest ? '/router' : ''}/chat/completions`, {
+        const res = await fetch(`${backendBaseUrl.value}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(getStoredToken() ? { Authorization: `Bearer ${getStoredToken()}` } : {}) },
           body: JSON.stringify({
-            model: currentModel === 'auto' ? 'auto' : currentModel,
+            model: 'auto',
+            memory_enabled: true,
             messages: requestMessages.map((m) => ({ role: m.role, content: m.content })),
             temperature: 0.7,
-            extra_body: { enable_thinking: thinkingEnabledForRequest, agentMode: agentModeEnabledForRequest },
+            extra_body: { enable_thinking: thinkingEnabledForRequest },
             stream: true,
           }),
           signal: chatAbortController.signal,
@@ -5335,6 +5576,7 @@ export function useAppController() {
         });
 
         if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+        if (res.headers.get('x-memory-status') === 'unavailable') memoryNotice = '长期记忆读取失败，本次未使用记忆';
         const rotationHeader = res.headers.get('x-provider-key-rotation');
         if (rotationHeader) {
           try {
@@ -5410,7 +5652,7 @@ export function useAppController() {
             { id: assistantMsgId, role: 'assistant', content: '(空响应)', model: routedModel, routerInfo: routeInfo },
           ], content);
         }
-        status.value = keyRotationNotice || (agentModeEnabledForRequest ? 'Agent 模式回复完成' : '路由回复完成');
+        status.value = [memoryNotice, keyRotationNotice].filter(Boolean).join('；') || '路由回复完成';
         triggerSync();
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
@@ -5429,11 +5671,13 @@ export function useAppController() {
           {
             model: currentModel,
             messages: requestMessages.map((m) => ({ role: m.role, content: m.content })),
+            memory_enabled: true,
             temperature: 0.7,
             extra_body: { enable_thinking: thinkingEnabledForRequest },
           },
           {
             onRequestId: (rid) => { requestId.value = rid; status.value = '正在流式生成回复'; },
+            onMemoryWarning: (message) => { memoryNotice = message; },
             onKeyRotation: (rotation) => {
               keyRotationNotice = formatKeyRotationNotice(rotation);
               if (keyRotationNotice) status.value = keyRotationNotice;
@@ -5451,7 +5695,7 @@ export function useAppController() {
                 { id: assistantMsgId, role: 'assistant', content: streamedContent, reasoning: streamedReasoning, model: currentModel },
               ], content);
             },
-            onDone: () => { status.value = keyRotationNotice || '回复生成完成'; triggerSync(); },
+            onDone: () => { status.value = [memoryNotice, keyRotationNotice].filter(Boolean).join('；') || '回复生成完成'; triggerSync(); },
             onAbort: () => {
               status.value = '已停止生成';
               upsertActiveSession([
@@ -5824,7 +6068,7 @@ export function useAppController() {
     try {
       adminStats.value = await fetchAdminStats(backendBaseUrl.value);
     } catch (e) {
-      console.error('[admin] stats error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -5834,7 +6078,7 @@ export function useAppController() {
       adminUsers.value = res.data;
       adminUsersTotal.value = res.total;
     } catch (e) {
-      console.error('[admin] users error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -5850,11 +6094,12 @@ export function useAppController() {
       adminBilling.value = res.data;
       adminBillingTotal.value = res.total;
     } catch (e) {
-      console.error('[admin] billing error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
   function openEditUser(user: AdminUser) {
+    adminEditUserOriginal.value = { ...user };
     adminEditUserId.value = user.id;
     adminEditUserUsername.value = user.username;
     adminEditUserCredits.value = user.credits;
@@ -5877,7 +6122,7 @@ export function useAppController() {
 
   async function saveCreateAdminUser() {
     const form = adminCreateUserForm.value;
-    if (!form.username.trim() || !form.email.trim() || form.password.length < 4) return;
+    if (!form.username.trim() || !form.email.trim() || form.password.length < 8) return;
     adminCreateUserSaving.value = true;
     try {
       await apiCreateAdminUser({
@@ -5892,7 +6137,7 @@ export function useAppController() {
       await loadAdminUsers();
       await loadAdminStats();
     } catch (e: any) {
-      console.error('[admin] create user error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     } finally {
       adminCreateUserSaving.value = false;
     }
@@ -5900,15 +6145,17 @@ export function useAppController() {
 
   async function saveEditUser() {
     try {
-      await updateAdminUser(adminEditUserId.value, {
-        credits: adminEditUserCredits.value,
-        role: adminEditUserRole.value,
-        emailVerified: adminEditUserEmailVerified.value,
-      }, backendBaseUrl.value);
+      const original = adminEditUserOriginal.value;
+      if (!original) return;
+      const changes: { credits?: number; role?: string; emailVerified?: boolean; expectedCredits?: number } = {};
+      if (adminEditUserCredits.value !== original.credits) { changes.credits = adminEditUserCredits.value; changes.expectedCredits = original.credits; }
+      if (adminEditUserRole.value !== original.role) changes.role = adminEditUserRole.value;
+      if (adminEditUserEmailVerified.value !== Boolean(original.emailVerified)) changes.emailVerified = adminEditUserEmailVerified.value;
+      if (Object.keys(changes).length) await updateAdminUser(adminEditUserId.value, changes, backendBaseUrl.value);
       adminEditUserDialog.value = false;
       await loadAdminUsers();
     } catch (e: any) {
-      console.error('[admin] save user error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -5924,7 +6171,7 @@ export function useAppController() {
       adminProviderKeys.value = keys;
       adminProviderKeyMetrics.value = metrics;
     } catch (e: any) {
-      console.error('[admin] load provider keys error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -5974,7 +6221,7 @@ export function useAppController() {
       adminAddKeyDialog.value = false;
       await loadAdminProviderKeys();
     } catch (e: any) {
-      console.error('[admin] add provider key error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -5983,7 +6230,7 @@ export function useAppController() {
       await deleteAdminProviderKey(id, backendBaseUrl.value);
       await loadAdminProviderKeys();
     } catch (e: any) {
-      console.error('[admin] delete provider key error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -5993,7 +6240,7 @@ export function useAppController() {
     try {
       adminProviderConfigs.value = await fetchAdminProviderConfigs(backendBaseUrl.value);
     } catch (e: any) {
-      console.error('[admin] load provider configs error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6015,6 +6262,7 @@ export function useAppController() {
   }
 
   function openEditConfig(row: ProviderConfigRow) {
+    adminEditConfigOriginalUpdatedAt.value = row.updatedAt;
     adminIsNewConfig.value = false;
     adminEditConfigId.value = row.id;
     adminEditConfigForm.value = {
@@ -6038,21 +6286,21 @@ export function useAppController() {
       if (adminIsNewConfig.value) {
         await createAdminProviderConfig(form, backendBaseUrl.value);
       } else {
-        await updateAdminProviderConfig(adminEditConfigId.value, form, backendBaseUrl.value);
+        await updateAdminProviderConfig(adminEditConfigId.value, { ...form, expectedUpdatedAt: adminEditConfigOriginalUpdatedAt.value }, backendBaseUrl.value);
       }
       adminEditConfigDialog.value = false;
       await loadAdminProviderConfigs();
     } catch (e: any) {
-      console.error('[admin] save config error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
   async function toggleProvider(row: ProviderConfigRow) {
     try {
-      await updateAdminProviderConfig(row.id, { enabled: !row.enabled }, backendBaseUrl.value);
+      await updateAdminProviderConfig(row.id, { enabled: !row.enabled, expectedUpdatedAt: row.updatedAt }, backendBaseUrl.value);
       await loadAdminProviderConfigs();
     } catch (e: any) {
-      console.error('[admin] toggle provider error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6061,7 +6309,7 @@ export function useAppController() {
       await deleteAdminProviderConfig(id, backendBaseUrl.value);
       await loadAdminProviderConfigs();
     } catch (e: any) {
-      console.error('[admin] delete config error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6071,7 +6319,7 @@ export function useAppController() {
     try {
       adminTodayStats.value = await fetchAdminTodayStats(backendBaseUrl.value);
     } catch (e) {
-      console.error('[admin] today stats error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6086,7 +6334,7 @@ export function useAppController() {
         modelChartInstance = renderModelUsageChart(el, adminModelUsage.value);
       }
     } catch (e) {
-      console.error('[admin] model usage error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6107,12 +6355,12 @@ export function useAppController() {
   }
 
   async function saveResetPassword() {
-    if (adminResetPwdValue.value.length < 4) return;
+    if (adminResetPwdValue.value.length < 8) return;
     try {
       await resetAdminUserPassword(adminResetPwdUserId.value, adminResetPwdValue.value, backendBaseUrl.value);
       adminResetPwdDialog.value = false;
     } catch (e: any) {
-      console.error('[admin] reset password error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6122,7 +6370,7 @@ export function useAppController() {
       await loadAdminUsers();
       await loadAdminStats();
     } catch (e: any) {
-      console.error('[admin] delete user error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6151,15 +6399,20 @@ export function useAppController() {
       }
       adminProviderKeyCounts.value = counts;
     } catch (e) {
-      console.error('[admin] key counts error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
   async function loadAdminSettings() {
+    const request = ++adminSettingsRequest;
+    adminSettingsLoading.value = true;
     try {
-      adminSettings.value = await fetchAdminSettings(backendBaseUrl.value);
+      const settings = await fetchAdminSettings(backendBaseUrl.value);
+      if (request === adminSettingsRequest) { adminSettings.value = settings; adminSettingsError.value = ''; }
     } catch (e) {
-      console.error('[admin] settings error:', e);
+      if (request === adminSettingsRequest) adminSettingsError.value = e instanceof Error ? e.message : '加载配置失败';
+    } finally {
+      if (request === adminSettingsRequest) adminSettingsLoading.value = false;
     }
   }
 
@@ -6175,11 +6428,13 @@ export function useAppController() {
         tier_examples: JSON.stringify(adminModelTiers.value.examples || {}),
       };
     } catch (e) {
-      console.error('[admin] model tiers error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
   function openEditTier(tierKey?: string) {
+    if (!adminModelTiers.value.versions || Object.keys(adminModelTiers.value.versions).length < 4) { ElMessage.error('请先成功加载定价配置'); return; }
+    adminTierEditVersions.value = { ...(adminModelTiers.value.versions || {}) };
     if (tierKey) {
       adminTierEditKey.value = tierKey;
       adminTierEditLabel.value = adminModelTiers.value.labels[tierKey] || '';
@@ -6227,11 +6482,11 @@ export function useAppController() {
       if (examples) newExamples[key] = examples;
       else delete newExamples[key];
 
-      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels, examples: newExamples }, backendBaseUrl.value);
+      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels, examples: newExamples, expected: adminTierEditVersions.value }, backendBaseUrl.value);
       adminTierEditDialog.value = false;
       await loadAdminModelTiers();
     } catch (e) {
-      console.error('[admin] save tier error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '保存定价失败，草稿已保留');
     }
   }
 
@@ -6245,10 +6500,10 @@ export function useAppController() {
       delete newLabels[tierKey];
       const newExamples = { ...(adminModelTiers.value.examples || {}) };
       delete newExamples[tierKey];
-      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels, examples: newExamples }, backendBaseUrl.value);
+      await updateAdminModelTiers({ tiers: newTiers, prices: newPrices, labels: newLabels, examples: newExamples, expected: adminModelTiers.value.versions }, backendBaseUrl.value);
       await loadAdminModelTiers();
     } catch (e) {
-      console.error('[admin] delete tier error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -6349,20 +6604,40 @@ export function useAppController() {
 
   const adminDefaultPromptPrice = ref(0);
   const adminDefaultCompletionPrice = ref(0);
+  const adminDefaultPriceOriginal = ref<string | null>(null);
+  const adminDefaultPricesReady = ref(false);
+  const adminDefaultPricesSaving = ref(false);
 
-  function initDefaultPriceFields() {
-    adminDefaultPromptPrice.value = defaultPricePrompt.value;
-    adminDefaultCompletionPrice.value = defaultPriceCompletion.value;
+  async function initDefaultPriceFields() {
+    adminDefaultPricesReady.value = false;
+    adminDefaultPriceOriginal.value = null;
+    try {
+      const row = (await fetchAdminSettings(backendBaseUrl.value)).find(s => s.key === 'default_prices');
+      if (!row) throw Error('默认价格配置不存在');
+      const prices = JSON.parse(row.value);
+      if (typeof prices.prompt !== 'number' || typeof prices.completion !== 'number') throw Error('默认价格配置格式无效');
+      adminDefaultPromptPrice.value = prices.prompt;
+      adminDefaultCompletionPrice.value = prices.completion;
+      adminDefaultPriceOriginal.value = row.value;
+      adminDefaultPricesReady.value = true;
+    } catch (e) { ElMessage.error(e instanceof Error ? e.message : '默认价格加载失败'); }
   }
 
   async function saveDefaultPrices() {
+    if (adminDefaultPricesSaving.value || !adminDefaultPricesReady.value || adminDefaultPriceOriginal.value === null) return;
+    adminDefaultPricesSaving.value = true;
     try {
-      await updateAdminBillingRule('default_prompt_price_per_1k', adminDefaultPromptPrice.value, '默认输入价格（元/千token）', backendBaseUrl.value);
-      await updateAdminBillingRule('default_completion_price_per_1k', adminDefaultCompletionPrice.value, '默认输出价格（元/千token）', backendBaseUrl.value);
+      const value = JSON.stringify({ prompt: adminDefaultPromptPrice.value, completion: adminDefaultCompletionPrice.value });
+      await updateAdminSetting('default_prices', value, backendBaseUrl.value, adminDefaultPriceOriginal.value);
+      adminDefaultPriceOriginal.value = value;
+      ElMessage.success('默认价格已保存');
       await refreshBillingData();
       status.value = '默认价格已保存';
     } catch (e: any) {
       status.value = '保存失败：' + (e?.message || e);
+      ElMessage.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      adminDefaultPricesSaving.value = false;
     }
   }
 
@@ -6413,6 +6688,9 @@ export function useAppController() {
   });
 
   function openEditSetting(setting: SystemSetting) {
+    if (adminSettingSaving.value) return;
+    adminSettingsError.value = '';
+    adminEditSettingOriginal.value = setting.value;
     // model_tier_mapping has its own dedicated management page
     if (setting.key === 'model_tier_mapping') {
       adminTab.value = 'modeltiers';
@@ -6467,6 +6745,9 @@ export function useAppController() {
   }
 
   async function saveEditSetting() {
+    if (adminSettingSaving.value) return;
+    adminSettingSaving.value = true;
+    adminSettingsError.value = '';
     try {
       let value = adminEditSettingValue.value;
       // For page_models_* settings, handle both modes
@@ -6489,13 +6770,18 @@ export function useAppController() {
         void auto;
         value = JSON.stringify(rest);
       }
-      await updateAdminSetting(adminEditSettingKey.value, value, backendBaseUrl.value);
+      await updateAdminSetting(adminEditSettingKey.value, value, backendBaseUrl.value, adminEditSettingOriginal.value);
       adminEditSettingDialog.value = false;
+      ElMessage.success(adminEditSettingKey.value === 'max_json_body_size' ? '配置已保存，此项在后端重启后生效' : '配置已保存');
       await loadAdminSettings();
       // Reload page models config for frontend
-      pageModelsConfig.value = await fetchPageModels(backendBaseUrl.value);
+      try { pageModelsConfig.value = await fetchPageModels(backendBaseUrl.value); }
+      catch { ElMessage.warning('配置已保存，页面配置刷新失败，请稍后刷新页面'); }
     } catch (e) {
-      console.error('[admin] save setting error:', e);
+      adminSettingsError.value = e instanceof Error && ['TimeoutError','AbortError'].includes(e.name) ? '请求超时，请刷新确认保存状态；当前草稿已保留' : e instanceof Error ? e.message : '保存失败，当前草稿已保留';
+      ElMessage.error(adminSettingsError.value);
+    } finally {
+      adminSettingSaving.value = false;
     }
   }
 
@@ -6517,7 +6803,7 @@ export function useAppController() {
         const data = await res.json();
         adminRouterRules.value = data.data ?? [];
       }
-    } catch (e) { console.error('[admin] router rules error:', e); }
+    } catch (e) { ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试'); }
   }
 
   function openAdminRouterEdit(intent?: string, models?: string[]) {
@@ -6540,7 +6826,7 @@ export function useAppController() {
       });
       adminRouterEditDialog.value = false;
       await loadAdminRouterRules();
-    } catch (e) { console.error('[admin] save router rule error:', e); }
+    } catch (e) { ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试'); }
   }
 
   async function deleteAdminRouterRule(intent: string) {
@@ -6553,7 +6839,7 @@ export function useAppController() {
         credentials: 'include',
       });
       await loadAdminRouterRules();
-    } catch (e) { console.error('[admin] delete router rule error:', e); }
+    } catch (e) { ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试'); }
   }
 
   /* ---------- Chart Helpers ---------- */
@@ -6726,7 +7012,7 @@ export function useAppController() {
         adminChartInstance = renderLineChart(el, adminDailyUsage.value);
       }
     } catch (e) {
-      console.error('[admin] daily usage error:', e);
+      ElMessage.error(e instanceof Error ? e.message : '管理操作失败，请稍后重试');
     }
   }
 
@@ -7218,12 +7504,17 @@ export function useAppController() {
     return output;
   }
 
+  function imageUploadLimit(): number {
+    const value = Number(pageModelsConfig.value.max_image_upload_size_bytes);
+    return Number.isInteger(value) && value > 0 && value <= 104857600 ? value : 10485760;
+  }
+
   async function handleVisionImageUpload(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) { status.value = '请选择图片文件'; return; }
-    if (file.size > 10 * 1024 * 1024) { status.value = '图片大小不能超过 10MB'; return; }
+    if (file.size > imageUploadLimit()) { status.value = `图片大小超出配置上限（${(imageUploadLimit() / 1048576).toFixed(1)}MB）`; return; }
 
     visionImageName.value = file.name;
     status.value = '正在压缩图片...';
@@ -8462,6 +8753,7 @@ export function useAppController() {
   }
 
   onUnmounted(() => {
+    ++agentEditorEpoch;
     stopDrivingSim();
     if (agentTraceReplayTimer) clearInterval(agentTraceReplayTimer);
     agentRunAbortController?.abort();
@@ -8577,7 +8869,7 @@ export function useAppController() {
     const file = input.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) { status.value = '请选择图片文件'; return; }
-    if (file.size > 10 * 1024 * 1024) { status.value = '图片大小不能超过 10MB'; return; }
+    if (file.size > imageUploadLimit()) { status.value = `图片大小超出配置上限（${(imageUploadLimit() / 1048576).toFixed(1)}MB）`; return; }
     mmChatImageName.value = file.name;
     mmChatMediaType.value = 'image';
     const reader = new FileReader();
@@ -9008,12 +9300,12 @@ export function useAppController() {
     backendBaseUrl,
     isSettingsOpen,
     chatThinkingMode,
-    chatAgentMode,
     isAuthDialogOpen,
     authUser,
     authMode,
     authUsername,
     authPassword,
+    authRememberMe,
     authEmail,
     authVerificationCode,
     authInvitationCode,
@@ -9067,6 +9359,10 @@ export function useAppController() {
     agentTraceReplayIndex,
     agentTraceReplayMax,
     agentTraceReplayPlaying,
+    agentComparisonRunId,
+    agentTraceFollowLive,
+    agentContinueConversation,
+    executingAgentRun,
     agentTraceNodes,
     agentTraceEdges,
     agentTraceStageGroups,
@@ -9093,6 +9389,13 @@ export function useAppController() {
     getDagNodeInfo,
     applyDagTemplate,
     applyWorkflowDagTemplate,
+    dagBranchRows,
+    dagBranchTargets,
+    allAgentTools,
+    agentToolSearch,
+    filteredBuiltinTools,
+    filteredCustomTools,
+    bindToolToCurrentAgent,
     availableTools,
     knowledgeBases,
     agentMemories,
@@ -9175,6 +9478,7 @@ export function useAppController() {
     agentEvaluationLoading,
     agentEvaluationSaving,
     beginnerAssistTarget,
+    beginnerGeneratedDraftReady,
     evaluationForm,
     generatorForm,
     agentCreateWizardStep,
@@ -9206,6 +9510,9 @@ export function useAppController() {
     ragLabForm,
     ragLabSearching,
     ragLabResults,
+    ragLabMeta,
+    ragLabSnapshot,
+    ragLabError,
     memoryForm,
     editingMemoryId,
     skillForm,
@@ -9326,6 +9633,11 @@ export function useAppController() {
     adminProviderKeyCounts,
     adminApiKeyProviderFilter,
     adminSettings,
+    adminDefaultPricesReady,
+    adminDefaultPricesSaving,
+    adminSettingSaving,
+    adminSettingsLoading,
+    adminSettingsError,
     adminEditSettingDialog,
     adminEditSettingKey,
     adminEditSettingValue,
@@ -9379,6 +9691,7 @@ export function useAppController() {
     onConsoleEnter,
     triggerSync,
     loadModels,
+    modelRefreshError,
     resetAgentForm,
     fillAgentForm,
     refreshAgentStudio,
@@ -9423,6 +9736,7 @@ export function useAppController() {
     toggleAgentTraceReplay,
     pauseAgentTraceReplay,
     resumeAgentTraceReplay,
+    followAgentLiveTrace,
     stepIntoAgentTrace,
     stepOverAgentTrace,
     restartAgentFromTraceNode,
@@ -9456,6 +9770,7 @@ export function useAppController() {
     downloadUserLibraryFile,
     formatDate,
     runRagLabSearch,
+    invalidateRagLab,
     createAgentMemory,
     startEditAgentMemory,
     resetMemoryEditor,

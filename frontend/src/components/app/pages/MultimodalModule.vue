@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from "vue";
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from "../../../types";
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -94,10 +95,7 @@ const openVideoUploadInput = bind(app, "openVideoUploadInput");
 </script>
 
 <template>
-  <div class="page-header">
-    <div class="header-left" style="gap: 8px">
-      <strong>全模态 Beta</strong>
-      <el-select
+  <WorkspaceHeader title="全模态 Beta" :app="app"><el-select
         v-model="multimodalModel"
         filterable
         placeholder="视觉模型"
@@ -110,46 +108,7 @@ const openVideoUploadInput = bind(app, "openVideoUploadInput");
           :label="m.id"
           :value="m.id"
         />
-      </el-select>
-    </div>
-    <div class="header-right">
-      <template v-if="isAuthLoaded">
-        <el-button
-          v-if="!isAuthenticated"
-          type="primary"
-          plain
-          @click="isAuthDialogOpen = true"
-          >登录 / 注册</el-button
-        >
-        <el-dropdown v-else trigger="click" @command="handleUserMenu">
-          <el-tag type="success" style="cursor: pointer"
-            >{{ authUser?.username }} ▾</el-tag
-          >
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="console"
-                ><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item
-              >
-              <el-dropdown-item v-if="userInvitationCode" disabled>
-                <span style="color: #666"
-                  >邀请码：{{ userInvitationCode }}</span
-                >
-                <el-button
-                  size="small"
-                  style="margin-left: 8px"
-                  @click.stop="copyToClipboard(userInvitationCode)"
-                  >复制</el-button
-                >
-              </el-dropdown-item>
-              <el-dropdown-item command="logout" divided
-                ><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item
-              >
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </template>
-    </div>
-  </div>
+      </el-select></WorkspaceHeader>
 
   <div class="multimodal-page">
     <el-tabs v-model="multimodalTab" type="border-card" class="mm-tabs">
@@ -302,7 +261,7 @@ const openVideoUploadInput = bind(app, "openVideoUploadInput");
                     v-model="drivingControlMode"
                     class="driving-mode-group"
                   >
-                    <el-radio-button
+                    <el-radio-button :value="item.value"
                       v-for="item in drivingControlModeOptions"
                       :key="item.value"
                       :label="item.value"

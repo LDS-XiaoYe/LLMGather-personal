@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -48,43 +49,17 @@ const copyToClipboard = bind(app, 'copyToClipboard');
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left" style="gap:8px">
-            <el-select v-model="battleLeftModel" placeholder="左侧模型（可选）" clearable filterable style="width:200px">
+        <WorkspaceHeader title="模型对战" :app="app"><el-select aria-label="左侧模型" v-model="battleLeftModel" placeholder="左侧模型（可选）" clearable filterable style="width:200px">
               <el-option v-for="m in battleModels" :key="m.id" :label="m.id" :value="m.id">
                 <span>{{ m.id }}</span>
                 <el-tag v-if="getModelTags(m.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
               </el-option>
-            </el-select>
-            <span style="color:#909399;font-weight:600">VS</span>
-            <el-select v-model="battleRightModel" placeholder="右侧模型（可选）" clearable filterable style="width:200px">
+            </el-select><span style="color:#909399;font-weight:600">VS</span><el-select aria-label="右侧模型" v-model="battleRightModel" placeholder="右侧模型（可选）" clearable filterable style="width:200px">
               <el-option v-for="m in battleModels" :key="m.id" :label="m.id" :value="m.id">
                 <span>{{ m.id }}</span>
                 <el-tag v-if="getModelTags(m.id).includes('vision')" size="small" type="warning" style="margin-left:6px">视觉</el-tag>
               </el-option>
-            </el-select>
-            <el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button>
-          </div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-            <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-            <el-dropdown v-else trigger="click" @command="handleUserMenu">
-              <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                  <el-dropdown-item v-if="userInvitationCode" disabled>
-                    <span style="color:#666;">邀请码：{{ userInvitationCode }}</span>
-                    <el-button size="small" style="margin-left:8px" @click.stop="copyToClipboard(userInvitationCode)">复制</el-button>
-                  </el-dropdown-item>
-                  <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-tag :type="battleStatusTagType()">{{ battleStatus }}</el-tag>
-            </template>
-          </div>
-        </div>
+            </el-select><el-button :icon="Refresh" :loading="isLoadingModels" @click="loadModels()">刷新模型</el-button><template #status><span v-if="isBattling" class="ui-header-caption" role="status">进行中</span></template></WorkspaceHeader>
 
         <div class="battle-board">
           <el-card v-for="(panel, idx) in battlePanels" :key="idx" class="battle-card" shadow="hover">
@@ -117,18 +92,18 @@ const copyToClipboard = bind(app, 'copyToClipboard');
               type="textarea"
               :rows="3"
               resize="vertical"
-              placeholder="输入一个问题，两个模型并发回答（可在上方指定模型，留空则随机）"
+              placeholder="输入同一个问题，比较两个模型的回答"
               @keydown.enter.exact.prevent="startBattle()"
               @compositionstart="isComposing = true"
               @compositionend="isComposing = false"
             />
             <div class="composer-bar">
               <div class="composer-meta">
-                <el-text type="info" size="small">{{ battleLeftModel && battleRightModel ? battleLeftModel + ' vs ' + battleRightModel : '随机挑选 2 个模型并发回答' }}</el-text>
+                <el-text type="info" size="small">{{ battleLeftModel && battleRightModel ? battleLeftModel + ' vs ' + battleRightModel : '未指定模型时随机选择两项' }}</el-text>
               </div>
               <div class="composer-actions">
                 <el-button v-if="isBattling" type="danger" :icon="SwitchButton" @click="stopBattle()">停止对战</el-button>
-                <el-button v-else type="primary" :icon="Lightning" @click="startBattle()" :disabled="!battlePrompt.trim()">开始 Battle</el-button>
+                <el-button v-else type="primary" :icon="Lightning" @click="startBattle()" :disabled="!battlePrompt.trim()">开始对比</el-button>
               </div>
             </div>
           </el-card>

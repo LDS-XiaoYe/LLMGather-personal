@@ -11,4 +11,5 @@ const app = useAppController();
 
 <style>
 @import './styles.css';
+@import './ui-foundation.css';
 </style>

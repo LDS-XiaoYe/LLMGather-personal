@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // @ts-nocheck
 import { computed as vueComputed, isRef, unref } from 'vue';
+import WorkspaceHeader from '../../ui/WorkspaceHeader.vue';
 import type { PageMode } from '../../../types';
 
 const props = defineProps<{ app: Record<string, any> }>();
@@ -43,34 +44,15 @@ const stopCollab = bind(app, 'stopCollab');
 </script>
 
 <template>
-        <div class="page-header">
-          <div class="header-left" style="gap:8px">
-            <strong>协同推理</strong>
-            <el-radio-group v-model="collabMode" size="small" :disabled="collabRunning">
+        <WorkspaceHeader title="协同推理" :app="app"><el-radio-group aria-label="协同推理方式" v-model="collabMode" size="small" :disabled="collabRunning">
               <el-radio-button value="debate">并行辩论</el-radio-button>
               <el-radio-button value="review">同行评审</el-radio-button>
               <el-radio-button value="divide">分工协作</el-radio-button>
-            </el-radio-group>
-          </div>
-          <div class="header-right">
-            <template v-if="isAuthLoaded">
-              <el-button v-if="!isAuthenticated" type="primary" plain @click="isAuthDialogOpen = true">登录 / 注册</el-button>
-              <el-dropdown v-else trigger="click" @command="handleUserMenu">
-                <el-tag type="success" style="cursor:pointer">{{ authUser?.username }} ▾</el-tag>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="console"><el-icon><DataAnalysis /></el-icon> 控制台</el-dropdown-item>
-                    <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
-          </div>
-        </div>
+            </el-radio-group><template #status><span v-if="collabRunning" class="ui-header-caption" role="status">进行中</span></template></WorkspaceHeader>
 
         <div class="thread" style="flex:1">
           <div v-if="collabPanels.length === 0 && !collabRunning" class="group-empty">
-            <el-empty description="输入问题，多个AI模型将协同推理并返回最优结果。" :image-size="96">
+            <el-empty description="选择协作方式，让多个模型共同分析问题。" :image-size="96">
               <template #image><el-icon :size="44" style="color:#8b5cf6"><TrendCharts /></el-icon></template>
             </el-empty>
           </div>
@@ -123,10 +105,10 @@ const stopCollab = bind(app, 'stopCollab');
                 <el-option v-for="m in models.filter(x => !x.id.includes('vl') && !x.id.includes('tts') && !x.id.includes('voice'))" :key="m.id" :label="m.id" :value="m.id" />
               </el-select>
             </div>
-            <el-input v-model="collabPrompt" type="textarea" :rows="2" resize="vertical" placeholder="输入问题，多个模型将协同推理..." :disabled="collabRunning" @keydown.enter.exact.prevent="startCollab()" @compositionstart="isComposing = true" @compositionend="isComposing = false" />
+            <el-input v-model="collabPrompt" type="textarea" :rows="2" resize="vertical" placeholder="输入要分析的问题" :disabled="collabRunning" @keydown.enter.exact.prevent="startCollab()" @compositionstart="isComposing = true" @compositionend="isComposing = false" />
             <div class="composer-bar">
               <div class="composer-meta">
-                <span class="meta-text">{{ collabSelectedModels.length > 0 ? `已选${collabSelectedModels.length}个模型` : '自动选择最佳模型' }}</span>
+                <span class="meta-text">{{ collabSelectedModels.length > 0 ? `已选${collabSelectedModels.length}个模型` : '自动选择模型' }}</span>
               </div>
               <div class="composer-actions">
                 <el-button :icon="Delete" @click="clearCollab()" size="small">清空</el-button>

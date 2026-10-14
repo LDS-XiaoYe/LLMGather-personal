@@ -8,4 +8,4 @@ RUN npm install --omit=dev --ignore-scripts
 COPY deployment-agent/ ./
 ENV AGENT_DATA_DIR=/state AGENT_HOST=0.0.0.0
 EXPOSE 19090
-CMD ["node","server.cjs"]
+CMD ["node","container-bootstrap.cjs"]

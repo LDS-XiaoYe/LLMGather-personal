@@ -24,8 +24,11 @@ export class ManagedEmbeddingService {
     const i=await this.services.readyInstance(id),spec=JSON.parse(i.spec_json!) as InstanceSpec;
     return{model:i.model_id,dimensions:spec.dimensions,fingerprint:i.fingerprint!,revision:spec.revision,endpoint:'managed://'+i.id};
   }
+  async defaultDescriptor():Promise<EmbeddingDescriptor|null>{
+    const id=await this.services.defaultId();return id?this.descriptor(id):null;
+  }
   async initialBinding(selected?:string):Promise<{id:string|null;spec:string|null}>{
-    const id=selected=== ''?null:selected||await this.services.defaultId();
+    const id=selected||await this.services.defaultId();
     return id?{id,spec:JSON.stringify(await this.descriptor(id))}:{id:null,spec:null};
   }
   async bind(user:string,kb:string,id:string){

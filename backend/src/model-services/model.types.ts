@@ -7,6 +7,8 @@ export interface Hardware {
   platform: string; arch: string; cpu: string; cpuCount: number; memoryMiB: number; freeDiskMiB: number;
   docker: null | {os: string; arch: string; memoryMiB: number; nvidiaRuntime: boolean};
   gpus: {name: string; uuid: string; totalMiB: number; freeMiB: number; capability: string; driver: string}[];
+  gpuDiscovery?: {source: 'native' | 'docker'; status: 'available' | 'not-detected' | 'unavailable' | 'runtime-unavailable'; message: string};
+  gpuError?: string;
   apple: null | {chip: string; version: string; mlx: boolean; metal: boolean};
 }
 export interface InstanceSpec {

@@ -123,7 +123,8 @@ async function start(){
       if(req.headers['x-agent-id']!==process.env.AGENT_ID)throw Error('Agent identity mismatch');
       verifier.verify(req.method,req.url,req.headers,raw);const body=raw?JSON.parse(raw):{};
       let data;
-      if(req.method==='GET'&&req.url==='/v1/node')data={id:process.env.AGENT_ID,hardware:await detect(agent.root,process.env.AGENT_PYTHON),registryVersion:1};
+      if(req.method==='GET'&&req.url==='/v1/ready')data={ready:true};
+      else if(req.method==='GET'&&req.url==='/v1/node')data={id:process.env.AGENT_ID,hardware:await detect(agent.root,process.env.AGENT_PYTHON),registryVersion:1};
       else if(req.method==='GET'&&req.url==='/v1/state')data=agent.store.state;
       else if(req.method==='POST'&&req.url==='/v1/tasks')data=await agent.submit(body);
       else if(req.method==='POST'&&/^\/v1\/tasks\/[a-f0-9-]{36}\/cancel$/.test(req.url))data=await agent.cancel(req.url.split('/')[3]);

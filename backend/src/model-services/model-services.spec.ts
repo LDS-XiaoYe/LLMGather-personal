@@ -8,6 +8,30 @@ import { AgentClient } from './agent.client';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { ExecutionContext } from '@nestjs/common';
 describe('model service contract',()=>{
+  test('REST/SSE snapshots omit uninstalled models and their default marker without deleting lifecycle history',async()=>{
+    const config=JSON.stringify({modelId:'bge-m3',backend:'cpu'});
+    const instance=(id:string,actual_state:string,desired_state=actual_state,operation_id:string|null=null)=>({id,actual_state,desired_state,operation_id,config_json:config});
+    const rows=[instance('removed','REMOVED'),instance('stopped','STOPPED'),instance('failed-remove','FAILED','REMOVED'),instance('removing','RUNNING','REMOVED','task'),instance('redeploying','REMOVED','RUNNING','task')];
+    const history=[{id:'task',instanceId:'removed',status:'SUCCEEDED',progressJson:'{}'}];
+    const run=jest.fn(),db={connection:{prepare:(sql:string)=>({
+      all:async()=>sql.includes('FROM model_instances')?rows:sql.includes('FROM model_tasks')?history:[],
+      get:async()=>({value:'removed'}),run,
+    })}} as unknown as DatabaseService;
+    const service=new ModelServicesService(db,{} as AgentClient);
+    let snapshot=await service.snapshot();
+    expect(snapshot.instances.map(i=>(i as Record<string,unknown>).id)).toEqual(['stopped','failed-remove','removing','redeploying']);
+    expect(snapshot.defaultInstanceId).toBeNull();expect(snapshot.tasks).toHaveLength(1);expect(run).not.toHaveBeenCalled();
+    rows.splice(0,rows.length,instance('removed','REMOVED'));
+    snapshot=await service.snapshot();expect(snapshot.instances).toEqual([]);
+  });
+  test('confirmed removal clears only its own default marker, not KB bindings or other defaults',async()=>{
+    const statements:Array<{sql:string;args:unknown[]}>=[];
+    const db={connection:{prepare:(sql:string)=>({all:async()=>[{id:'removed',model_id:'bge-m3',desired_state:'REMOVED'}],run:async(...args:unknown[])=>{statements.push({sql,args});return{changes:1};}})}} as unknown as DatabaseService;
+    const service=new ModelServicesService(db,{} as AgentClient);
+    await (service as any).syncInstances({id:'node'},{instances:{removed:{actualState:'REMOVED'}},tasks:{}});
+    expect(statements.find(s=>s.sql.startsWith('DELETE'))).toEqual({sql:"DELETE FROM model_settings WHERE id='default_embedding' AND value=?",args:['removed']});
+    expect(statements.some(s=>/DELETE FROM (model_instances|knowledge_bases|model_tasks)/.test(s.sql))).toBe(false);
+  });
   test('fixed revisions, source parity and distinct runtime images',()=>{
     const model=modelRegistry.models[0];expect(model.dimensions).toBe(1024);
     expect(model.variants.tei.revision).toMatch(/^[a-f0-9]{40}$/);
@@ -34,9 +58,10 @@ describe('model service contract',()=>{
     const db={connection:{prepare:(sql:string)=>({get:async()=>sql.includes('model_nodes')?{id,status:'ONLINE',fresh:1,last_seen:'2000-01-01'}:{id,node_id:id,actual_state:'RUNNING',desired_state:'RUNNING',provider_registered:1}})}} as unknown as DatabaseService;
     expect((await new ModelServicesService(db,{} as AgentClient).readyInstance(id)).id).toBe(id);
   });
-  test('admin guard rejects ordinary and anonymous users',()=>{
-    const guard=new AdminGuard();const context=(role:string)=>({switchToHttp:()=>({getRequest:()=>({user:{role}})})}) as ExecutionContext;
-    expect(()=>guard.canActivate(context('user'))).toThrow();expect(guard.canActivate(context('admin'))).toBe(true);
+  test('admin guard rejects ordinary and anonymous users',async()=>{
+    let currentRole='user';const db={connection:{prepare:()=>({get:async()=>({role:currentRole})})}} as unknown as DatabaseService;
+    const guard=new AdminGuard(db);const context=(role:string)=>({switchToHttp:()=>({getRequest:()=>({user:{id:'test',role}})})}) as ExecutionContext;
+    await expect(guard.canActivate(context('admin'))).rejects.toThrow();currentRole='admin';await expect(guard.canActivate(context('user'))).resolves.toBe(true);
   });
   test('new KB uses default; old KB with no frozen managed binding retains remote configuration',async()=>{
     const db={connection:{prepare:()=>({get:async()=>({embedding_instance_id:null})})}} as unknown as DatabaseService;

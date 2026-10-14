@@ -25,6 +25,16 @@ class ModelRuntimeAdapter {
 class DockerRuntimeAdapter extends ModelRuntimeAdapter {
   constructor(root,cacheRoot,run=command){super();this.root=root;this.cacheRoot=cacheRoot;this.run=run;}
   name(instance){return 'llmgather-model-'+id(instance.id);}
+  networkContainer(){
+    const target=process.env.AGENT_NETWORK_CONTAINER;
+    if(target&&!/^[a-f0-9]{12,64}$/.test(target))throw Error('Invalid managed Agent network container');
+    return target;
+  }
+  networkMatches(value){
+    const target=this.networkContainer();if(!target)return true;
+    const mode=value.HostConfig?.NetworkMode||'';
+    return mode==='container:'+target||mode.startsWith('container:'+target);
+  }
   async owned(instance){
     const result=JSON.parse(await this.run('docker',['inspect',this.name(instance),'--format','{{json .}}']));
     if(result.Config.Labels?.['io.llmgather.managed']!==instance.id||result.Config.Labels?.['io.llmgather.agent']!==process.env.AGENT_ID)throw Error('Managed container ownership mismatch');
@@ -41,23 +51,38 @@ class DockerRuntimeAdapter extends ModelRuntimeAdapter {
     const args=['create','--name',this.name(instance),'--label','io.llmgather.managed='+instance.id,'--label','io.llmgather.agent='+process.env.AGENT_ID,
       '--restart','unless-stopped','--cpus',String(instance.cpu),'--memory',instance.memoryMiB+'m','--memory-swap',instance.memoryMiB+'m',
       '--pids-limit','256','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--tmpfs','/tmp:rw,noexec,nosuid,size=256m',
-      '--mount',mount,'--publish',`127.0.0.1:${instance.port}:80`,
+      '--mount',mount,
       '--env','HF_HUB_OFFLINE=1','--env','HF_HOME=/tmp/huggingface',
       '--log-opt','max-size=10m','--log-opt','max-file=3'];
+    const network=this.networkContainer();
+    if(network)args.push('--network','container:'+network);
+    else args.push('--publish',`127.0.0.1:${instance.port}:80`);
     if(instance.backend==='nvidia')args.push('--gpus','device='+instance.gpuUuid);
-    args.push(instance.image,'--model-id',modelPath,'--port','80','--dtype',instance.precision,'--max-client-batch-size','32','--max-concurrent-requests','8','--max-batch-tokens',instance.backend==='cpu'?'1024':'8192','--pooling','cls');
+    args.push(instance.image,'--model-id',modelPath,'--port',network?String(instance.port):'80','--dtype',instance.precision,'--max-client-batch-size','32','--max-concurrent-requests','8','--max-batch-tokens',instance.backend==='cpu'?'1024':'8192','--pooling','cls');
     if(instance.backend==='cpu')args.push('--auto-truncate');
     return args;
   }
   async deploy(instance,cache){
-    try{const existing=await this.owned(instance);if(existing.Config.Image!==instance.image)throw Error('Managed container runtime image mismatch');return;}catch(e){if(e.message.startsWith('Managed container'))throw e;}
+    try{const existing=await this.owned(instance);if(existing.Config.Image!==instance.image)throw Error('Managed container runtime image mismatch');
+      if(this.networkMatches(existing))return;
+      // Agent recreation changes its namespace. Recreate only the owned model container, retaining cache and instance identity.
+      await this.run('docker',['rm','--force',this.name(instance)]);
+    }catch(e){if(e.message.startsWith('Managed container'))throw e;}
     await this.run('docker',this.arguments(instance,cache));
   }
-  async start(instance){await this.owned(instance);await this.run('docker',['start',this.name(instance)]);}
+  async repairNetwork(instance){
+    if(this.networkMatches(await this.owned(instance)))return;
+    if(!/^[a-f0-9]{64}$/.test(instance.cacheKey||''))throw Error('Managed model cache identity unavailable');
+    const cachePath=inside(this.cacheRoot,instance.cacheKey);
+    const {ModelDownloadService}=require('./download.cjs');
+    await new ModelDownloadService(this.cacheRoot).verify(cachePath,registry.models.find(m=>m.id===instance.modelId).variants[instance.variant]);
+    await this.deploy(instance,{path:cachePath});
+  }
+  async start(instance){await this.repairNetwork(instance);await this.run('docker',['start',this.name(instance)]);}
   async stop(instance){await this.owned(instance);await this.run('docker',['stop','--time','15',this.name(instance)]);}
-  async restart(instance){await this.owned(instance);await this.run('docker',['restart','--time','15',this.name(instance)]);}
+  async restart(instance){await this.repairNetwork(instance);await this.run('docker',['restart','--time','15',this.name(instance)]);}
   async remove(instance){await this.owned(instance);await this.run('docker',['rm','--force',this.name(instance)]);}
-  async inspect(instance){try{const value=await this.owned(instance);return{status:value.State.Running?'RUNNING':'STOPPED',exitCode:value.State.ExitCode,image:value.Config.Image,startedAt:value.State.StartedAt};}catch(e){if(e.message==='Managed container ownership mismatch')throw e;return{status:'MISSING'};}}
+  async inspect(instance){try{const value=await this.owned(instance);return{status:!this.networkMatches(value)?'STALE_NETWORK':value.State.Running?'RUNNING':'STOPPED',exitCode:value.State.ExitCode,image:value.Config.Image,startedAt:value.State.StartedAt};}catch(e){if(e.message==='Managed container ownership mismatch')throw e;return{status:'MISSING'};}}
   async getLogs(instance){await this.owned(instance);return this.run('docker',['logs','--tail','150',this.name(instance)],{includeStderr:true}).catch(()=> 'Docker model logs unavailable');}
   async getMetrics(instance){await this.owned(instance);return JSON.parse(await this.run('docker',['stats','--no-stream','--format','{{json .}}',this.name(instance)]));}
 }
@@ -85,9 +110,17 @@ class NvidiaCudaRuntimeAdapter extends DockerRuntimeAdapter {
     await super.healthCheck(instance);
     // TEI may fall back to CPU when CUDA initialization fails. Require runtime device evidence.
     const info=await this.owned(instance);
+    if(!info.State.Running)throw Error('GPU model container is not running');
     if(!info.HostConfig.DeviceRequests?.some(d=>d.DeviceIDs?.includes(instance.gpuUuid)))throw Error('GPU device was not allocated');
-    const logs=await this.getLogs(instance);
+    const evidence=instance.cudaVerifiedRun;
+    // Persist evidence in the Agent's instance state, scoped to this exact container start.
+    // Request logs can evict startup lines from the UI tail (and eventually rotate them away).
+    // A restart, recreation or GPU change must obtain fresh CUDA evidence.
+    if(evidence?.containerId===info.Id&&evidence.startedAt===info.State.StartedAt&&evidence.gpuUuid===instance.gpuUuid)return true;
+    delete instance.cudaVerifiedRun;
+    const logs=await this.run('docker',['logs','--since',info.State.StartedAt,'--until',new Date().toISOString(),info.Id],{includeStderr:true,maxBuffer:32*1024*1024});
     if(/Using CPU instead|Starting .* on Cpu/i.test(logs)||!/(Starting .*Cuda|compute cap|CUDA device)/i.test(logs))throw Error('GPU inference device not confirmed by runtime logs');
+    instance.cudaVerifiedRun={containerId:info.Id,startedAt:info.State.StartedAt,gpuUuid:instance.gpuUuid};
     return true;
   }
 }

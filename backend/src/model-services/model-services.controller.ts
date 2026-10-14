@@ -12,6 +12,7 @@ import { DeploymentConfig } from './model.types';
 export class ModelServicesController {
   constructor(private readonly services:ModelServicesService){}
   @Get() async list(){return{data:await this.services.snapshot()};}
+  @Post('nodes/local/connect') async local(@CurrentUser() user:AuthenticatedRequestUser){return{data:await this.services.connectLocalNode(user.id)};}
   @Post('nodes') async register(@CurrentUser() user:AuthenticatedRequestUser,@Body() input:{id:string;name:string;baseUrl:string;token:string}){return{data:await this.services.registerNode(user.id,input)};}
   @Post('tasks') async task(@CurrentUser() user:AuthenticatedRequestUser,@Body() input:{taskId:string;instanceId:string;nodeId?:string;action:string;config?:DeploymentConfig;confirm?:boolean}){return{data:await this.services.enqueue(user.id,input)};}
   @Post('tasks/:id/cancel') async cancel(@CurrentUser() user:AuthenticatedRequestUser,@Param('id') id:string){return{data:await this.services.cancel(user.id,id)};}

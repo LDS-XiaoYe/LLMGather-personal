@@ -26,7 +26,7 @@ Knowledge → frozen embedding descriptor → signed Agent proxy → BGE-M3
 - `backend/src/model-services/`：节点认证客户端、DB 队列、SSE、审计、管理控制器、受管 Embedding。
 - `backend/src/database/migrations/model-services.ts`：可重复执行的增量迁移。
 - `frontend/src/components/ModelServiceManagement.vue`：类型化管理页面与六步向导。
-- `frontend/src/components/KnowledgeEmbeddingSelector.vue`：新知识库模型选择、现有 KB 显式绑定/重新索引。
+- `frontend/src/components/KnowledgeEmbeddingSelector.vue`：新知识库模型选择、现有 KB 显式绑定后自动重建索引。
 - `backend/scripts/model-services-integration.cjs`、`deployment-agent/scripts/acceptance.cjs`：真实服务验收。
 
 ## 2. 注册表与兼容性矩阵
@@ -49,9 +49,28 @@ Apple 使用 `mlx-community/bge-m3-mlx-fp16` revision `a37eddded9a6a1273a87fb8b0
 
 扩展模型时在清单声明 immutable revisions、完整文件摘要、资源要求与运行时矩阵；实现相应协议/适配器。当前自动注册仅针对本阶段 Embedding 服务，不把未来 Rerank 当成 Embedding。
 
-## 3. 节点一次性安装
+## 3. 默认一键部署与高级节点安装
 
-计算节点管理员一次性安装 Node.js >=22 和相应宿主依赖、固定仓库路径并运行：
+### 默认 Compose：管理员不配置环境文件
+
+开发和生产 Compose 均包含独立 `model-agent`。Agent 首次启动在私有 `model_agent_bootstrap` Volume 中生成随机设备 UUID 与 48 字节认证凭证，后续启动复用原文件；后端只读挂载该 Volume，启动后通过真实签名身份 / 硬件探针自动注册默认部署节点。凭证不写入仓库或浏览器，不需要管理员修改 `.env`、填写设备 ID / Token / URL。节点离线时显示实际状态并自动重试，页面可点击“重新检测默认节点”。
+
+1. 按根 README 启动或更新标准 Compose；已有安装重新执行 `npm run deploy:dev` 或 `npm run deploy` 即可增加 Agent 服务，保留原数据卷。
+2. 管理员进入管理后台 → 知识库模型，默认节点自动出现。
+3. 点击“一键部署 BGE-M3（CPU）”，系统使用真实节点资源预检、固定模型清单及自动下载源；进度、日志与失败原因仍使用原有任务系统。
+4. 推理健康探针通过后模型注册为可用服务。需要时点击“设为默认”，仅影响未来知识库；旧知识库仍需明确绑定，绑定后自动重建索引。
+
+默认按钮明确使用 CPU，不将 CPU 冒充 GPU；要求 Linux amd64 Docker、模型至少 6144MiB 内存预算和清单规定的缓存空间。没有兼容硬件时显示实际原因，不提交伪成功任务。NVIDIA GPU 可在默认 Docker 节点的“自定义部署”中选择；Apple 需要 macOS 原生 Agent。
+
+容器化 Agent 不依赖自己容器中安装 `nvidia-smi`，而是通过 Docker daemon 启动临时 `--gpus all` 探测容器，复用 Agent 的本地不可变镜像，读取真实显卡、显存、驱动和 Compute Capability。探测容器没有网络、数据卷或端口，结束或超时后清理；结果缓存 30 秒，并合并并发探测，避免轮询反复创建容器。原生 Agent 仍直接调用本机 `nvidia-smi`。Docker GPU 运行时不可用、未发现设备与探测失败分别展示，不将容器内命令缺失解释为主机没有显卡。CPU-only 安装无需增加 Compose GPU 必选配置或修改 `.env`；GPU 使用仍要求宿主驱动和 Docker GPU 支持。
+
+Agent 仅连接专用桥接网络，只有后端同时连接该网络；不发布宿主机 Agent / 模型端口，不依赖 Docker Desktop host networking。模型子容器共用受管 Agent 的私有网络命名空间，使用独立端口。原生 Agent 保持原来的回环推理方式。Agent 容器重建时可按同一实例身份和已验证缓存重建旧网络命名空间的模型容器，权重和业务索引不删除。
+
+默认 Agent 持有 Docker Socket 以创建模型容器，业务后端没有该权限。`model_agent_state` 保存任务与实例状态，`model_agent_bootstrap` 保存身份，`llmgather_model_cache` 保存权重。备份时保留这些卷；普通升级不执行 `down -v`。
+
+### 高级：原生 GPU / Apple 或远程节点
+
+目标机器的维护者一次性安装 Node.js >=22 和相应宿主依赖、固定仓库路径并运行：
 
 ```sh
 npm ci
@@ -68,7 +87,7 @@ node deployment-agent/scripts/install.cjs
 
 ### 远程节点
 
-Agent 默认绑定 `127.0.0.1:19090`。远程节点在受控网络中配置 `AGENT_HOST`、`AGENT_TLS_CERT`、`AGENT_TLS_KEY`，后端设置 `MODEL_AGENT_ALLOWED_HOSTS=host1.example,mac-mini.example,...`，使用受后端信任的 HTTPS 证书。自签名证书通过 `NODE_EXTRA_CA_CERTS` 登记，不关闭 TLS 校验。HMAC 签名覆盖 method/path/timestamp/nonce/body hash；30 秒时窗 + nonce 防重放，双方时间需同步。后端 DNS 一次解析并固定连接地址、不跟随 Agent 重定向。
+Agent 默认绑定 `127.0.0.1:19090`。远程节点在受控网络中配置 `AGENT_HOST`、`AGENT_TLS_CERT`、`AGENT_TLS_KEY`，使用受后端信任的 HTTPS 证书。管理员在“高级：添加远程节点”中明确确认地址和凭证，节点批准记录保存在 MySQL，不要求修改后端 `.env` 主机白名单。自签名证书通过 `NODE_EXTRA_CA_CERTS` 登记，不关闭 TLS 校验。HMAC 签名覆盖 method/path/timestamp/nonce/body hash；30 秒时窗 + nonce 防重放，双方时间需同步。后端 DNS 一次解析并固定连接地址、不跟随 Agent 重定向。
 
 首次“检测并注册”真实读取设备身份和硬件；离线节点禁用部署，运行中断线显示 OFFLINE，不显示成功。浏览器设备从来不是隐式部署目标。换凭证先修改节点 `agent.env.json` 并重启 Agent，再使用同一设备 ID 在后台重新注册。
 
@@ -93,27 +112,23 @@ NVIDIA 宿主安装参考官方 Toolkit 文档（见末尾），完成后在节�
 
 停止不删权重；卸载只删服务；“删除缓存”仅在没有任何已安装实例引用该 cacheKey 时执行。多个实例共享相同缓存，但其向量空间仍由运行时/精度等决定。
 
-### 可选 Linux CPU Agent Docker Compose
+### 默认 Docker 节点
 
-```sh
-cp deployment-agent/.env.example deployment-agent/.env
-# 填写随机 AGENT_ID / AGENT_TOKEN（示例仅占位）
-docker compose --env-file deployment-agent/.env -f docker-compose.model-agent.yml up -d --build
-```
+开发环境 `docker-compose.yml` 与生产环境 `docker-compose.prod.yml` 均已包含自动注册的 `model-agent`，不再提供重复的独立 Compose 入口。使用项目的一键部署命令即可启动默认节点，无需另填 `AGENT_ID` 或 `AGENT_TOKEN`。
 
-只该独立 Agent 挂 Docker Socket；业务 Compose 不增加 Socket挂载。模型缓存 volume 固定为 `llmgather_model_cache`，子容器只读挂载；状态在独立 model_agent_state volume。host networking 使 Agent 能访问子容器回环推理端口。这个可选镜像用于 LinuxCPU节点；GPU发现和macOS优先用宿主原生Agent。具体基础镜像 tag+digest 已核验，镜像构建结果见验收记录；非 Linux host networking 行为不作跨平台保证。
+Docker Socket 只授予 Agent，不授予业务后端。模型缓存 volume 固定为 `llmgather_model_cache`，状态和自动注册凭据分别保存在 `model_agent_state`、`model_agent_bootstrap` volume 中。GPU 发现和 macOS 的宿主原生 Agent 安装方式仍保留。
 
 ## 6. 后台与知识库操作
 
-1. 管理员进入系统配置 → 模型服务管理，检测并注册节点。
+1. 管理员进入管理后台 → 知识库模型，默认 Compose 节点自动注册；普通部署点击“一键部署 BGE-M3（CPU）”。远程节点与特殊硬件在节点设置和自定义部署中配置。
 2. 六步向导：模型 → 在线节点 → 硬件后端/ GPU → 下载源 → CPU/RAM资源与实验确认 → revision/config确认。
 3. 进度来自 Agent/数据库真实阶段与字节；SSE以 JWT header鉴权，重连按事件ID续读，不把Token放URL，不用前端假计时进度。
 4. 实际推理探针通过后进入 REGISTERING_PROVIDER，注册成功才 COMPLETED。
 5. 实例支持 start/stop/restart、日志、实时 Docker stats / GPU硬件与MLX指标、更新（新实例）、卸载、删除缓存。stop/remove需要确认并列出受影响KB。
 6. 健康实例可设为默认，只作用于**未来新KB**。旧KB的 embedding_instance_id / embedding_spec_json 不变。
-7. 新知识库可以选择管理实例；原生 RAG实验台可显式切换模型、重新索引。RAGFlow仍用其外部模型，不通过本控件修改。
+7. 新知识库可以选择管理实例；原生 RAG实验台可显式切换模型，绑定后自动重建索引。RAGFlow仍用其外部模型，不通过本控件修改。
 
-索引冻结 descriptor = model / dimensions / revision / endpoint(内部managed://ID) / fingerprint。fingerprint覆盖原始revision、格式变体、精度、pooling、固定runtime、有效上下文等。CPU/GPU/MLX不混写；查询按不同指纹分组Embedding/Qdrant查询再RRF合并。服务停止或节点离线返回明确错误，不静默回退到另一个模型。切换绑定取得KB索引租约、置legacy/pending，再手动索引；现有Qdrant旧集合保留。
+索引冻结 descriptor = model / dimensions / revision / endpoint(内部managed://ID) / fingerprint。fingerprint覆盖原始revision、格式变体、精度、pooling、固定runtime、有效上下文等。CPU/GPU/MLX不混写；查询按不同指纹分组Embedding/Qdrant查询再RRF合并。服务停止或节点离线返回明确错误，不静默回退到另一个模型。切换绑定取得KB索引租约、置legacy/pending，随后由绑定接口自动重建索引；现有Qdrant旧集合保留。
 
 ## 7. 持久化、恢复和并发
 
@@ -133,7 +148,7 @@ docker compose --env-file deployment-agent/.env -f docker-compose.model-agent.ym
 
 ## 8. 环境变量与安全
 
-业务后端新增 MODEL_AGENT_ALLOWED_HOSTS；复用稳定的 CHECKPOINT_ENCRYPTION_KEY。默认模型保存在 model_settings，不修改全局EMBEDDING_*，未绑定受管模型的旧KB继续用原环境Provider。
+业务后端复用稳定的 CHECKPOINT_ENCRYPTION_KEY。默认节点的固定内部地址与只读身份文件由 Compose 配置，管理员无需调整环境文件；高级远程节点经管理员批准后使用数据库登记的地址，HTTP 仅用于受控本机地址 / 固定内部节点，其他地址必须 HTTPS。默认模型保存在 model_settings，不修改全局EMBEDDING_*，未绑定受管模型的旧KB继续用原环境Provider。
 
 Agent：AGENT_ID、AGENT_TOKEN、AGENT_DATA_DIR、AGENT_HOST、AGENT_PORT、AGENT_TLS_CERT/KEY、AGENT_PYTHON、HF_TOKEN、MODELSCOPE_TOKEN、代理变量；可选DockerCPU Agent使用AGENT_CACHE_VOLUME固定命名volume。密钥通过节点本地配置传递，不从部署UI接受文件路径/镜像/命令。
 
@@ -162,6 +177,10 @@ node backend/scripts/model-services-integration.cjs
 本次可用硬件：Windows i9-13900KF、Docker Linux amd64、RTX5070(CC12.0/driver610.88/12GB)。CPU实测约2.99GiB RSS，GPU容器RSS约1.46GiB（不是显存占用；GPU指标通过nvidia-smi查询）。两种模式真实2×1024与stop/start/restart通过；Agent与后端Docker镜像实际构建通过，Agent Docker CLI28.5.1能连接Server29.5.2。Apple M1/M2/M3/M4、RTX30、RTX40、远程TLS/重新启动整台计算节点、开机安装器及UI浏览器点选均需进一步相应环境验收，未声称通过。
 
 ## 10. 常见问题 / 后续验证
+
+- 知识库切换 Embedding 模型后，绑定接口自动重建索引；绑定成功但索引失败会明确返回“绑定已保存”，可重新绑定重试。页面每 5 秒自动更新模型和索引状态，重建期间暂停实验台检索，无需手动索引或刷新状态；完成后不显示常驻就绪提示。检索实验台“返回片段数”即 Top K，默认 5，页面范围 1–12。
+
+- 卸载成功的实例不再出现在“知识库模型”列表及数量统计中，刷新和 SSE 状态更新后保持一致；卸载中、失败和已停止的实例仍显示。默认模型卸载后清除其默认设置。内部实例记录、任务历史、知识库绑定和向量保留，避免把卸载等同于删除知识库数据；下载缓存沿用原有保留策略。
 
 - Agent离线：检查user service/端口/HTTPS信任/主机allowlist/两端时钟；节点重新在线后协调器恢复任务。
 - download失败：检查代理与源域名，Token是否有效、disk.space、revision文件摘要；改源也不得绕过checksum。损坏正式缓存需管理员卸载引用实例并删除缓存再部署。

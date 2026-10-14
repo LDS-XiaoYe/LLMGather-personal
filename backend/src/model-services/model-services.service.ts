@@ -5,6 +5,7 @@ import { seal, traceText } from '../workflows/runtime/persistence-codec';
 import { AgentClient, validateAgentUrl } from './agent.client';
 import { modelRegistry, validateConfig } from './model.registry';
 import { AgentNode, AgentState, AgentTask, DeploymentConfig, InstanceRow, NodeRow, TaskRow } from './model.types';
+import { LOCAL_AGENT_URL, LocalNodeStatus, readLocalNodeCredentials } from './local-node-bootstrap';
 
 export function managedId(id: string): string {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) throw new BadRequestException('Invalid managed ID');
@@ -16,9 +17,12 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private busy=false;
   private readonly worker=randomUUID();
+  private localNode:LocalNodeStatus={status:'DISABLED',message:'当前启动方式未包含默认部署节点，可使用标准 Docker Compose 部署或添加远程节点'};
+  private localAttempt=0;
+  private localConnection?:Promise<LocalNodeStatus>;
   constructor(private readonly database: DatabaseService, private readonly agent: AgentClient) {}
   private get db() { return this.database.connection; }
-  onModuleInit() { this.timer=setInterval(()=>void this.tick().catch(()=>{}),2000);this.timer.unref(); }
+  async onModuleInit() { await this.connectLocalNode();this.timer=setInterval(()=>void this.tick().catch(()=>{}),2000);this.timer.unref(); }
   onModuleDestroy() { if(this.timer)clearInterval(this.timer); }
   async audit(actor: string, action: string, target: string, detail: unknown={}) {
     await this.db.prepare('INSERT INTO model_audit (actor_id,action,target_id,detail_json) VALUES (?,?,?,?)').run(actor,action,target,JSON.stringify(detail));
@@ -31,7 +35,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
     if(!input||Object.keys(input).some(k=>!['id','name','baseUrl','token'].includes(k)))throw new BadRequestException('Invalid node field');
     managedId(input.id);
     if(!input.name?.trim()||input.name.length>128||typeof input.token!=='string'||input.token.length<32||input.token.length>512)throw new BadRequestException('Invalid node identity or credential');
-    try{validateAgentUrl(input.baseUrl);}catch(e){throw new BadRequestException((e as Error).message);}
+    try{validateAgentUrl(input.baseUrl,true);}catch(e){throw new BadRequestException((e as Error).message);}
     const node={id:input.id,name:input.name.trim(),base_url:input.baseUrl,token_cipher:seal(input.token)} as NodeRow;
     const probe=await this.agent.request<AgentNode>(node,'GET','/v1/node');
     if(probe.id!==input.id)throw new BadRequestException('Agent device identity mismatch');
@@ -40,15 +44,40 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
       .run(node.id,node.name,node.base_url,node.token_cipher,JSON.stringify(probe.hardware));
     await this.audit(actor,'node.register',node.id,{name:node.name});return{id:node.id};
   }
+  connectLocalNode(actor='system:model-agent'):Promise<LocalNodeStatus>{
+    if(this.localConnection)return this.localConnection;
+    this.localConnection=this.bootstrapLocalNode(actor).finally(()=>{this.localConnection=undefined;});
+    return this.localConnection;
+  }
+  private async bootstrapLocalNode(actor:string):Promise<LocalNodeStatus>{
+    const file=process.env.MODEL_AGENT_BOOTSTRAP_FILE;
+    if(!file)return this.localNode;
+    this.localAttempt=Date.now();
+    this.localNode={status:'CONNECTING',message:'正在自动检测默认部署节点'};
+    try{
+      const credentials=await readLocalNodeCredentials(file);
+      const prior=await this.db.prepare('SELECT name FROM model_nodes WHERE id=?').get(credentials.id);
+      const name=prior?.name&&prior.name!=='默认部署节点（Docker CPU）'?String(prior.name):'默认部署节点（Docker）';
+      await this.registerNode(actor,{id:credentials.id,token:credentials.token,name,baseUrl:LOCAL_AGENT_URL});
+      this.localNode={status:'ONLINE',nodeId:credentials.id,message:'默认部署节点已自动连接，直接选择模型即可部署'};
+    }catch{
+      this.localNode={status:'UNAVAILABLE',message:'默认部署节点暂未连接。可点击重新检测；部署日志中检查 model-agent 服务，无需填写凭证或修改 .env'};
+    }
+    return this.localNode;
+  }
   async snapshot() {
     const [nodes,instances,tasks]=await Promise.all([
       this.db.prepare('SELECT id,name,base_url AS baseUrl,status,hardware_json AS hardwareJson,last_seen AS lastSeen FROM model_nodes ORDER BY created_at').all(),
       this.db.prepare('SELECT * FROM model_instances ORDER BY updated_at DESC').all(),
       this.db.prepare('SELECT id,instance_id AS instanceId,node_id AS nodeId,status,phase,progress_json AS progressJson,error,updated_at AS updatedAt FROM model_tasks ORDER BY created_at DESC LIMIT 100').all(),
     ]);
-    return{registry:modelRegistry,nodes:nodes.map(n=>({...n,hardware:JSON.parse(String(n.hardwareJson||'null')),hardwareJson:undefined})),
-      instances:instances.map(i=>({...i,config:JSON.parse(String(i.config_json)),spec:JSON.parse(String(i.spec_json||'null'))})),
-      tasks:tasks.map(t=>({...t,progress:JSON.parse(String(t.progressJson||'{}')),progressJson:undefined})),defaultInstanceId:await this.defaultId()};
+    // Keep internal tombstones for task idempotency, KB bindings and audit;
+    // neither REST nor SSE snapshots expose completed uninstalls as models.
+    const visibleInstances=instances.filter(i=>i.actual_state!=='REMOVED'||(i.desired_state==='RUNNING'&&!!i.operation_id));
+    const defaultInstanceId=await this.defaultId();
+    return{registry:modelRegistry,localNode:this.localNode,nodes:nodes.map(n=>({...n,hardware:JSON.parse(String(n.hardwareJson||'null')),hardwareJson:undefined})),
+      instances:visibleInstances.map(i=>({...i,config:JSON.parse(String(i.config_json)),spec:JSON.parse(String(i.spec_json||'null'))})),
+      tasks:tasks.map(t=>({...t,progress:JSON.parse(String(t.progressJson||'{}')),progressJson:undefined})),defaultInstanceId:visibleInstances.some(i=>i.id===defaultInstanceId)?defaultInstanceId:null};
   }
   async instance(id:string):Promise<InstanceRow>{
     const row=await this.db.prepare('SELECT * FROM model_instances WHERE id=?').get(managedId(id));
@@ -117,6 +146,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
   async tick(){
     if(this.busy)return;this.busy=true;
     try{
+      if(process.env.MODEL_AGENT_BOOTSTRAP_FILE&&this.localNode.status!=='ONLINE'&&Date.now()-this.localAttempt>10000)await this.connectLocalNode();
       // Recover a crash between reserving an instance and inserting its durable task.
       await this.db.prepare(`UPDATE model_instances i LEFT JOIN model_tasks t ON t.id=i.operation_id SET i.operation_id=NULL
         WHERE i.operation_id IS NOT NULL AND (t.status IN ('SUCCEEDED','FAILED','CANCELLED') OR (t.id IS NULL AND i.updated_at<DATE_SUB(NOW(3),INTERVAL 60 SECOND)))`).run();
@@ -131,6 +161,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
           const tasks=await this.db.prepare("SELECT * FROM model_tasks WHERE node_id=? AND status IN ('PENDING','RUNNING') ORDER BY created_at LIMIT 10").all(n.id);
           for(const value of tasks)await this.work(n,value as unknown as TaskRow,state);
         }catch{
+          if(n.id===this.localNode.nodeId)this.localNode={status:'UNAVAILABLE',nodeId:n.id,message:'默认部署节点离线，系统会自动重新连接'};
           await this.db.prepare("UPDATE model_nodes SET status='OFFLINE' WHERE id=?").run(n.id);
           await this.db.prepare("UPDATE model_instances SET actual_state='OFFLINE',provider_registered=0 WHERE node_id=? AND desired_state<>'REMOVED'").run(n.id);
         }
@@ -149,6 +180,7 @@ export class ModelServicesService implements OnModuleInit, OnModuleDestroy {
         .run(actual.actualState,actual.spec?JSON.stringify(actual.spec):null,actual.fingerprint||null,i.id);
       if(actual.actualState!=='RUNNING'||i.desired_state!=='RUNNING')await this.db.prepare('UPDATE model_instances SET provider_registered=0 WHERE id=?').run(i.id);
       else if(!i.operation_id&&!i.provider_registered&&actual.spec){try{await this.probeRegister(node,i.id,actual.spec.dimensions);}catch{await this.db.prepare("UPDATE model_instances SET actual_state='UNHEALTHY',provider_registered=0 WHERE id=?").run(i.id);}}
+      if(actual.actualState==='REMOVED'&&i.desired_state==='REMOVED')await this.db.prepare("DELETE FROM model_settings WHERE id='default_embedding' AND value=?").run(i.id);
     }
   }
   private async probeRegister(node:NodeRow,id:string,dimensions:number){

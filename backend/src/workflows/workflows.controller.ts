@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -23,6 +23,11 @@ export class WorkflowsController {
     return { data: await this.workflowsService.create(user.id, payload) };
   }
 
+  @Patch(':id')
+  async update(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string, @Body() payload: CreateWorkflowDto) {
+    return { data: await this.workflowsService.update(user.id, id, payload) };
+  }
+
   @Get(':id')
   async get(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string) {
     return { data: await this.workflowsService.get(user.id, id) };
@@ -36,8 +41,8 @@ export class WorkflowsController {
   ) {
     return {
       data: await this.workflowsService.run(user.id, id, payload.input, payload.agentId
-        ? { runtimeAgentId: payload.agentId, skipWorkflowAgentIds: [payload.agentId] }
-        : {}),
+        ? { runtimeAgentId: payload.agentId, skipWorkflowAgentIds: [payload.agentId], approvedToolIds: payload.approvedToolIds }
+        : { approvedToolIds: payload.approvedToolIds }),
     };
   }
   @Get('runs/:runId')

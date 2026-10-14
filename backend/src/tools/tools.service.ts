@@ -2,7 +2,10 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { randomUUID } from 'crypto';
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { Script, createContext } from 'vm';
+import type { AgentsService } from '../agents/agents.service';
 import { DatabaseService } from '../database/database.service';
 import { McpService } from '../mcp/mcp.service';
 import { CreateToolDto, UpdateToolDto } from './dto/tools.dto';
@@ -65,6 +68,9 @@ type ToolRow = {
 
 @Injectable()
 export class ToolsService {
+  private agentOperations?: AgentsService;
+  registerAgentOperations(service: AgentsService) { this.agentOperations = service; }
+  private get agentApi(): AgentsService { if (!this.agentOperations) throw new Error('Agent operations are not initialized'); return this.agentOperations; }
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly mcpService: McpService,
@@ -78,9 +84,9 @@ export class ToolsService {
               runtime, risk_level as riskLevel, code, version, timeout_ms as timeoutMs, retries, enabled,
               COALESCE((SELECT COUNT(*) FROM tool_invocations ti WHERE ti.tool_id = tools.id), 0) as callCount
        FROM tools
-       WHERE enabled = 1 AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
+       WHERE (enabled = 1 OR user_id = ?) AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
        ORDER BY user_id IS NULL DESC, display_name ASC`,
-    ).all(userId) as unknown as ToolRow[];
+    ).all(userId, userId) as unknown as ToolRow[];
     return rows.map((row) => this.mapTool(row));
   }
 
@@ -92,7 +98,7 @@ export class ToolsService {
               runtime, risk_level as riskLevel, code, version, timeout_ms as timeoutMs, retries, enabled,
               COALESCE((SELECT COUNT(*) FROM tool_invocations ti WHERE ti.tool_id = tools.id), 0) as callCount
        FROM tools
-       WHERE id = ? AND enabled = 1 AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
+       WHERE id = ? AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)
        LIMIT 1`,
     ).get(toolId, userId) as unknown as ToolRow | undefined;
     if (!row) throw new NotFoundException('工具不存在或不可用');
@@ -109,7 +115,7 @@ export class ToolsService {
               at.permission_level as permissionLevel
        FROM agent_tools at
        JOIN tools t ON t.id = at.tool_id
-       WHERE at.user_id = ? AND at.agent_id = ? AND t.enabled = 1 AND t.deleted_at IS NULL
+       WHERE at.user_id = ? AND at.agent_id = ? AND t.deleted_at IS NULL
        ORDER BY t.display_name ASC`,
     ).all(userId, agentId) as unknown as ToolRow[];
     return rows.map((row) => this.mapTool(row));
@@ -168,7 +174,7 @@ export class ToolsService {
       dto.code ?? current.code ?? '',
       dto.timeout ? Math.max(1000, Math.min(300000, dto.timeout * 1000)) : current.timeoutMs,
       dto.retries ?? current.retries,
-      dto.enabled === false ? 0 : 1,
+      (dto.enabled ?? current.enabled) ? 1 : 0,
       now,
       toolId,
       userId,
@@ -197,18 +203,30 @@ export class ToolsService {
     toolIds: string[],
     permissions: Record<string, string> = {},
   ): Promise<void> {
-    await this.databaseService.connection.prepare(
-      'DELETE FROM agent_tools WHERE user_id = ? AND agent_id = ?',
-    ).run(userId, agentId);
+    return this.databaseService.transaction(async () => {
+      const uniqueIds = Array.from(new Set(toolIds.filter(Boolean)));
+      for (const toolId of uniqueIds) await this.getById(userId, toolId);
+      const previous = (await this.databaseService.connection
+        .prepare(
+          'SELECT tool_id as toolId, permission_level as permissionLevel FROM agent_tools WHERE user_id = ? AND agent_id = ?',
+        )
+        .all(userId, agentId)) as Array<{ toolId: string; permissionLevel: string }>;
+      const prior = new Map(previous.map((row) => [row.toolId, row.permissionLevel]));
+      await this.databaseService.connection
+        .prepare('DELETE FROM agent_tools WHERE user_id = ? AND agent_id = ?')
+        .run(userId, agentId);
 
-    const uniqueIds = Array.from(new Set(toolIds.filter(Boolean)));
-    for (const toolId of uniqueIds) {
-      await this.getById(userId, toolId);
-      const level = ['auto', 'confirm', 'disabled'].includes(permissions[toolId]) ? permissions[toolId] : 'auto';
-      await this.databaseService.connection.prepare(
-        'INSERT INTO agent_tools (agent_id, tool_id, user_id, permission_level, created_at) VALUES (?, ?, ?, ?, ?)',
-      ).run(agentId, toolId, userId, level, this.databaseService.now());
-    }
+      for (const toolId of uniqueIds) {
+        const level = ['auto', 'confirm', 'disabled'].includes(permissions[toolId])
+          ? permissions[toolId]
+          : (prior.get(toolId) ?? 'auto');
+        await this.databaseService.connection
+          .prepare(
+            'INSERT INTO agent_tools (agent_id, tool_id, user_id, permission_level, created_at) VALUES (?, ?, ?, ?, ?)',
+          )
+          .run(agentId, toolId, userId, level, this.databaseService.now());
+      }
+    });
   }
 
   async invoke(
@@ -218,6 +236,18 @@ export class ToolsService {
     context?: { agentId?: string; runId?: string },
   ): Promise<ToolInvocationResult> {
     const tool = await this.resolveTool(userId, toolIdOrName);
+    return this.invokeDefinition(userId, tool, args, context);
+  }
+
+  async invokeSnapshot(userId: string, snapshot: ToolDefinition, args: Record<string, unknown>, context?: { agentId?: string; runId?: string }): Promise<ToolInvocationResult> {
+    const current = await this.resolveTool(userId, snapshot.id);
+    if (!snapshot.enabled || snapshot.userId !== current.userId || snapshot.implementationType !== current.implementationType || snapshot.name !== current.name) {
+      throw new ForbiddenException('版本工具已经失效');
+    }
+    return this.invokeDefinition(userId, snapshot, args, context);
+  }
+
+  private async invokeDefinition(userId: string, tool: ToolDefinition, args: Record<string, unknown>, context?: { agentId?: string; runId?: string }): Promise<ToolInvocationResult> {
     const startedAt = Date.now();
     const invocationId = randomUUID();
     let output = '';
@@ -652,53 +682,11 @@ export class ToolsService {
   }
 
   private async platformCreateAgent(userId: string, agent: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const name = this.trimmed(agent.name, '新建 Agent').slice(0, 80);
-    const model = this.trimmed(agent.model, '');
-    if (!model) throw new BadRequestException('agent.model 不能为空');
-    const id = randomUUID();
-    const now = this.databaseService.now();
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agents
-        (id, user_id, name, description, model, system_prompt, temperature, max_tokens, memory_enabled, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      userId,
-      name,
-      this.trimmed(agent.description, '').slice(0, 500),
-      model.slice(0, 128),
-      this.trimmed(agent.systemPrompt, '').slice(0, 12000),
-      this.numberArg(agent.temperature, 0.7, 0, 2),
-      this.numberArg(agent.maxTokens, 1024, 1, 32000),
-      agent.memoryEnabled === false ? 0 : 1,
-      agent.status === 'archived' ? 'archived' : 'active',
-      now,
-      now,
-    );
-    await this.platformSetAgentBindings(userId, id, agent);
-    return this.platformGetAgent(userId, id);
+    return { ...await this.agentApi.create(userId, agent as any) };
   }
 
   private async platformUpdateAgent(userId: string, agentId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const current = await this.platformGetAgent(userId, agentId);
-    const next = {
-      name: typeof patch.name === 'string' ? patch.name.trim().slice(0, 80) : String(current.name ?? ''),
-      description: typeof patch.description === 'string' ? patch.description.trim().slice(0, 500) : String(current.description ?? ''),
-      model: typeof patch.model === 'string' ? patch.model.trim().slice(0, 128) : String(current.model ?? ''),
-      systemPrompt: typeof patch.systemPrompt === 'string' ? patch.systemPrompt.trim().slice(0, 12000) : String(current.systemPrompt ?? ''),
-      temperature: patch.temperature === undefined ? Number(current.temperature ?? 0.7) : this.numberArg(patch.temperature, 0.7, 0, 2),
-      maxTokens: patch.maxTokens === undefined ? Number(current.maxTokens ?? 1024) : this.numberArg(patch.maxTokens, 1024, 1, 32000),
-      memoryEnabled: patch.memoryEnabled === undefined ? Number(current.memoryEnabled ?? 1) === 1 : patch.memoryEnabled !== false,
-      status: patch.status === undefined ? String(current.status || 'active') : (patch.status === 'archived' ? 'archived' : 'active'),
-    };
-    if (!next.name || !next.model) throw new BadRequestException('Agent name/model 不能为空');
-    await this.databaseService.connection.prepare(
-      `UPDATE agents
-       SET name = ?, description = ?, model = ?, system_prompt = ?, temperature = ?, max_tokens = ?, memory_enabled = ?, status = ?, updated_at = ?
-       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    ).run(next.name, next.description, next.model, next.systemPrompt, next.temperature, next.maxTokens, next.memoryEnabled ? 1 : 0, next.status, this.databaseService.now(), agentId, userId);
-    await this.platformSetAgentBindings(userId, agentId, patch);
-    return this.platformGetAgent(userId, agentId);
+    return { ...await this.agentApi.update(userId, agentId, patch as any) };
   }
 
   private async platformListWorkflows(userId: string, limit: number): Promise<Array<Record<string, unknown>>> {
@@ -736,19 +724,7 @@ export class ToolsService {
   }
 
   private async platformBindWorkflow(userId: string, agentId: string, workflowId: string): Promise<Record<string, unknown>> {
-    await this.platformGetAgent(userId, agentId);
-    const workflow = await this.databaseService.connection.prepare(
-      `SELECT id FROM workflows WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = 'active'`,
-    ).get(workflowId, userId);
-    if (!workflow) throw new NotFoundException('Workflow 不存在');
-    await this.databaseService.connection.prepare(
-      'DELETE FROM agent_workflows WHERE agent_id = ? AND user_id = ?',
-    ).run(agentId, userId);
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_workflows (agent_id, workflow_id, user_id, created_at)
-       VALUES (?, ?, ?, ?)`,
-    ).run(agentId, workflowId, userId, this.databaseService.now());
-    return { agentId, workflowId, bound: true };
+    await this.agentApi.update(userId, agentId, { workflowIds: [workflowId] }); return { agentId, workflowId, bound: true };
   }
 
   private async platformListAgentTasks(userId: string, agentId: string): Promise<Array<Record<string, unknown>>> {
@@ -765,22 +741,7 @@ export class ToolsService {
   }
 
   private async platformCreateAgentTask(userId: string, agentId: string, task: Record<string, unknown>): Promise<Record<string, unknown>> {
-    await this.platformGetAgent(userId, agentId);
-    const input = this.trimmed(task.input, '').slice(0, 20000);
-    if (!input) throw new BadRequestException('task.input 不能为空');
-    const id = randomUUID();
-    const now = this.databaseService.now();
-    const options = {
-      input,
-      mode: this.trimmed(task.mode, 'fast'),
-      maxSteps: this.numberArg(task.maxSteps, 6, 1, 20),
-      createdBy: 'platform_agent_api',
-    };
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_tasks (id, agent_id, user_id, run_id, status, input, output, error, options_json, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, 'queued', ?, '', '', ?, ?, ?)`,
-    ).run(id, agentId, userId, input, JSON.stringify(options), now, now);
-    return { id, agentId, status: 'queued', input, options, createdAt: now, note: '任务已持久化，可通过 /agents/:id/tasks 接口跟踪。' };
+    return { ...await this.agentApi.createTask(userId, agentId, task as any) };
   }
 
   private async platformListAgentVersions(userId: string, agentId: string): Promise<Array<Record<string, unknown>>> {
@@ -797,50 +758,11 @@ export class ToolsService {
   }
 
   private async platformCreateAgentVersion(userId: string, agentId: string, version: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const agent = await this.platformGetAgent(userId, agentId);
-    const row = await this.databaseService.connection.prepare(
-      'SELECT COALESCE(MAX(version_number), 0) + 1 as nextVersion FROM agent_versions WHERE agent_id = ? AND user_id = ?',
-    ).get(agentId, userId) as { nextVersion?: number | string } | undefined;
-    const versionNumber = Number(row?.nextVersion ?? 1);
-    const id = randomUUID();
-    const now = this.databaseService.now();
-    const label = this.trimmed(version.label, `v${versionNumber}`).slice(0, 120);
-    const notes = this.trimmed(version.notes, '').slice(0, 2000);
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, status, traffic_percent, notes, snapshot_json, created_at)
-       VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)`,
-    ).run(id, agentId, userId, versionNumber, label, notes, JSON.stringify(agent), now);
-    return { id, agentId, versionNumber, label, status: 'draft', trafficPercent: 0, notes, snapshot: agent, createdAt: now };
+    return this.agentApi.createVersion(userId, agentId, version as any);
   }
 
   private async platformPublishAgentVersion(userId: string, agentId: string, version: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const agent = await this.platformGetAgent(userId, agentId);
-    let versionId = typeof version.versionId === 'string' ? version.versionId.trim() : '';
-    if (!versionId) {
-      const created = await this.platformCreateAgentVersion(userId, agentId, version);
-      versionId = String(created.id);
-    }
-    const releaseMode = version.releaseMode === 'canary' ? 'canary' : 'stable';
-    const trafficPercent = releaseMode === 'canary' ? this.numberArg(version.trafficPercent, 10, 1, 99) : 100;
-    const now = this.databaseService.now();
-    if (releaseMode === 'stable') {
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_versions
-         SET status = CASE WHEN status IN ('released', 'canary') THEN 'superseded' ELSE status END,
-             traffic_percent = CASE WHEN status = 'canary' THEN 0 ELSE traffic_percent END
-         WHERE agent_id = ? AND user_id = ? AND id <> ?`,
-      ).run(agentId, userId, versionId);
-    }
-    await this.databaseService.connection.prepare(
-      `UPDATE agent_versions
-       SET status = ?, traffic_percent = ?, notes = COALESCE(NULLIF(?, ''), notes), published_at = ?, rolled_back_at = NULL
-       WHERE id = ? AND agent_id = ? AND user_id = ?`,
-    ).run(releaseMode === 'canary' ? 'canary' : 'released', trafficPercent, this.trimmed(version.notes, ''), now, versionId, agentId, userId);
-    const publicSlug = this.normalizeSlug(this.trimmed(version.publicSlug, String(agent.publicSlug || agent.name || agentId)));
-    await this.databaseService.connection.prepare(
-      `UPDATE agents SET published = ?, api_enabled = ?, public_slug = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    ).run(version.published === false ? 0 : 1, version.apiEnabled === false ? 0 : 1, publicSlug, now, agentId, userId);
-    return { agent: await this.platformGetAgent(userId, agentId), version: await this.platformGetAgentVersion(userId, agentId, versionId) };
+    return this.agentApi.publishVersion(userId, agentId, version as any);
   }
 
   private async platformCompareAgentVersions(userId: string, agentId: string, leftId: string, rightId: string): Promise<Record<string, unknown>> {
@@ -856,26 +778,11 @@ export class ToolsService {
   }
 
   private async platformRestoreAgentVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
-    const version = await this.platformGetAgentVersion(userId, agentId, versionId);
-    const snapshot = version.snapshot as Record<string, unknown>;
-    return this.platformUpdateAgent(userId, agentId, snapshot);
+    return { ...await this.agentApi.restoreVersion(userId, agentId, versionId) };
   }
 
   private async platformRollbackAgentVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
-    const restored = await this.platformRestoreAgentVersion(userId, agentId, versionId);
-    const now = this.databaseService.now();
-    await this.databaseService.connection.prepare(
-      `UPDATE agent_versions
-       SET status = CASE WHEN id = ? THEN 'released' WHEN status IN ('released', 'canary') THEN 'rolled_back' ELSE status END,
-           traffic_percent = CASE WHEN id = ? THEN 100 ELSE 0 END,
-           published_at = CASE WHEN id = ? THEN ? ELSE published_at END,
-           rolled_back_at = CASE WHEN id = ? THEN NULL WHEN status IN ('released', 'canary') THEN ? ELSE rolled_back_at END
-       WHERE agent_id = ? AND user_id = ?`,
-    ).run(versionId, versionId, versionId, now, versionId, now, agentId, userId);
-    await this.databaseService.connection.prepare(
-      `UPDATE agents SET published = 1, api_enabled = 1, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    ).run(now, agentId, userId);
-    return { agent: restored, version: await this.platformGetAgentVersion(userId, agentId, versionId) };
+    return this.agentApi.rollbackToVersion(userId, agentId, versionId);
   }
 
   private async platformGetAgentVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
@@ -1454,6 +1361,61 @@ export class ToolsService {
     if (process.env.ENABLE_CODE_RUNNER_TOOLS !== 'true') {
       throw new BadRequestException('代码执行工具默认禁用，请由管理员显式开启 ENABLE_CODE_RUNNER_TOOLS=true');
     }
+  }
+
+  async requestExternalHttp(
+    rawUrl: string,
+    options: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal },
+  ): Promise<{ status: number; body: string }> {
+    const url = await this.assertSafeFetchUrl(rawUrl);
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    const addresses = isIP(hostname)
+      ? [{ address: hostname, family: isIP(hostname) }]
+      : await lookup(hostname, { all: true });
+    if (!addresses.length || addresses.some((item) => this.isBlockedAddress(item.address)))
+      throw new BadRequestException('HTTP 目标地址不可访问');
+    const pinned = addresses[0]; // Connect only to an address actually validated; prevent DNS rebinding.
+    const headers = { ...options.headers };
+    for (const key of Object.keys(headers))
+      if (/^(host|connection|content-length|transfer-encoding|proxy-.*)$/i.test(key)) delete headers[key];
+    options.signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
+        url,
+        {
+          method: options.method,
+          headers,
+          signal: options.signal,
+          lookup: ((_host: string, _options: unknown, callback: Function) =>
+            (_options as { all?: boolean })?.all
+              ? callback(null, [pinned])
+              : callback(null, pinned.address, pinned.family)) as never,
+        },
+        (response) => {
+          const status = response.statusCode ?? 0;
+          if (status >= 300 && status < 400) {
+            response.destroy();
+            reject(new BadRequestException('HTTP 节点不跟随重定向'));
+            return;
+          }
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          response.on('data', (chunk) => {
+            bytes += chunk.length;
+            if (bytes > 65536) {
+              request.destroy(new BadRequestException('HTTP 响应超过 64 KiB'));
+              return;
+            }
+            chunks.push(Buffer.from(chunk));
+          });
+          response.on('error', reject);
+          response.on('end', () => resolve({ status, body: Buffer.concat(chunks).toString('utf8') }));
+        },
+      );
+      request.setTimeout(15000, () => request.destroy(new Error('HTTP 请求超时')));
+      request.on('error', reject);
+      request.end(options.body);
+    });
   }
 
   private async assertSafeFetchUrl(rawUrl: string): Promise<URL> {

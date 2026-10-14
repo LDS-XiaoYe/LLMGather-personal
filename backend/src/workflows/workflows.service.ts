@@ -97,6 +97,7 @@ export class WorkflowsService implements OnModuleInit {
   }
 
   async create(userId: string, dto: CreateWorkflowDto): Promise<Workflow> {
+    validateDefinition({ schemaVersion: dto.schemaVersion ?? 1, nodes: dto.nodes });
     const id = randomUUID();
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
@@ -104,6 +105,13 @@ export class WorkflowsService implements OnModuleInit {
        VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
     ).run(id, userId, dto.name.trim(), dto.description?.trim() ?? '', JSON.stringify({ schemaVersion: dto.schemaVersion ?? 1, nodes: dto.nodes }), now, now);
     return this.get(userId, id);
+  }
+
+  async update(userId: string, workflowId: string, dto: CreateWorkflowDto): Promise<Workflow> {
+    await this.get(userId, workflowId);
+    validateDefinition({ schemaVersion: dto.schemaVersion ?? 1, nodes: dto.nodes });
+    await this.databaseService.connection.prepare('UPDATE workflows SET name = ?, description = ?, definition_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL').run(dto.name.trim(), dto.description?.trim() ?? '', JSON.stringify({ schemaVersion: dto.schemaVersion ?? 1, nodes: dto.nodes }), this.databaseService.now(), workflowId, userId);
+    return this.get(userId, workflowId);
   }
 
   async get(userId: string, workflowId: string): Promise<Workflow> {
@@ -119,6 +127,10 @@ export class WorkflowsService implements OnModuleInit {
 
   async run(userId: string, workflowId: string, input: string, options: WorkflowRunOptions = {}): Promise<WorkflowRun> {
     const workflow = await this.get(userId, workflowId);
+    if (options.runtimeAgentId) {
+      const agent = await this.agentsService.getById(userId, options.runtimeAgentId);
+      if (agent.status !== 'active') throw new Error('Agent 已归档');
+    }
     const runId = await this.runtime.start(userId, workflowId, { schemaVersion: workflow.schemaVersion, nodes: workflow.nodes }, input, options);
     return this.getRun(userId, runId);
   }
@@ -172,10 +184,12 @@ export class WorkflowsService implements OnModuleInit {
 
     if (node.type === 'question_classifier' || dagType === 'question_classifier' || dagType === 'multi_branch') {
       const branches = Array.isArray(node.config.branches) ? node.config.branches as Array<Record<string, unknown>> : [];
-      const matched = branches.find((branch) => String(branch.keyword ?? '').trim() && input.includes(String(branch.keyword)));
-      return JSON.stringify({ branch: matched?.name || matched?.id || 'default', input }, null, 2);
+      const matched = branches.find((branch) => String(branch.keyword ?? '').trim() && input.toLowerCase().includes(String(branch.keyword).toLowerCase()));
+      const chosen = matched ?? branches.find(branch => !String(branch.keyword ?? '').trim());
+      return JSON.stringify({ branch: chosen?.id || chosen?.name || '__unmatched__', input }, null, 2);
     }
 
+    if (options.publicInvocation && node.type === 'http_request') throw new Error('公开调用不执行外部 HTTP 请求');
     if (node.type === 'http_request' || dagType === 'http_request') {
       return this.runHttpNode(node, input, originalInput, options);
     }
@@ -183,7 +197,7 @@ export class WorkflowsService implements OnModuleInit {
     if (node.type === 'code' || dagType === 'code') {
       const code = String(node.config.code ?? '');
       if (!code.trim()) return input;
-      const result = await this.toolsService.invoke(userId, 'javascript_runner', { code, input: { input, originalInput } });
+      const result = await this.agentsService.invokeWorkflowTool(userId, 'javascript_runner', { code, input: { input, originalInput } }, options);
       if (result.status === 'failed') throw new Error(result.error || 'Tool execution failed');
       return result.output;
     }
@@ -196,7 +210,8 @@ export class WorkflowsService implements OnModuleInit {
           input: rendered,
           mode: 'fast',
           maxSteps: 3,
-        }, options.skipWorkflowAgentIds ?? []);
+          approvedToolIds: options.publicInvocation ? [] : options.approvedToolIds,
+        }, options.skipWorkflowAgentIds ?? [], { publicInvocation: options.publicInvocation, runnableAgent: options.runtimeAgentSnapshot });
         if (run.status === 'failed') throw new Error(run.error || 'Workflow LLM 节点执行失败');
         return run.output;
       }
@@ -222,7 +237,8 @@ export class WorkflowsService implements OnModuleInit {
           input: rendered,
           mode: 'fast',
           maxSteps: 3,
-        }, options.skipWorkflowAgentIds ?? []);
+          approvedToolIds: options.publicInvocation ? [] : options.approvedToolIds,
+        }, options.skipWorkflowAgentIds ?? [], { publicInvocation: options.publicInvocation, runnableAgent: options.runtimeAgentSnapshot });
         if (run.status === 'failed') {
           throw new Error(run.error || 'Workflow Prompt 节点执行失败');
         }
@@ -234,7 +250,7 @@ export class WorkflowsService implements OnModuleInit {
     if (node.type === 'tool' || dagType === 'tool_call') {
       const tool = String(node.config.tool || node.config.toolId || '');
       const args = this.interpolateArgs(node.config.args as Record<string, unknown> | undefined, input, originalInput);
-      const result = await this.toolsService.invoke(userId, tool, args);
+      const result = await this.agentsService.invokeWorkflowTool(userId, tool, args, options);
       if (result.status === 'failed') throw new Error(result.error || 'Tool execution failed');
       return result.output;
     }
@@ -245,7 +261,8 @@ export class WorkflowsService implements OnModuleInit {
       const agentInputTemplate = typeof node.config.input === 'string' ? node.config.input : '{{input}}';
       const run = await this.agentsService.runFromWorkflow(userId, agentId, {
         input: this.interpolateText(agentInputTemplate, input, originalInput),
-      }, options.skipWorkflowAgentIds ?? []);
+        approvedToolIds: options.publicInvocation ? [] : options.approvedToolIds,
+        }, options.skipWorkflowAgentIds ?? [], { publicInvocation: options.publicInvocation, runnableAgent: options.runtimeAgentSnapshot });
       if (run.status === 'failed') {
         throw new Error(run.error || 'Agent 节点执行失败');
       }
@@ -258,6 +275,7 @@ export class WorkflowsService implements OnModuleInit {
       return results.map((item, idx) => `[${idx + 1}] ${item.title}\n${item.content}`).join('\n\n') || '未检索到相关知识。';
     }
 
+    if (options.publicInvocation && (node.type === 'memory' || dagType === 'memory_write')) throw new Error('公开调用不访问私有记忆');
     if (node.type === 'memory' || dagType === 'memory_read') {
       const agentId = typeof node.config.agentId === 'string' ? node.config.agentId : undefined;
       const results = await this.memoryService.search(userId, input, agentId, 5);
@@ -289,19 +307,17 @@ export class WorkflowsService implements OnModuleInit {
 
   private async runHttpNode(node: WorkflowNodeDto, input: string, originalInput: string, options: RuntimeOptions): Promise<string> {
     const urlText = this.interpolateText(String(node.config.url ?? ''), input, originalInput);
-    if (!/^https?:\/\//i.test(urlText)) throw new Error('HTTP 节点 URL 必须以 http:// 或 https:// 开头');
     const method = String(node.config.method ?? 'GET').toUpperCase();
     const headers = this.interpolateArgs(node.config.headers as Record<string, unknown> | undefined, input, originalInput);
     const bodyTemplate = typeof node.config.body === 'string' ? node.config.body : '';
-    const response = await fetch(urlText, {
+    const response = await this.toolsService.requestExternalHttp(urlText, {
       method,
       headers: { ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)])), 'Idempotency-Key': options.idempotencyKey || '' },
       body: ['GET', 'HEAD'].includes(method) ? undefined : this.interpolateText(bodyTemplate || input, input, originalInput),
       signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
     });
-    if (!response.ok) throw new Error('Workflow HTTP request failed: ' + response.status);
-    const text = await response.text();
-    return JSON.stringify({ status: response.status, ok: response.ok, body: text.slice(0, 12000) }, null, 2);
+    if (response.status < 200 || response.status >= 300) throw new Error('Workflow HTTP request failed: ' + response.status);
+    return JSON.stringify({ status: response.status, ok: true, body: response.body }, null, 2);
   }
 
   private shouldRunPromptWithAgent(node: WorkflowNodeDto): boolean {

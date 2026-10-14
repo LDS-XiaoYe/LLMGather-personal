@@ -54,4 +54,10 @@ export class RunWorkflowDto {
   @IsString()
   @MaxLength(64)
   agentId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  approvedToolIds?: string[];
 }

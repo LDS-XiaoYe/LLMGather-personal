@@ -67,7 +67,7 @@ export class McpService {
     return this.get(userId, id);
   }
 
-  async get(userId: string, serverId: string): Promise<McpServer> {
+  async get(userId: string, serverId: string, mask = true): Promise<McpServer> {
     const row = await this.databaseService.connection.prepare(
       `SELECT id, user_id as userId, name, server_type as serverType, config_json as configJson,
               enabled, last_status as lastStatus, last_error as lastError,
@@ -76,7 +76,7 @@ export class McpService {
        WHERE id = ? AND user_id = ?`,
     ).get(serverId, userId) as unknown as McpServerRow | undefined;
     if (!row) throw new NotFoundException('MCP Server 不存在');
-    return this.mapServer(row, true);
+    return this.mapServer(row, mask);
   }
 
   async getFirstEnabledNotion(userId: string): Promise<McpServer | null> {
@@ -93,7 +93,7 @@ export class McpService {
   }
 
   async test(userId: string, serverId: string, query = 'test'): Promise<Record<string, unknown>> {
-    const server = await this.get(userId, serverId);
+    const server = await this.get(userId, serverId, false);
     if (server.serverType !== 'notion') throw new BadRequestException('当前仅支持 Notion 测试');
     try {
       const results = await this.searchNotion(server, query, 3);

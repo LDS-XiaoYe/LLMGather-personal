@@ -134,6 +134,7 @@ export class AgentTeamsService {
        VALUES (?, ?, ?, 'running', ?, '', '', '[]', 0, ?)`,
     ).run(runId, team.id, userId, input, now);
 
+    try {
     const graph = this.buildAgentTeamGraph(userId, team, input);
     const finalState = await graph.invoke({
       memberOutputs: [],
@@ -152,6 +153,9 @@ export class AgentTeamsService {
        SET status = ?, output = ?, error = ?, member_outputs_json = ?, latency_ms = ?, completed_at = ?
        WHERE id = ? AND user_id = ?`,
     ).run(finalState.status, finalState.output, finalState.error, JSON.stringify(finalState.memberOutputs), latencyMs, completedAt, runId, userId);
+    } catch (error) {
+      await this.databaseService.connection.prepare("UPDATE agent_team_runs SET status = 'failed', error = ?, latency_ms = ?, completed_at = ? WHERE id = ? AND user_id = ?").run(error instanceof Error ? error.message : String(error), Date.now() - startedAt, this.databaseService.now(), runId, userId);
+    }
     return this.getRun(userId, runId);
   }
 
@@ -235,6 +239,7 @@ export class AgentTeamsService {
     memberOutputs: AgentTeamRun['memberOutputs'],
   ): Promise<AgentTeamRun['memberOutputs'][number]> {
     const memberInput = this.buildMemberInput(team, member, originalInput, previousOutput, memberOutputs);
+    try {
     const agentRun = await this.agentsService.run(userId, member.agentId, { input: memberInput });
     return {
       agentId: member.agentId,
@@ -244,6 +249,9 @@ export class AgentTeamsService {
       output: agentRun.output,
       error: agentRun.error,
     };
+    } catch (error) {
+      return { agentId: member.agentId, role: member.role ?? '', runId: '', status: 'failed', output: '', error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   async getRun(userId: string, runId: string): Promise<AgentTeamRun> {
@@ -291,7 +299,7 @@ export class AgentTeamsService {
     const lower = input.toLowerCase();
     const scored = team.members.map((member) => {
       const role = `${member.role || ''} ${member.inputTemplate || ''}`.toLowerCase();
-      const roleTerms = role.match(/[a-z0-9_]{3,}|[\u3400-\u9fff]{2,}/g) ?? [];
+      const roleTerms: string[] = role.match(/[a-z0-9_]{3,}|[\u3400-\u9fff]{2,}/g) ?? [];
       const score = roleTerms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
       return { member, score };
     });

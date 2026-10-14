@@ -1,3 +1,4 @@
+import { captureAgentTraceSnapshot } from './trace-snapshot';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { randomUUID } from 'crypto';
@@ -7,7 +8,7 @@ import { ChatService } from '../gateway/chat.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
 import { MemoryService } from '../memory/memory.service';
 import { ChatCompletionRequest, ChatCompletionResponse, ChatCompletionUsage, ChatMessage, ChatToolDefinition, ProviderKeyAuditInfo } from '../providers/provider.types';
-import { SkillsService } from '../skills/skills.service';
+import { SkillDefinition, SkillsService } from '../skills/skills.service';
 import { ToolDefinition, ToolsService } from '../tools/tools.service';
 import { WorkflowsService } from '../workflows/workflows.service';
 import { BUILTIN_AGENT_SPECS, BuiltinAgentKey, BuiltinAgentSpec, getBuiltinAgentSpec } from './builtin-agents';
@@ -54,6 +55,9 @@ export interface AgentDefinition {
   updatedAt: string;
   lastRunAt?: string;
   runCount: number;
+  toolPermissions?: Record<string, string>;
+  runtimeBindings?: { tools: ToolDefinition[]; skills: SkillDefinition[] };
+  frozenBindingIds?: { toolIds: string[]; skillIds: string[] };
   builtinKey?: string;
   source?: 'user' | 'builtin';
 }
@@ -150,6 +154,8 @@ type EmitAgentRunEvent = (event: AgentRunStreamEvent) => void;
 type AgentExecutionOptions = {
   emitRunCreated?: boolean;
   delegationDepth?: number;
+  publicInvocation?: boolean;
+  runnableAgent?: AgentDefinition;
   inheritedKnowledgeBaseIds?: string[];
   skipWorkflowAgentIds?: string[];
 };
@@ -178,6 +184,7 @@ type ResolvedRunnableTools = {
 };
 
 type AgentGraphState = {
+  retryCount?: number;
   contextBlocks: string[];
   tools: ToolDefinition[];
   skippedTools: ResolvedRunnableTools['skipped'];
@@ -286,7 +293,7 @@ export class AgentsService {
     private readonly skillsService: SkillsService,
     @Inject(forwardRef(() => WorkflowsService))
     private readonly workflowsService: WorkflowsService,
-  ) {}
+  ) { this.toolsService.registerAgentOperations?.(this); }
 
   async listByUser(userId: string): Promise<AgentDefinition[]> {
     const rows = await this.databaseService.connection.prepare(
@@ -353,33 +360,37 @@ export class AgentsService {
   }
 
   async create(userId: string, dto: CreateAgentDto): Promise<AgentDefinition> {
-    this.assertRunnableModel(dto.model);
-    const now = this.databaseService.now();
-    const id = randomUUID();
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agents
+    return this.databaseService.transaction(async () => {
+      this.assertRunnableModel(dto.model);
+      const now = this.databaseService.now();
+      const id = randomUUID();
+      await this.databaseService.connection
+        .prepare(
+          `INSERT INTO agents
         (id, user_id, name, description, model, system_prompt, temperature, max_tokens, memory_enabled, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      userId,
-      dto.name.trim(),
-      dto.description?.trim() ?? '',
-      dto.model.trim(),
-      dto.systemPrompt?.trim() ?? '',
-      dto.temperature ?? 0.7,
-      dto.maxTokens ?? 1024,
-      dto.memoryEnabled === false ? 0 : 1,
-      dto.status ?? 'active',
-      now,
-      now,
-    );
-    await this.toolsService.setAgentTools(userId, id, dto.toolIds ?? [], dto.toolPermissions ?? {});
-    await this.knowledgeService.setAgentKnowledgeBases(userId, id, dto.knowledgeBaseIds ?? []);
-    await this.skillsService.setAgentSkills(userId, id, dto.skillIds ?? []);
-    await this.setAgentWorkflows(userId, id, dto.workflowIds ?? []);
-    await this.setAgentSubAgents(userId, id, dto.subAgentIds ?? []);
-    return this.getById(userId, id);
+        )
+        .run(
+          id,
+          userId,
+          dto.name.trim(),
+          dto.description?.trim() ?? '',
+          dto.model.trim(),
+          dto.systemPrompt?.trim() ?? '',
+          dto.temperature ?? 0.7,
+          dto.maxTokens ?? 1024,
+          dto.memoryEnabled === false ? 0 : 1,
+          dto.status ?? 'active',
+          now,
+          now,
+        );
+      await this.toolsService.setAgentTools(userId, id, dto.toolIds ?? [], dto.toolPermissions ?? {});
+      await this.knowledgeService.setAgentKnowledgeBases(userId, id, dto.knowledgeBaseIds ?? []);
+      await this.skillsService.setAgentSkills(userId, id, dto.skillIds ?? []);
+      await this.setAgentWorkflows(userId, id, dto.workflowIds ?? []);
+      await this.setAgentSubAgents(userId, id, dto.subAgentIds ?? []);
+      return this.getById(userId, id);
+    });
   }
 
   async generate(userId: string, dto: GenerateAgentDto): Promise<AgentDefinition | Record<string, unknown>> {
@@ -389,7 +400,8 @@ export class AgentsService {
     const request: ChatCompletionRequest = {
       model: dto.model,
       temperature: 0.2,
-      max_tokens: 1200,
+      max_tokens: 2048,
+      extra_body: { enable_thinking: false },
       messages: [
         {
           role: 'system',
@@ -403,8 +415,8 @@ export class AgentsService {
         { role: 'user', content: dto.requirement },
       ],
     };
-    const completion = await this.createAgentChatCompletion(request);
-    const content = completion.choices?.[0]?.message?.content ?? '';
+    // Opening a stream is fast even when generating the full configuration takes >25s.
+    const content = await this.collectCompletionStream(request, () => {}, true);
     const spec = this.extractGeneratedAgentSpec(content, dto.requirement);
     const toolIds = tools.filter((tool) => spec.toolNames.includes(tool.name)).map((tool) => tool.id);
     const skillIds = skills.filter((skill) => spec.skillNames.includes(skill.name)).map((skill) => skill.id);
@@ -427,42 +439,51 @@ export class AgentsService {
   }
 
   async update(userId: string, agentId: string, dto: UpdateAgentDto): Promise<AgentDefinition> {
-    const current = await this.getById(userId, agentId);
-    const next = {
-      name: dto.name?.trim() ?? current.name,
-      description: dto.description?.trim() ?? current.description,
-      model: dto.model?.trim() ?? current.model,
-      systemPrompt: dto.systemPrompt?.trim() ?? current.systemPrompt,
-      temperature: dto.temperature ?? current.temperature,
-      maxTokens: dto.maxTokens ?? current.maxTokens,
-      memoryEnabled: dto.memoryEnabled ?? current.memoryEnabled,
-      status: dto.status ?? current.status,
-    };
-    this.assertRunnableModel(next.model);
+    return this.databaseService.transaction(async () => {
+      await this.databaseService.connection
+        .prepare('SELECT id FROM agents WHERE id = ? AND user_id = ? FOR UPDATE')
+        .get(agentId, userId);
+      const current = await this.getById(userId, agentId);
+      const next = {
+        name: dto.name?.trim() ?? current.name,
+        description: dto.description?.trim() ?? current.description,
+        model: dto.model?.trim() ?? current.model,
+        systemPrompt: dto.systemPrompt?.trim() ?? current.systemPrompt,
+        temperature: dto.temperature ?? current.temperature,
+        maxTokens: dto.maxTokens ?? current.maxTokens,
+        memoryEnabled: dto.memoryEnabled ?? current.memoryEnabled,
+        status: dto.status ?? current.status,
+      };
+      this.assertRunnableModel(next.model);
 
-    await this.databaseService.connection.prepare(
-      `UPDATE agents
+      await this.databaseService.connection
+        .prepare(
+          `UPDATE agents
        SET name = ?, description = ?, model = ?, system_prompt = ?, temperature = ?, max_tokens = ?, memory_enabled = ?, status = ?, updated_at = ?
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    ).run(
-      next.name,
-      next.description,
-      next.model,
-      next.systemPrompt,
-      next.temperature,
-      next.maxTokens,
-      next.memoryEnabled ? 1 : 0,
-      next.status,
-      this.databaseService.now(),
-      agentId,
-      userId,
-    );
-    if (dto.toolIds) await this.toolsService.setAgentTools(userId, agentId, dto.toolIds, dto.toolPermissions ?? {});
-    if (dto.knowledgeBaseIds) await this.knowledgeService.setAgentKnowledgeBases(userId, agentId, dto.knowledgeBaseIds);
-    if (dto.skillIds) await this.skillsService.setAgentSkills(userId, agentId, dto.skillIds);
-    if (dto.workflowIds) await this.setAgentWorkflows(userId, agentId, dto.workflowIds);
-    if (dto.subAgentIds) await this.setAgentSubAgents(userId, agentId, dto.subAgentIds);
-    return this.getById(userId, agentId);
+        )
+        .run(
+          next.name,
+          next.description,
+          next.model,
+          next.systemPrompt,
+          next.temperature,
+          next.maxTokens,
+          next.memoryEnabled ? 1 : 0,
+          next.status,
+          this.databaseService.now(),
+          agentId,
+          userId,
+        );
+      if (dto.toolIds)
+        await this.toolsService.setAgentTools(userId, agentId, dto.toolIds, dto.toolPermissions ?? {});
+      if (dto.knowledgeBaseIds)
+        await this.knowledgeService.setAgentKnowledgeBases(userId, agentId, dto.knowledgeBaseIds);
+      if (dto.skillIds) await this.skillsService.setAgentSkills(userId, agentId, dto.skillIds);
+      if (dto.workflowIds) await this.setAgentWorkflows(userId, agentId, dto.workflowIds);
+      if (dto.subAgentIds) await this.setAgentSubAgents(userId, agentId, dto.subAgentIds);
+      return this.getById(userId, agentId);
+    });
   }
 
   async softDelete(userId: string, agentId: string): Promise<void> {
@@ -581,44 +602,52 @@ export class AgentsService {
     userId: string,
     dto: CreateAgentMarketplaceTemplateDto,
   ): Promise<Record<string, unknown>> {
-    const agent = await this.getById(userId, dto.sourceAgentId);
-    const id = randomUUID();
-    const now = this.databaseService.now();
-    const template = {
-      source: 'custom',
-      sourceAgentId: agent.id,
-      name: dto.name.trim(),
-      category: (dto.category?.trim() || 'custom').slice(0, 64),
-      description: dto.description?.trim() || agent.description || '用户发布的 Agent 模板',
-      systemPrompt: agent.systemPrompt,
-      temperature: agent.temperature,
-      maxTokens: agent.maxTokens,
-      memoryEnabled: agent.memoryEnabled,
-      toolIds: agent.toolIds,
-      skillIds: agent.skillIds,
-      knowledgeBaseIds: agent.knowledgeBaseIds,
-    };
-    await this.databaseService.connection.prepare(
-      `UPDATE agent_marketplace_templates
+    return this.databaseService.transaction(async () => {
+      const agent = await this.getById(userId, dto.sourceAgentId);
+      const id = randomUUID();
+      const now = this.databaseService.now();
+      const template = {
+        source: 'custom',
+        sourceAgentId: agent.id,
+        name: dto.name.trim(),
+        category: (dto.category?.trim() || 'custom').slice(0, 64),
+        description: dto.description?.trim() || agent.description || '用户发布的 Agent 模板',
+        systemPrompt: agent.systemPrompt,
+        temperature: agent.temperature,
+        maxTokens: agent.maxTokens,
+        memoryEnabled: agent.memoryEnabled,
+        toolIds: agent.toolIds,
+        skillIds: agent.skillIds,
+        knowledgeBaseIds: agent.knowledgeBaseIds,
+        workflowIds: agent.workflowIds,
+        subAgentIds: agent.subAgentIds,
+      };
+      await this.databaseService.connection
+        .prepare(
+          `UPDATE agent_marketplace_templates
        SET public_enabled = 0, updated_at = ?
        WHERE user_id = ? AND source_agent_id = ? AND LOWER(name) = LOWER(?) AND public_enabled = 1`,
-    ).run(now, userId, agent.id, template.name);
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_marketplace_templates
+        )
+        .run(now, userId, agent.id, template.name);
+      await this.databaseService.connection
+        .prepare(
+          `INSERT INTO agent_marketplace_templates
        (id, user_id, source_agent_id, name, description, category, template_json, public_enabled, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    ).run(
-      id,
-      userId,
-      agent.id,
-      template.name,
-      template.description,
-      template.category,
-      JSON.stringify(template),
-      now,
-      now,
-    );
-    return { ...template, id, createdAt: now, updatedAt: now };
+        )
+        .run(
+          id,
+          userId,
+          agent.id,
+          template.name,
+          template.description,
+          template.category,
+          JSON.stringify(template),
+          now,
+          now,
+        );
+      return { ...template, id, createdAt: now, updatedAt: now };
+    });
   }
 
   async installMarketplaceTemplate(userId: string, dto: InstallAgentTemplateDto): Promise<AgentDefinition> {
@@ -650,6 +679,8 @@ export class AgentsService {
       toolIds,
       skillIds,
       knowledgeBaseIds: templateKbIds,
+      workflowIds: Array.isArray(template.workflowIds) ? template.workflowIds.map(String) : [],
+      subAgentIds: Array.isArray(template.subAgentIds) ? template.subAgentIds.map(String) : [],
     });
   }
 
@@ -681,23 +712,46 @@ export class AgentsService {
 
   async runApi(userId: string, agentId: string, dto: RunAgentDto): Promise<AgentRun> {
     const agent = await this.getById(userId, agentId);
+    if (agent.status !== 'active') throw new BadRequestException('Agent 已归档');
     if (!agent.apiEnabled) throw new BadRequestException('Agent 尚未开启 API 接入');
     const runnable = await this.resolvePublishedRunnableAgent(userId, agent, dto.input);
     return this.executeAgentRun(userId, runnable, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
   }
 
-  async runPublished(publicSlug: string, dto: RunAgentDto): Promise<AgentRun> {
+  async runPublished(
+    publicSlug: string,
+    dto: RunAgentDto,
+  ): Promise<Pick<AgentRun, 'status' | 'output' | 'latencyMs'>> {
     const slug = this.normalizeSlug(publicSlug);
-    const row = await this.databaseService.connection.prepare(
-      `SELECT id, user_id as userId
+    const row = (await this.databaseService.connection
+      .prepare(
+        `SELECT id, user_id as userId
        FROM agents
        WHERE public_slug = ? AND published = 1 AND api_enabled = 1 AND status = 'active' AND deleted_at IS NULL
        LIMIT 1`,
-    ).get(slug) as unknown as { id: string; userId: string } | undefined;
+      )
+      .get(slug)) as unknown as { id: string; userId: string } | undefined;
     if (!row) throw new NotFoundException('公开 Agent 不存在或未发布');
     const agent = await this.getById(row.userId, row.id);
     const runnable = await this.resolvePublishedRunnableAgent(row.userId, agent, dto.input);
-    return this.executeAgentRun(row.userId, runnable, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
+    // Anonymous calls never inherit the owner's conversation or remembered identity.
+    const publicDto: RunAgentDto = {
+      input: dto.input,
+      imageUrls: dto.imageUrls,
+      maxSteps: dto.maxSteps,
+      mode: dto.mode,
+      contextStrategy: dto.contextStrategy,
+      continueFromLast: false,
+      approvedToolIds: [],
+    };
+    const run = await this.executeAgentRun(
+      row.userId,
+      { ...runnable, memoryEnabled: false },
+      publicDto,
+      () => undefined,
+      { emitRunCreated: false, delegationDepth: 0, publicInvocation: true },
+    );
+    return { status: run.status, output: run.output, latencyMs: run.latencyMs };
   }
 
   async run(userId: string, agentId: string, dto: RunAgentDto): Promise<AgentRun> {
@@ -706,10 +760,11 @@ export class AgentsService {
     return this.executeAgentRun(userId, agent, dto, () => undefined, { emitRunCreated: false, delegationDepth: 0 });
   }
 
-  async runFromWorkflow(userId: string, agentId: string, dto: RunAgentDto, skipWorkflowAgentIds: string[]): Promise<AgentRun> {
+  async runFromWorkflow(userId: string, agentId: string, dto: RunAgentDto, skipWorkflowAgentIds: string[], executionOptions: AgentExecutionOptions = {}): Promise<AgentRun> {
     const agent = await this.getById(userId, agentId);
     if (agent.status !== 'active') throw new BadRequestException('Agent 已归档，无法运行');
-    return this.executeAgentRun(userId, agent, dto, () => undefined, {
+    return this.executeAgentRun(userId, executionOptions.runnableAgent?.id === agent.id ? executionOptions.runnableAgent : agent, dto, () => undefined, {
+      ...executionOptions,
       emitRunCreated: false,
       delegationDepth: 0,
       skipWorkflowAgentIds,
@@ -734,6 +789,10 @@ export class AgentsService {
     emit: EmitAgentRunEvent,
     options: AgentExecutionOptions = {},
   ): Promise<AgentRun> {
+    if (options.publicInvocation) {
+      agent = { ...agent, memoryEnabled: false };
+      dto = { ...dto, messages: [], conversationId: undefined, parentRunId: undefined, continueFromLast: false, approvedToolIds: [] };
+    }
     const runId = randomUUID();
     const startedAt = Date.now();
     const now = this.databaseService.now();
@@ -768,7 +827,7 @@ export class AgentsService {
         `UPDATE agent_run_steps
          SET status = ?, output = ?, error = ?, ended_at = ?, latency_ms = ?, metadata = ?
          WHERE id = ? AND run_id = ? AND user_id = ?`,
-      ).run(status, output, error, endedAt, Number.isFinite(latencyMs) ? latencyMs : 0, JSON.stringify(metadata ?? this.parseJsonRecord(row.metadata)), stepId, runId, userId);
+      ).run(status, output, error, endedAt, Number.isFinite(latencyMs) ? latencyMs : 0, JSON.stringify({ ...this.parseJsonRecord(row.metadata), ...metadata }), stepId, runId, userId);
       const updated = await this.getStep(userId, runId, stepId);
       emit({ type: 'step_completed', step: updated });
       return updated;
@@ -781,13 +840,13 @@ export class AgentsService {
         const finalOutput = workflowRun.output || '';
         const completedAt = this.databaseService.now();
         const latencyMs = Date.now() - startedAt;
-        await this.applySmartMemory(userId, agent, executionDto, finalOutput, runId, insertAndEmit, usageTotal);
+        if (workflowRun.status === 'succeeded') await this.applySmartMemory(userId, agent, executionDto, finalOutput, runId, insertAndEmit, usageTotal);
         await this.databaseService.connection.prepare(
           `UPDATE agent_runs
            SET status = ?, output = ?, error = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, latency_ms = ?, completed_at = ?
            WHERE id = ? AND user_id = ?`,
         ).run(
-          workflowRun.status === 'failed' ? 'failed' : 'succeeded',
+          workflowRun.status === 'succeeded' ? 'succeeded' : 'failed',
           finalOutput,
           workflowRun.error || '',
           usageTotal.prompt_tokens,
@@ -812,8 +871,9 @@ export class AgentsService {
         reflection: null,
         finalOutput: '',
         round: 0,
+        retryCount: 0,
         maxSteps,
-      } as AgentGraphState) as AgentGraphState;
+      } as AgentGraphState, { recursionLimit: maxSteps * 6 + 12 }) as AgentGraphState;
       const finalOutput = graphState.finalOutput || '';
 
       await this.applySmartMemory(userId, agent, executionDto, finalOutput, runId, insertAndEmit, usageTotal);
@@ -1058,6 +1118,7 @@ export class AgentsService {
       reflection: Annotation<AgentReflectionDecision | null>(),
       finalOutput: Annotation<string>(),
       round: Annotation<number>(),
+      retryCount: Annotation<number>({ reducer: (_previous, next) => next, default: () => 0 }),
       maxSteps: Annotation<number>(),
     });
 
@@ -1070,7 +1131,7 @@ export class AgentsService {
         return { ...state, contextBlocks };
       })
       .addNode('guardTools', async (state: StateType) => {
-        const { allowed, skipped } = await this.resolveRunnableTools(userId, agent, dto.approvedToolIds ?? []);
+        const { allowed, skipped } = await this.resolveRunnableTools(userId, agent, dto.approvedToolIds ?? [], options.publicInvocation);
         for (const item of skipped) {
           await insertAndEmit({
             stepType: 'tool_call',
@@ -1097,7 +1158,13 @@ export class AgentsService {
         const planStarted = this.databaseService.now();
         let action: AgentPlannerAction;
         try {
-          const planned = await this.planNextAgentAction(agent, dto, state.contextBlocks, state.observations, state.tools, options.delegationDepth ?? 0);
+          let planned: Awaited<ReturnType<AgentsService['planNextAgentAction']>> | undefined;
+          const retries = dto.retryPolicy?.retryPlannerFailure === false ? 0 : Math.max(0, Math.min(3, Math.floor(Number(dto.retryPolicy?.maxRetries ?? 1) || 0)));
+          for (let attempt = 0; attempt <= retries; attempt++) {
+            try { planned = await this.planNextAgentAction(agent, dto, state.contextBlocks, state.observations, state.tools, options.delegationDepth ?? 0); break; }
+            catch (error) { if (attempt === retries) throw error; }
+          }
+          if (!planned) throw new Error('规划未返回结果');
           this.addUsage(usageTotal, planned.usage);
           action = planned.action;
           await insertAndEmit({
@@ -1156,7 +1223,7 @@ export class AgentsService {
           }),
         });
         emit({ type: 'reflection_completed', runId, round: state.round, decision: reflected.decision, reason: reflected.reason });
-        return { ...state, reflection: reflected };
+        return { ...state, reflection: reflected, retryCount: (state.retryCount ?? 0) + (reflected.decision === 'retry' ? 1 : 0) };
       })
       .addNode('final', async (state: StateType) => {
         if (state.finalOutput) return state;
@@ -1179,15 +1246,15 @@ export class AgentsService {
           insertAndEmit,
           completeAndEmit,
           usageTotal,
-          state.tools,
+          dto.mode === 'fast' ? state.tools : [],
           state.maxSteps,
-          options,
+          dto.mode === 'fast' ? options : { ...options, delegationDepth: 1 },
         );
         return { ...state, finalOutput };
       })
       .addEdge(START, 'context')
       .addEdge('context', 'guardTools')
-      .addEdge('guardTools', 'final')
+      .addConditionalEdges('guardTools', () => dto.mode === 'fast' ? 'final' : 'plan', { final: 'final', plan: 'plan' })
       .addConditionalEdges('plan', (state: StateType) => this.routePlannedAction(state), {
         tool: 'tool',
         delegate: 'delegate',
@@ -1231,6 +1298,8 @@ export class AgentsService {
   private reflectAgentProgress(dto: RunAgentDto, state: AgentGraphState): AgentReflectionDecision {
     const lastObservation = state.observations[state.observations.length - 1] ?? '';
     const hasFailure = state.skippedTools.length > 0 || /\bfailed\b|失败|不可用|未授权/i.test(lastObservation);
+    const budget = Math.max(0, Math.min(3, Math.floor(Number(dto.retryPolicy?.maxRetries ?? 1) || 0)));
+    if (hasFailure && (dto.retryPolicy?.retryToolFailure === false || (state.retryCount ?? 0) >= budget)) return { decision: 'final', reason: '已达到失败重规划预算。', hint: '说明已失败的操作，不要重复执行有副作用的请求。' };
     if (state.round >= state.maxSteps) {
       return {
         decision: 'final',
@@ -1295,7 +1364,7 @@ export class AgentsService {
     }
 
     const stepStarted = Date.now();
-    const result = await this.toolsService.invoke(userId, tool.id, action.args ?? {}, { agentId: agent.id, runId });
+    const result = await this.invokeAgentTool(userId, agent, tool, action.args ?? {}, runId);
     const safeArgs = this.redactSensitiveText(JSON.stringify(action.args ?? {}, null, 2));
     const safeOutput = this.redactSensitiveText(result.output);
     const safeError = this.redactSensitiveText(result.error);
@@ -1382,7 +1451,15 @@ export class AgentsService {
       startedAt: now,
       endedAt: this.databaseService.now(),
       latencyMs: 0,
-      metadata: JSON.stringify({ runId, graphNode: 'contextPack', contextSources: [] }),
+      metadata: JSON.stringify({ runId, graphNode: 'contextPack', contextSources: [], runtimeSnapshot: captureAgentTraceSnapshot({
+        schemaVersion: 1,
+        systemPrompt: agent.systemPrompt,
+        model: agent.model,
+        parameters: { temperature: agent.temperature, maxTokens: this.maxCompletionTokens(agent), maxSteps: Math.max(1, Math.min(10, dto.maxSteps ?? 6)) },
+        skillIds: [...agent.skillIds],
+        workflow: [...agent.workflowIds],
+        imageUrls: dto.imageUrls ?? [],
+      }, text => this.redactSensitiveText(text)) }),
     });
 
     if (strategy !== 'minimal' && agent.skillIds.length > 0) {
@@ -1451,7 +1528,8 @@ export class AgentsService {
     if (strategy !== 'minimal' && strategy !== 'memory_first' && kbIds.length > 0) {
       const started = Date.now();
       try {
-        const chunks = await this.knowledgeService.search(userId, kbIds, dto.input, 6);
+        const retrieval = await this.knowledgeService.searchDetailed(userId, kbIds, dto.input, 6, { failurePolicy: 'degrade' });
+        const chunks = retrieval.data;
         if (chunks.length > 0) {
           contextBlocks.push(`知识库检索:\n${chunks.map((c, idx) => `[${idx + 1}] ${c.title}\n${this.compressForPrompt(c.content, 3500, { preserveHead: 2200, preserveTail: 700 })}`).join('\n\n')}`);
         }
@@ -1466,7 +1544,8 @@ export class AgentsService {
           latencyMs: Date.now() - started,
           metadata: JSON.stringify({
             graphNode: 'contextPack',
-            contextSources: chunks.map((chunk) => ({ type: 'knowledge', id: chunk.id, kbId: chunk.kbId, title: chunk.title, score: chunk.score })),
+            retrieval: retrieval.meta,
+            contextSources: chunks.map((chunk) => ({ type: 'knowledge', id: chunk.id, kbId: chunk.kbId, title: chunk.title, score: chunk.score, scoreType: chunk.scoreType })),
             knowledgeBaseIds: kbIds,
             count: chunks.length,
           }),
@@ -1514,17 +1593,31 @@ export class AgentsService {
       metadata: JSON.stringify({ runId, workflowId, graphNode: 'workflow' }),
     });
 
-    const workflowRun = await this.workflowsService.run(userId, workflowId, dto.input, {
+    let workflowRun = await this.workflowsService.run(userId, workflowId, dto.input, {
       skipWorkflowAgentIds: Array.from(new Set([...(options.skipWorkflowAgentIds ?? []), agent.id])),
       runtimeAgentId: agent.id,
+      runtimeAgentSnapshot: agent,
+      publicInvocation: options.publicInvocation,
+      approvedToolIds: dto.approvedToolIds ?? [],
     });
 
+    const deadline = Date.now() + 120000;
+    while (['pending', 'running'].includes(workflowRun.status)) {
+      if (Date.now() >= deadline) {
+        await this.workflowsService.cancel(userId, workflowRun.id);
+        workflowRun = await this.workflowsService.getRun(userId, workflowRun.id);
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+      workflowRun = await this.workflowsService.getRun(userId, workflowRun.id);
+    }
+    if (workflowRun.status !== 'succeeded') workflowRun.error ||= '工作流未成功结束：' + workflowRun.status;
     await this.databaseService.connection.prepare(
       `UPDATE agent_run_steps
        SET status = ?, output = ?, error = ?, ended_at = ?, latency_ms = ?, metadata = ?
        WHERE id = ? AND run_id = ? AND user_id = ?`,
     ).run(
-      workflowRun.status === 'failed' ? 'failed' : 'succeeded',
+      workflowRun.status === 'succeeded' ? 'succeeded' : 'failed',
       workflowRun.output,
       workflowRun.error,
       this.databaseService.now(),
@@ -1540,7 +1633,7 @@ export class AgentsService {
       await insertAndEmit({
         stepType: `workflow_${workflowStep.nodeType}`,
         name: `Workflow 节点：${workflowStep.nodeId}`,
-        status: workflowStep.status === 'failed' ? 'failed' : 'succeeded',
+        status: workflowStep.status === 'succeeded' ? 'succeeded' : 'failed',
         input: workflowStep.input,
         output: workflowStep.output,
         error: workflowStep.error,
@@ -1555,20 +1648,93 @@ export class AgentsService {
   }
 
   private async resolveAgentSkills(userId: string, agent: AgentDefinition) {
-    if (agent.source !== 'builtin') return this.skillsService.getAgentSkills(userId, agent.id);
+    if (agent.runtimeBindings) return agent.runtimeBindings.skills.filter(skill => skill.enabled);
+    if (agent.frozenBindingIds) {
+      const all = await this.skillsService.listForUser(userId);
+      return all.filter(skill => skill.enabled && agent.frozenBindingIds!.skillIds.includes(skill.id));
+    }
+    if (agent.runtimeBindings) return [];
+    if (agent.source !== 'builtin') return (await this.skillsService.getAgentSkills(userId, agent.id)).filter(skill => skill.enabled);
     const skills = await this.skillsService.listForUser(userId);
     const ids = new Set(agent.skillIds);
     return skills.filter((skill) => ids.has(skill.id));
   }
 
-  private async resolveRunnableTools(userId: string, agent: AgentDefinition, approvedToolIds: string[]): Promise<ResolvedRunnableTools> {
+  private invokeAgentTool(userId: string, agent: AgentDefinition, tool: ToolDefinition, args: Record<string, unknown>, runId?: string) {
+    return agent.runtimeBindings ? this.toolsService.invokeSnapshot(userId, tool, args, { agentId: agent.id, runId }) : this.toolsService.invoke(userId, tool.id, args, { agentId: agent.id, runId });
+  }
+
+  async invokeWorkflowTool(
+    userId: string,
+    reference: string,
+    args: Record<string, unknown>,
+    options: import('../workflows/runtime/workflow-runtime.service').RuntimeOptions,
+  ) {
+    if (options.runtimeAgentId) {
+      const current = await this.getById(userId, options.runtimeAgentId);
+      if (current.status !== 'active') throw new BadRequestException('Agent 已归档');
+      const agent = options.runtimeAgentSnapshot ?? current;
+      const { allowed } = await this.resolveRunnableTools(
+        userId,
+        agent,
+        options.publicInvocation ? [] : (options.approvedToolIds ?? []),
+        options.publicInvocation,
+      );
+      const tool = allowed.find((item) => item.id === reference || item.name === reference);
+      if (!tool) throw new BadRequestException('工作流工具未绑定、已禁用或尚未授权');
+      return this.invokeAgentTool(userId, agent, tool, args);
+    }
+    const tool = (await this.toolsService.listForUser(userId)).find(
+      (item) => item.id === reference || item.name === reference,
+    );
+    if (!tool?.enabled || (this.isCodeRunnerTool(tool) && process.env.ENABLE_CODE_RUNNER_TOOLS !== 'true'))
+      throw new BadRequestException('工具不可用');
+    if (
+      this.effectiveToolRisk(tool) === 'high' &&
+      !(options.approvedToolIds ?? []).some((id) => id === tool.id || id === tool.name)
+    )
+      throw new BadRequestException('工作流高风险工具需要授权');
+    return this.toolsService.invoke(userId, tool.id, args);
+  }
+
+  private async resolveRunnableTools(
+    userId: string,
+    agent: AgentDefinition,
+    approvedToolIds: string[],
+    publicInvocation = false,
+  ): Promise<ResolvedRunnableTools> {
     const approved = new Set(approvedToolIds);
-    const tools = agent.source === 'builtin'
-      ? (await this.toolsService.listForUser(userId)).filter((tool) => agent.toolIds.includes(tool.id))
-      : await this.toolsService.getAgentTools(userId, agent.id);
+    const tools = agent.runtimeBindings
+      ? agent.runtimeBindings.tools
+      : agent.frozenBindingIds
+        ? (await this.toolsService.listForUser(userId))
+            .filter((tool) => agent.frozenBindingIds!.toolIds.includes(tool.id))
+            .map((tool) => ({ ...tool, permissionLevel: 'confirm' as const }))
+        : agent.runtimeBindings
+          ? []
+          : agent.source === 'builtin'
+            ? (await this.toolsService.listForUser(userId)).filter((tool) => agent.toolIds.includes(tool.id))
+            : await this.toolsService.getAgentTools(userId, agent.id);
     const allowed: ToolDefinition[] = [];
     const skipped: ResolvedRunnableTools['skipped'] = [];
     for (const tool of tools) {
+      if (
+        publicInvocation &&
+        (tool.source === 'custom' ||
+          ![
+            'calculator',
+            'text_stats',
+            'current_time',
+            'uuid',
+            'weather_query',
+            'browser_fetch',
+            'tavily_search',
+          ].includes(tool.name))
+      ) {
+        skipped.push({ tool, reason: '公开调用不使用账户私有工具或集成', requiresApproval: false });
+        continue;
+      }
+      if (!tool.enabled) continue;
       if (this.isCodeRunnerTool(tool) && process.env.ENABLE_CODE_RUNNER_TOOLS !== 'true') {
         continue;
       }
@@ -1581,7 +1747,11 @@ export class AgentsService {
         if (approved.has(tool.id) || approved.has(tool.name)) {
           allowed.push(tool);
         } else {
-          skipped.push({ tool, reason: '工具需要运行前授权，但本次请求未包含 approvedToolIds。', requiresApproval: true });
+          skipped.push({
+            tool,
+            reason: '工具需要运行前授权，但本次请求未包含 approvedToolIds。',
+            requiresApproval: true,
+          });
         }
         continue;
       }
@@ -1760,6 +1930,7 @@ export class AgentsService {
       input: action.input || dto.input,
       maxSteps: Math.min(4, dto.maxSteps ?? 4),
     }, () => undefined, {
+      ...options,
       emitRunCreated: false,
       delegationDepth: (options.delegationDepth ?? 0) + 1,
       inheritedKnowledgeBaseIds: parentAgent.knowledgeBaseIds,
@@ -1907,6 +2078,7 @@ export class AgentsService {
       input: action.input || dto.input,
       maxSteps: Math.min(4, dto.maxSteps ?? 4),
     }, () => undefined, {
+      ...options,
       emitRunCreated: false,
       delegationDepth: (options.delegationDepth ?? 0) + 1,
       inheritedKnowledgeBaseIds: parentAgent.knowledgeBaseIds,
@@ -1994,7 +2166,9 @@ export class AgentsService {
       startedAt: this.databaseService.now(),
       endedAt: null,
       latencyMs: 0,
-      metadata: JSON.stringify({ model: agent.model, observations: observations.length, toolUseHarness: false }),
+      metadata: JSON.stringify({ model: agent.model, observations: observations.length, toolUseHarness: false,
+        requestSnapshot: captureAgentTraceSnapshot(request, text => this.redactSensitiveText(text)),
+      }),
     });
     const output = await this.collectCompletionStream(request, (delta, full) => {
       emit({ type: 'llm_delta', runId, delta, output: full });
@@ -2096,6 +2270,9 @@ export class AgentsService {
           graphNode: 'harness_llm_decision',
           toolUseHarness: true,
           cacheDisabled: true,
+          requestSnapshot: captureAgentTraceSnapshot({
+            ...baseRequest, messages, tools: toolDefinitions, tool_choice: 'auto', stream: false,
+          }, text => this.redactSensitiveText(text)),
         }),
       });
       const request: ChatCompletionRequest = {
@@ -2343,7 +2520,7 @@ export class AgentsService {
     }
 
     const args = parsedArgs.args;
-    const result = await this.toolsService.invoke(userId, tool.id, args, { agentId: agent.id, runId });
+    const result = await this.invokeAgentTool(userId, agent, tool, args, runId);
     await this.recordHarnessToolCall(
       call,
       tool,
@@ -3102,41 +3279,58 @@ export class AgentsService {
     };
   }
 
-  async createVersion(userId: string, agentId: string, dto: CreateAgentVersionDto = {}): Promise<Record<string, unknown>> {
-    const agent = await this.getById(userId, agentId);
-    const row = await this.databaseService.connection.prepare(
-      'SELECT COALESCE(MAX(version_number), 0) + 1 as nextVersion FROM agent_versions WHERE agent_id = ? AND user_id = ?',
-    ).get(agentId, userId) as { nextVersion?: number | string } | undefined;
-    const versionNumber = Number(row?.nextVersion ?? 1);
-    const id = randomUUID();
-    const now = this.databaseService.now();
-    await this.databaseService.connection.prepare(
-      `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, status, traffic_percent, notes, snapshot_json, created_at)
+  async createVersion(
+    userId: string,
+    agentId: string,
+    dto: CreateAgentVersionDto = {},
+  ): Promise<Record<string, unknown>> {
+    return this.databaseService.transaction(async () => {
+      await this.databaseService.connection
+        .prepare('SELECT id FROM agents WHERE id = ? AND user_id = ? FOR UPDATE')
+        .get(agentId, userId);
+      const agent = await this.getById(userId, agentId);
+      agent.runtimeBindings = {
+        tools: await this.toolsService.getAgentTools(userId, agentId),
+        skills: await this.skillsService.getAgentSkills(userId, agentId),
+      };
+      const row = (await this.databaseService.connection
+        .prepare(
+          'SELECT COALESCE(MAX(version_number), 0) + 1 as nextVersion FROM agent_versions WHERE agent_id = ? AND user_id = ?',
+        )
+        .get(agentId, userId)) as { nextVersion?: number | string } | undefined;
+      const versionNumber = Number(row?.nextVersion ?? 1);
+      const id = randomUUID();
+      const now = this.databaseService.now();
+      await this.databaseService.connection
+        .prepare(
+          `INSERT INTO agent_versions (id, agent_id, user_id, version_number, label, status, traffic_percent, notes, snapshot_json, created_at)
        VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)`,
-    ).run(
-      id,
-      agentId,
-      userId,
-      versionNumber,
-      dto.label?.trim() || `v${versionNumber}`,
-      dto.notes?.trim() || '',
-      JSON.stringify(agent),
-      now,
-    );
-    return {
-      id,
-      agentId,
-      userId,
-      versionNumber,
-      label: dto.label?.trim() || `v${versionNumber}`,
-      status: 'draft',
-      trafficPercent: 0,
-      notes: dto.notes?.trim() || '',
-      snapshot: agent,
-      publishedAt: null,
-      rolledBackAt: null,
-      createdAt: now,
-    };
+        )
+        .run(
+          id,
+          agentId,
+          userId,
+          versionNumber,
+          dto.label?.trim() || `v${versionNumber}`,
+          dto.notes?.trim() || '',
+          JSON.stringify(agent),
+          now,
+        );
+      return {
+        id,
+        agentId,
+        userId,
+        versionNumber,
+        label: dto.label?.trim() || `v${versionNumber}`,
+        status: 'draft',
+        trafficPercent: 0,
+        notes: dto.notes?.trim() || '',
+        snapshot: agent,
+        publishedAt: null,
+        rolledBackAt: null,
+        createdAt: now,
+      };
+    });
   }
 
   async listVersions(userId: string, agentId: string): Promise<Array<Record<string, unknown>>> {
@@ -3152,39 +3346,84 @@ export class AgentsService {
     return rows.map((row) => this.mapAgentVersion(row));
   }
 
-  async publishVersion(userId: string, agentId: string, dto: PublishAgentVersionDto): Promise<Record<string, unknown>> {
-    const agent = await this.getById(userId, agentId);
-    if (!dto.versionId) {
-      await this.createVersion(userId, agentId, { label: dto.label || '发布版本', notes: dto.notes });
-    }
-    const versionId = dto.versionId || String((await this.getLatestVersionRow(userId, agentId)).id);
-    const releaseMode = dto.releaseMode ?? 'stable';
-    const trafficPercent = releaseMode === 'canary' ? Math.max(1, Math.min(99, Math.round(dto.trafficPercent ?? 10))) : 100;
-    const now = this.databaseService.now();
-    if (releaseMode === 'stable') {
-      await this.databaseService.connection.prepare(
-        `UPDATE agent_versions
+  async publishVersion(
+    userId: string,
+    agentId: string,
+    dto: PublishAgentVersionDto,
+  ): Promise<Record<string, unknown>> {
+    return this.databaseService.transaction(async () => {
+      const agent = await this.getById(userId, agentId);
+      await this.databaseService.connection
+        .prepare('SELECT id FROM agents WHERE id = ? AND user_id = ? FOR UPDATE')
+        .get(agentId, userId);
+      const created = dto.versionId
+        ? null
+        : await this.createVersion(userId, agentId, { label: dto.label || '发布版本', notes: dto.notes });
+      const versionId = dto.versionId || String(created!.id);
+      await this.getVersionRow(userId, agentId, versionId);
+      const publicSlug = this.normalizeSlug(dto.publicSlug ?? (agent.publicSlug || agent.name));
+      await this.assertSlugAvailable(userId, agentId, publicSlug);
+      const releaseMode = dto.releaseMode ?? 'stable';
+      const trafficPercent =
+        releaseMode === 'canary' ? Math.max(1, Math.min(99, Math.round(dto.trafficPercent ?? 10))) : 100;
+      if (releaseMode === 'canary') {
+        const stable = await this.databaseService.connection
+          .prepare(
+            "SELECT id FROM agent_versions WHERE agent_id = ? AND user_id = ? AND status = 'released' AND id <> ? LIMIT 1",
+          )
+          .get(agentId, userId, versionId);
+        if (!stable) throw new BadRequestException('请先发布稳定版本，再进行灰度发布');
+        await this.databaseService.connection
+          .prepare(
+            "UPDATE agent_versions SET status = 'superseded', traffic_percent = 0 WHERE agent_id = ? AND user_id = ? AND status = 'canary' AND id <> ?",
+          )
+          .run(agentId, userId, versionId);
+      }
+      const now = this.databaseService.now();
+      if (releaseMode === 'stable') {
+        await this.databaseService.connection
+          .prepare(
+            `UPDATE agent_versions
          SET status = CASE WHEN status IN ('released', 'canary') THEN 'superseded' ELSE status END,
              traffic_percent = CASE WHEN status = 'canary' THEN 0 ELSE traffic_percent END
          WHERE agent_id = ? AND user_id = ? AND id <> ?`,
-      ).run(agentId, userId, versionId);
-    }
-    await this.databaseService.connection.prepare(
-      `UPDATE agent_versions
+          )
+          .run(agentId, userId, versionId);
+      }
+      await this.databaseService.connection
+        .prepare(
+          `UPDATE agent_versions
        SET status = ?, traffic_percent = ?, notes = COALESCE(NULLIF(?, ''), notes), published_at = ?, rolled_back_at = NULL
        WHERE id = ? AND agent_id = ? AND user_id = ?`,
-    ).run(releaseMode === 'canary' ? 'canary' : 'released', trafficPercent, dto.notes?.trim() || '', now, versionId, agentId, userId);
-    const publicSlug = this.normalizeSlug(dto.publicSlug ?? (agent.publicSlug || agent.name));
-    await this.assertSlugAvailable(userId, agentId, publicSlug);
-    await this.databaseService.connection.prepare(
-      `UPDATE agents
+        )
+        .run(
+          releaseMode === 'canary' ? 'canary' : 'released',
+          trafficPercent,
+          dto.notes?.trim() || '',
+          now,
+          versionId,
+          agentId,
+          userId,
+        );
+      await this.databaseService.connection
+        .prepare(
+          `UPDATE agents
        SET published = ?, api_enabled = ?, public_slug = ?, updated_at = ?
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    ).run(dto.published === false ? 0 : 1, dto.apiEnabled === false ? 0 : 1, publicSlug, now, agentId, userId);
-    return {
-      agent: await this.getById(userId, agentId),
-      version: this.mapAgentVersion(await this.getVersionRow(userId, agentId, versionId)),
-    };
+        )
+        .run(
+          dto.published === false ? 0 : 1,
+          dto.apiEnabled === false ? 0 : 1,
+          publicSlug,
+          now,
+          agentId,
+          userId,
+        );
+      return {
+        agent: await this.getById(userId, agentId),
+        version: this.mapAgentVersion(await this.getVersionRow(userId, agentId, versionId)),
+      };
+    });
   }
 
   async compareVersions(userId: string, agentId: string, leftId: string, rightId: string): Promise<Record<string, unknown>> {
@@ -3201,44 +3440,59 @@ export class AgentsService {
   }
 
   async restoreVersion(userId: string, agentId: string, versionId: string): Promise<AgentDefinition> {
-    const row = await this.getVersionRow(userId, agentId, versionId);
-    const snapshot = this.parseJsonRecord(row.snapshotJson) as Partial<AgentDefinition>;
-    const restored = await this.update(userId, agentId, {
-      name: snapshot.name,
-      description: snapshot.description,
-      model: snapshot.model,
-      systemPrompt: snapshot.systemPrompt,
-      temperature: snapshot.temperature,
-      maxTokens: snapshot.maxTokens,
-      memoryEnabled: snapshot.memoryEnabled,
-      status: snapshot.status,
-      toolIds: snapshot.toolIds,
-      knowledgeBaseIds: snapshot.knowledgeBaseIds,
-      skillIds: snapshot.skillIds,
-      workflowIds: snapshot.workflowIds,
-      subAgentIds: snapshot.subAgentIds,
+    return this.databaseService.transaction(async () => {
+      const row = await this.getVersionRow(userId, agentId, versionId);
+      const snapshot = this.parseJsonRecord(row.snapshotJson) as Partial<AgentDefinition>;
+      const restored = await this.update(userId, agentId, {
+        name: snapshot.name,
+        description: snapshot.description,
+        model: snapshot.model,
+        systemPrompt: snapshot.systemPrompt,
+        temperature: snapshot.temperature,
+        maxTokens: snapshot.maxTokens,
+        memoryEnabled: snapshot.memoryEnabled,
+        status: snapshot.status,
+        toolIds: snapshot.toolIds,
+        toolPermissions: Object.fromEntries(
+          (snapshot.runtimeBindings?.tools ?? []).map((tool) => [tool.id, tool.permissionLevel ?? 'confirm']),
+        ),
+        knowledgeBaseIds: snapshot.knowledgeBaseIds,
+        skillIds: snapshot.skillIds,
+        workflowIds: snapshot.workflowIds,
+        subAgentIds: snapshot.subAgentIds,
+      });
+      return restored;
     });
-    return restored;
   }
 
-  async rollbackToVersion(userId: string, agentId: string, versionId: string): Promise<Record<string, unknown>> {
-    const restored = await this.restoreVersion(userId, agentId, versionId);
-    const now = this.databaseService.now();
-    await this.databaseService.connection.prepare(
-      `UPDATE agent_versions
+  async rollbackToVersion(
+    userId: string,
+    agentId: string,
+    versionId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.databaseService.transaction(async () => {
+      const restored = await this.restoreVersion(userId, agentId, versionId);
+      const now = this.databaseService.now();
+      await this.databaseService.connection
+        .prepare(
+          `UPDATE agent_versions
        SET status = CASE WHEN id = ? THEN 'released' WHEN status IN ('released', 'canary') THEN 'rolled_back' ELSE status END,
            traffic_percent = CASE WHEN id = ? THEN 100 ELSE 0 END,
            published_at = CASE WHEN id = ? THEN ? ELSE published_at END,
            rolled_back_at = CASE WHEN id = ? THEN NULL WHEN status IN ('released', 'canary') THEN ? ELSE rolled_back_at END
        WHERE agent_id = ? AND user_id = ?`,
-    ).run(versionId, versionId, versionId, now, versionId, now, agentId, userId);
-    await this.databaseService.connection.prepare(
-      `UPDATE agents SET published = 1, api_enabled = 1, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    ).run(now, agentId, userId);
-    return {
-      agent: restored,
-      version: this.mapAgentVersion(await this.getVersionRow(userId, agentId, versionId)),
-    };
+        )
+        .run(versionId, versionId, versionId, now, versionId, now, agentId, userId);
+      await this.databaseService.connection
+        .prepare(
+          `UPDATE agents SET published = 1, api_enabled = 1, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+        )
+        .run(now, agentId, userId);
+      return {
+        agent: await this.getById(userId, agentId),
+        version: this.mapAgentVersion(await this.getVersionRow(userId, agentId, versionId)),
+      };
+    });
   }
 
   async createTestSuite(userId: string, agentId: string, dto: CreateAgentTestSuiteDto): Promise<Record<string, unknown>> {
@@ -3314,6 +3568,7 @@ export class AgentsService {
     ).run(runId, suiteId, suite.agentId, userId, now);
 
     const results: Array<Record<string, unknown>> = [];
+    try {
     for (const testCase of cases) {
       const run = await this.run(userId, suite.agentId, { input: String(testCase.input) });
       const evaluation = await this.evaluateRun(userId, run.id, {
@@ -3323,6 +3578,11 @@ export class AgentsService {
         mode: options.evaluationMode ?? 'hybrid',
       });
       results.push({ caseId: testCase.id, runId: run.id, status: run.status, score: evaluation.score, grade: evaluation.grade, summary: evaluation.summary });
+    }
+    } catch (error) {
+      const summary = { total: cases.length, completed: results.length, error: this.errorMessage(error) };
+      await this.databaseService.connection.prepare("UPDATE agent_test_runs SET status = 'failed', summary_json = ?, case_results_json = ?, completed_at = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(summary), JSON.stringify(results), this.databaseService.now(), runId, userId);
+      return { id: runId, suiteId, agentId: suite.agentId, status: 'failed', summary, caseResults: results, createdAt: now, completedAt: this.databaseService.now() };
     }
     const averageScore = results.reduce((sum, item) => sum + Number(item.score ?? 0), 0) / results.length;
     const summary = {
@@ -3375,30 +3635,27 @@ export class AgentsService {
     skillNames: string[];
     memoryEnabled: boolean;
   } {
-    const raw = content.match(/```json\s*([\s\S]*?)```/i)?.[1] ?? content;
+    if (!content.trim()) throw new BadRequestException('AI 未返回配置正文，请重试');
+    const raw = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? content;
     try {
       const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
+      if (!parsed || Array.isArray(parsed) || typeof parsed.name !== 'string' || !parsed.name.trim()
+        || typeof parsed.systemPrompt !== 'string' || !parsed.systemPrompt.trim()) throw new Error('Missing generated configuration');
+      const temperature = Number(parsed.temperature ?? 0.4);
+      const maxTokens = Number(parsed.maxTokens ?? 2048);
+      if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2 || !Number.isInteger(maxTokens) || maxTokens < 1) throw new Error('Invalid generated parameters');
       return {
         name: String(parsed.name || '自动生成 Agent').slice(0, 80),
         description: String(parsed.description || requirement).slice(0, 500),
         systemPrompt: String(parsed.systemPrompt || `你是为以下需求创建的任务型 Agent:\n${requirement}`).slice(0, 12000),
-        temperature: Number(parsed.temperature ?? 0.4),
-        maxTokens: Number(parsed.maxTokens ?? 2048),
+        temperature,
+        maxTokens,
         toolNames: Array.isArray(parsed.toolNames) ? parsed.toolNames.map(String) : [],
         skillNames: Array.isArray(parsed.skillNames) ? parsed.skillNames.map(String) : [],
         memoryEnabled: parsed.memoryEnabled !== false,
       };
     } catch {
-      return {
-        name: '自动生成 Agent',
-        description: requirement.slice(0, 500),
-        systemPrompt: `你是一个根据用户需求自动生成的任务型 Agent。\n需求:\n${requirement}\n请主动规划步骤、使用可用工具和知识，并输出可执行结果。`,
-        temperature: 0.4,
-        maxTokens: 2048,
-        toolNames: ['calculator', 'text_stats', 'current_time'],
-        skillNames: ['Workflow Orchestrator'],
-        memoryEnabled: true,
-      };
+      throw new BadRequestException('AI 返回的 Agent 配置无效，请重试');
     }
   }
 
@@ -3499,6 +3756,7 @@ export class AgentsService {
   private async collectCompletionStream(
     request: ChatCompletionRequest,
     onDelta: (delta: string, output: string) => void,
+    strict = false,
   ): Promise<string> {
     const upstream = await this.createAgentChatCompletionStream(request);
     const reader = upstream.body?.getReader();
@@ -3507,6 +3765,14 @@ export class AgentsService {
     const decoder = new TextDecoder();
     let buffer = '';
     let output = '';
+    let completed = false;
+    let finishReason = '';
+    let streamError = '';
+    let timedOut = false;
+    const timer = strict ? setTimeout(() => {
+      timedOut = true;
+      void reader.cancel().catch(() => {});
+    }, 120_000) : null;
 
     const consumeEvent = (rawEvent: string) => {
       const dataLines = rawEvent
@@ -3514,9 +3780,13 @@ export class AgentsService {
         .filter((line) => line.startsWith('data:'))
         .map((line) => line.slice('data:'.length).trim());
       for (const data of dataLines) {
-        if (!data || data === '[DONE]') continue;
+        if (!data) continue;
+        if (data === '[DONE]') { completed = true; continue; }
         try {
-          const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+          const json = JSON.parse(data) as { error?: { message?: string }; choices?: Array<{ finish_reason?: string; delta?: { content?: string } }> };
+          if (json.choices?.[0]?.finish_reason) finishReason = json.choices[0].finish_reason;
+          if (json.error) streamError = json.error.message || '模型流式请求失败';
+          if (finishReason === 'error') streamError = json.choices?.[0]?.delta?.content || '模型流式请求失败';
           const delta = json.choices?.[0]?.delta?.content ?? '';
           if (delta) {
             output += delta;
@@ -3538,8 +3808,15 @@ export class AgentsService {
         for (const event of events) consumeEvent(event);
       }
       if (buffer.trim()) consumeEvent(buffer);
+      if (strict) {
+        if (timedOut) throw new BadRequestException('AI 生成超时，请重试');
+        if (streamError) throw new BadRequestException(streamError);
+        if (finishReason === 'length') throw new BadRequestException('AI 配置输出被截断，请重试');
+        if (!completed && finishReason !== 'stop') throw new BadRequestException('AI 模型响应未正常结束，请重试');
+      }
       return output;
     } finally {
+      if (timer !== null) clearTimeout(timer);
       reader.releaseLock();
     }
   }
@@ -3759,6 +4036,7 @@ export class AgentsService {
     return {
       ...agent,
       toolIds: tools.map((tool) => tool.id),
+      toolPermissions: Object.fromEntries(tools.map(tool => [tool.id, tool.permissionLevel ?? 'auto'])),
       knowledgeBaseIds: knowledgeBases.map((kb) => kb.id),
       skillIds: skills.map((skill) => skill.id),
       workflowIds,
@@ -3860,7 +4138,8 @@ export class AgentsService {
        ORDER BY published_at DESC, version_number DESC`,
     ).all(agent.id, userId) as unknown as AgentVersionRow[];
     if (!rows.length) return agent;
-    const stable = rows.find((row) => row.status === 'released') ?? rows[0];
+    const stable = rows.find((row) => row.status === 'released');
+    if (!stable) throw new BadRequestException('灰度发布缺少稳定版本，请重新发布稳定版本');
     const canary = rows.find((row) => row.status === 'canary' && Number(row.trafficPercent ?? 0) > 0);
     const selected = canary && this.percentBucket(`${agent.id}:${seed}`) < Number(canary.trafficPercent ?? 0) ? canary : stable;
     return this.agentFromVersionSnapshot(agent, selected);
@@ -3870,6 +4149,10 @@ export class AgentsService {
     const snapshot = this.parseJsonRecord(version.snapshotJson) as Partial<AgentDefinition>;
     return {
       ...base,
+      runtimeBindings: snapshot.runtimeBindings,
+      frozenBindingIds: snapshot.runtimeBindings
+        ? undefined
+        : { toolIds: snapshot.toolIds ?? [], skillIds: snapshot.skillIds ?? [] },
       name: snapshot.name || base.name,
       description: snapshot.description ?? base.description,
       model: snapshot.model || base.model,
@@ -3878,7 +4161,9 @@ export class AgentsService {
       maxTokens: Number(snapshot.maxTokens ?? base.maxTokens),
       memoryEnabled: snapshot.memoryEnabled ?? base.memoryEnabled,
       toolIds: Array.isArray(snapshot.toolIds) ? snapshot.toolIds.map(String) : base.toolIds,
-      knowledgeBaseIds: Array.isArray(snapshot.knowledgeBaseIds) ? snapshot.knowledgeBaseIds.map(String) : base.knowledgeBaseIds,
+      knowledgeBaseIds: Array.isArray(snapshot.knowledgeBaseIds)
+        ? snapshot.knowledgeBaseIds.map(String)
+        : base.knowledgeBaseIds,
       skillIds: Array.isArray(snapshot.skillIds) ? snapshot.skillIds.map(String) : base.skillIds,
       workflowIds: Array.isArray(snapshot.workflowIds) ? snapshot.workflowIds.map(String) : base.workflowIds,
       subAgentIds: Array.isArray(snapshot.subAgentIds) ? snapshot.subAgentIds.map(String) : base.subAgentIds,

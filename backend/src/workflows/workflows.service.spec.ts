@@ -5,7 +5,7 @@ describe('workflow node adapters', () => {
   function runner(toolResult = { status: 'failed', error: 'tool failed', output: '' }) {
     const service = new WorkflowsService(
       {} as never,
-      {} as never,
+      { invokeWorkflowTool: jest.fn(async () => toolResult) } as never,
       { invoke: jest.fn(async () => toolResult) } as never,
       {} as never,
       {} as never,

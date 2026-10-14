@@ -21,6 +21,9 @@ import { abortable } from './abortable';
 
 export interface RuntimeOptions {
   runtimeAgentId?: string;
+  runtimeAgentSnapshot?: import('../../agents/agents.service').AgentDefinition;
+  approvedToolIds?: string[];
+  publicInvocation?: boolean;
   skipWorkflowAgentIds?: string[];
   schemaVersion?: 1 | 2;
   signal?: AbortSignal;
@@ -422,7 +425,7 @@ export function nextFor(node: WorkflowNodeDto, input: string, output: string): s
   if (node.type === 'question_classifier' || ['question_classifier', 'multi_branch'].includes(kind)) {
     const branch = String((JSON.parse(output) as { branch: string }).branch);
     const branches = Array.isArray(config.branches) ? (config.branches as Record<string, unknown>[]) : [];
-    const selected = branches.find((b) => String(b.name || b.id) === branch);
+    const selected = branches.find((b) => String(b.id || b.name) === branch) ?? branches.find((b) => String(b.name) === branch);
     const ids = selected?.nextIds || config.defaultNextIds;
     return Array.isArray(ids) ? ids.map(String) : [];
   }

@@ -130,26 +130,30 @@ export class SkillsService {
               s.enabled, s.created_at as createdAt, s.updated_at as updatedAt, 0 as bindingCount
        FROM agent_skill_bindings b
        JOIN agent_skills s ON s.id = b.skill_id
-       WHERE b.user_id = ? AND b.agent_id = ? AND s.enabled = 1
+       WHERE b.user_id = ? AND b.agent_id = ?
        ORDER BY s.category ASC, s.name ASC`,
     ).all(userId, agentId) as unknown as SkillRow[];
     return rows.map((row) => this.mapSkill(row));
   }
 
   async setAgentSkills(userId: string, agentId: string, skillIds: string[]): Promise<void> {
-    await this.assertAgentOwnedByUser(userId, agentId);
+    return this.databaseService.transaction(async () => {
+      await this.assertAgentOwnedByUser(userId, agentId);
 
-    await this.databaseService.connection.prepare(
-      'DELETE FROM agent_skill_bindings WHERE user_id = ? AND agent_id = ?',
-    ).run(userId, agentId);
+      const uniqueIds = Array.from(new Set(skillIds.filter(Boolean)));
+      for (const skillId of uniqueIds) await this.getById(userId, skillId);
+      await this.databaseService.connection
+        .prepare('DELETE FROM agent_skill_bindings WHERE user_id = ? AND agent_id = ?')
+        .run(userId, agentId);
 
-    const uniqueIds = Array.from(new Set(skillIds.filter(Boolean)));
-    for (const skillId of uniqueIds) {
-      await this.getById(userId, skillId);
-      await this.databaseService.connection.prepare(
-        'INSERT INTO agent_skill_bindings (agent_id, skill_id, user_id, created_at) VALUES (?, ?, ?, ?)',
-      ).run(agentId, skillId, userId, this.databaseService.now());
-    }
+      for (const skillId of uniqueIds) {
+        await this.databaseService.connection
+          .prepare(
+            'INSERT INTO agent_skill_bindings (agent_id, skill_id, user_id, created_at) VALUES (?, ?, ?, ?)',
+          )
+          .run(agentId, skillId, userId, this.databaseService.now());
+      }
+    });
   }
 
   async bindAgentSkill(userId: string, agentId: string, skillId: string): Promise<void> {
@@ -183,7 +187,7 @@ export class SkillsService {
       dto.exampleInput?.trim() ?? current.exampleInput,
       dto.exampleOutput?.trim() ?? current.exampleOutput,
       dto.riskLevel ?? current.riskLevel,
-      dto.enabled === false ? 0 : 1,
+      (dto.enabled ?? current.enabled) ? 1 : 0,
       now,
       skillId,
       userId,

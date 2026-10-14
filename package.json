@@ -7,6 +7,10 @@
     "deployment-agent"
   ],
   "scripts": {
+    "deploy:init": "node scripts/init-deployment.cjs",
+    "deploy": "node scripts/deploy.cjs",
+    "deploy:dev": "node scripts/deploy.cjs --dev",
+    "test:deployment": "node --test scripts/init-deployment.test.cjs",
     "dev:backend": "npm --prefix backend run start:dev",
     "build:backend": "npm --prefix backend run build",
     "dev:frontend": "npm --prefix frontend run dev",

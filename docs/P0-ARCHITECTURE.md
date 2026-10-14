@@ -105,15 +105,17 @@ node scripts/reindex-knowledge.cjs USER_ID KB_ID
 
 新增固定依赖：@langchain/langgraph-checkpoint 1.1.0、@qdrant/js-client-rest 1.15.1；保留现有 LangGraph 1.3.6。开发依赖 typescript-eslint 8.71.1，补齐原先缺失的 ESLint 9 flat config；新模块使用 recommended 规则，旧代码不强制无关风格重写。Jest 对 uuid ESM 转译，以运行真实 LangGraph，而非 mock 图。
 
-配置模板见 backend/.env.example、.env.docker.example、根 .env.example。重点配置：WORKFLOW_ENGINE、CHECKPOINT_ENCRYPTION_KEY、WORKFLOW_AUTO_RECOVER、WORKFLOW_*CONCURRENCY/TIMEOUT_MS/MAX_STEPS/MAX_NODE_BYTES、NATIVE_RAG_BACKEND、QDRANT_URL/API_KEY、EMBEDDING_PROVIDER_NAME/BASE_URL/API_KEY/MODEL/DIMENSIONS/REVISION/BATCH_SIZE/CONCURRENCY/TIMEOUT_MS/RETRIES。
+Docker 配置模板见根 .env.example（.env.docker.example 保留兼容模板）；本地后端模板见 backend/.env.example。初始化脚本创建 Git 忽略的根 .env，为 QDRANT_API_KEY 生成 32 字节随机值，已有有效密钥后续复用。Compose 中 Qdrant 与 NestJS 使用同一变量；旧 .env.docker 可由初始化脚本迁移并保留有效密钥。重点配置：WORKFLOW_ENGINE、CHECKPOINT_ENCRYPTION_KEY、WORKFLOW_AUTO_RECOVER、WORKFLOW_*CONCURRENCY/TIMEOUT_MS/MAX_STEPS/MAX_NODE_BYTES、NATIVE_RAG_BACKEND、QDRANT_URL/API_KEY、EMBEDDING_PROVIDER_NAME/BASE_URL/API_KEY/MODEL/DIMENSIONS/REVISION/BATCH_SIZE/CONCURRENCY/TIMEOUT_MS/RETRIES。
 
 ```sh
-# 填入实际密钥和 embedding 配置，不使用模板占位值上线。
-cp .env.docker.example .env.docker
-docker compose --env-file .env.docker up -d
+# 首次初始化，后续复用 .env 中的 Qdrant 密钥；再补齐其他密钥和 Embedding 配置。
+docker run --rm --mount "type=bind,source=${PWD},target=/workspace" -w /workspace node:22-alpine node scripts/init-deployment.cjs
+docker compose --env-file .env up -d
 # 生产
-docker compose --env-file .env.docker -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env -f docker-compose.prod.yml up -d --build
 ```
+
+已有 Node.js 22+ 时，`npm run deploy` / `npm run deploy:dev` 会在 Compose 启动前自动执行幂等初始化。两套 Compose 均包含 phpMyAdmin，默认入口 http://localhost:8080，仅绑定 127.0.0.1，可通过 PHPMYADMIN_PORT 修改；使用 MySQL 凭证手动登录，不复用应用账号。MySQL 健康检查读取容器内的 MYSQL_ROOT_PASSWORD。
 
 启动 DatabaseService 在现有迁移之后执行新增 additive migration；只有 duplicate-column 错误被忽略，其他迁移失败会终止启动。新表使用 InnoDB，不依赖 Redis 缓存持久化。部署前备份 MySQL，保留 Qdrant volume，并核验 MySQL 的日志刷盘/备份策略。
 
@@ -128,10 +130,9 @@ npm --prefix backend run typecheck
 npm --prefix backend test -- --runInBand
 npm run build:backend
 npm run build:frontend
-docker compose -p llmgather-p0-test -f docker-compose.p0-test.yml --profile embedding up -d --wait
 ```
 
-设置 MYSQL_HOST=127.0.0.1、MYSQL_PORT=13308、MYSQL_PASSWORD=p0-integration-only、MYSQL_DATABASE=p0_test_compose、QDRANT_URL=http://127.0.0.1:16334、QDRANT_API_KEY=p0-integration-only、EMBEDDING_BASE_URL=http://127.0.0.1:18081/v1、EMBEDDING_MODEL=BAAI/bge-small-en-v1.5、EMBEDDING_DIMENSIONS=384，然后运行 `npm --prefix backend run test:p0:integration`。这个英文小模型仅用于可复现测试，不是中文业务默认选型。首次需下载模型。
+P0 临时测试 Compose 已移除，日常启动仅使用开发或生产配置。需要运行 `npm --prefix backend run test:p0:integration` 时，请准备独立测试 MySQL、Qdrant 和 Embedding 服务，并按实际地址配置 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_PASSWORD`、`MYSQL_DATABASE`、`QDRANT_URL`、`QDRANT_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`；不要连接业务数据库。测试数据库名称必须以 `p0_test` 开头，Embedding 维度必须与所用模型一致。
 
 集成脚本仅接受 p0_test 开头数据库。覆盖独立进程恢复、SIGKILL、并发/重复恢复、外部副作用账本、取消、Qdrant 隔离/维度、真实模型、302 Chunk 迁移、失败批次恢复、旧数据保留、旧于最新 300 条的语义命中与三种检索模式。模型未配置时明确 SKIP 对应 E2E，不伪称通过。
 
@@ -145,3 +146,7 @@ docker compose -p llmgather-p0-test -f docker-compose.p0-test.yml --profile embe
 6. 没有增加新的工作流可视化边编辑 UI；v2 分支字段通过版本化 JSON/API 提供，旧 Vue 编辑器不静默升级。
 
 官方接口参考：[Checkpointer](https://reference.langchain.com/javascript/langchain-langgraph-checkpoint)、[LangGraph 持久化](https://docs.langchain.com/oss/javascript/langgraph/persistence)、[Qdrant 安全](https://qdrant.tech/documentation/operations/security/)。
+
+## 长期记忆部署更新
+
+LangGraph 保持 NestJS 内嵌执行；长期记忆改为 MySQL 主存储与可选 Qdrant 派生索引，不再默认部署独立 Memory Server。采用同一记忆行内的版本化持久 dirty 标记、租约、重试与版本校验，不依赖现有数据库适配器的手动事务方法。详情见 [记忆架构](MEMORY-ARCHITECTURE.md)。

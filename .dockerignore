@@ -7,6 +7,9 @@ dist
 .claude/*
 !.claude/settings.json
 .env
+.env.docker
+.env.init.lock
+.env.init-*.tmp
 .env.local
 *.sql
 *.db

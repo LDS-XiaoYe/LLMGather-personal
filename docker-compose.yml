@@ -1,5 +1,5 @@
 # LLM Gather — 开发环境（热重载）
-# 启动: docker compose up -d
+# 初始化并启动: npm run deploy:dev
 # 停止: docker compose down
 # 查看日志: docker compose logs -f
 
@@ -16,11 +16,26 @@ services:
     ports:
       - "${MYSQL_DEV_PORT:-3307}:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pllmgather123"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$${MYSQL_ROOT_PASSWORD}\""]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 30s
+    networks:
+      - llmgather-dev-net
+
+  phpmyadmin:
+    image: phpmyadmin:5.2.3-apache
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: "3306"
+      PMA_ARBITRARY: "0"
+    ports:
+      - "127.0.0.1:${PHPMYADMIN_PORT:-8080}:80"
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - llmgather-dev-net
 
@@ -41,26 +56,13 @@ services:
     networks:
       - llmgather-dev-net
 
-  langgraph-memory:
-    image: node:22-alpine
-    container_name: llmgather-langgraph-memory-dev
-    working_dir: /app/langgraph
-    command: sh -c "npm ci && npm run dev"
-    volumes:
-      - ./langgraph:/app/langgraph
-      - langgraph_node_modules_dev:/app/langgraph/node_modules
-    environment:
-      - LANGGRAPH_ALLOW_BLOCKING=true
-    ports:
-      - "${LANGGRAPH_MEMORY_DEV_PORT:-2024}:2024"
-    networks:
-      - llmgather-dev-net
-
   qdrant:
     image: qdrant/qdrant:v1.15.5@sha256:0fb8897412abc81d1c0430a899b9a81eb8328aa634e7242d1bc804c1fe8fe863
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
     environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Run deployment initialization to generate QDRANT_API_KEY in .env}
     volumes:
       - qdrant_dev_data:/qdrant/storage
     healthcheck:
@@ -72,6 +74,32 @@ services:
     networks:
       - llmgather-dev-net
 
+  # Default CPU deployment node; credentials are generated once in a private volume.
+  model-agent:
+    build:
+      context: .
+      dockerfile: deployment-agent/Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENT_DATA_DIR: /state
+      AGENT_BOOTSTRAP_DIR: /bootstrap
+      AGENT_HOST: 0.0.0.0
+      AGENT_PORT: "19090"
+      AGENT_CACHE_VOLUME: llmgather_model_cache
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - model_agent_state:/state
+      - model_agent_bootstrap:/bootstrap
+      - model_cache:/state/cache
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.cjs"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - model-agent-net
+
   backend:
     image: node:22-alpine
     container_name: llmgather-backend-dev
@@ -82,26 +110,36 @@ services:
     volumes:
       - .:/app
       - node_modules_dev:/app/node_modules
+      - model_agent_bootstrap:/run/llmgather-model-agent:ro
     env_file:
-      - ${LLMGATHER_ENV_FILE:-.env.docker}
+      - ${LLMGATHER_ENV_FILE:-.env}
     environment:
+      - MODEL_AGENT_BOOTSTRAP_FILE=/run/llmgather-model-agent/agent.json
       - MYSQL_HOST=db
+      - MYSQL_PORT=3306
       - NODE_ENV=development
       - CODE_RUNNER_URL=http://code-runner:8787/run
       - REDIS_URL=redis://redis:6379
       - QDRANT_URL=http://qdrant:6333
-      - MEMORY_PROVIDER=langgraph
-      - LANGGRAPH_MEMORY_URL=http://langgraph-memory:2024
+      - QDRANT_API_KEY=${QDRANT_API_KEY:?Run deployment initialization to generate QDRANT_API_KEY in .env}
+    # NestJS only binds HTTP after schema, settings seed, validation and cache loading succeed.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/v1/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
     depends_on:
+      model-agent:
+        condition: service_healthy
       qdrant:
         condition: service_healthy
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-      langgraph-memory:
-        condition: service_started
     networks:
+      - model-agent-net
       - llmgather-dev-net
 
   code-runner:
@@ -132,17 +170,23 @@ services:
       - VITE_API_TARGET=http://backend:3000
       - VITE_PORT=5173
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - llmgather-dev-net
 
 networks:
+  model-agent-net:
+    driver: bridge
   llmgather-dev-net:
     driver: bridge
 
 volumes:
+  model_agent_state:
+  model_agent_bootstrap:
+  model_cache:
+    name: llmgather_model_cache
   qdrant_dev_data:
   mysql_dev_data:
   redis_dev_data:
-  langgraph_node_modules_dev:
   node_modules_dev:

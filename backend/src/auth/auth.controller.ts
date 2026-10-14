@@ -7,10 +7,12 @@ import { LoginDto, RegisterDto, SendVerificationCodeDto, TopUpDto } from './dto'
 import { CurrentUser } from './current-user.decorator';
 import { AuthenticatedRequestUser } from './auth.types';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { AdminGuard } from '../common/guards/admin.guard';
 import { VerificationCodeService } from './verification-code.service';
+import { REMEMBER_LOGIN_SECONDS } from './jwt.service';
+import { loginToken } from './login-session';
 
 const COOKIE_NAME = 'token';
-const COOKIE_MAX_AGE = Number(process.env.JWT_EXPIRES_SECONDS || 7 * 24 * 3600) * 1000;
 
 @Controller('auth')
 export class AuthController {
@@ -41,7 +43,7 @@ export class AuthController {
   @UseGuards(SettingsThrottleGuard)
   async login(@Body() payload: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.login(payload, this.ip(req), req.header('user-agent') || '');
-    this.setTokenCookie(res, result.accessToken);
+    this.setTokenCookie(res, result.accessToken, payload.rememberMe === true);
     return result;
   }
 
@@ -52,14 +54,15 @@ export class AuthController {
   }
 
   @Post('topup')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   topUp(@CurrentUser() user: AuthenticatedRequestUser, @Body() payload: TopUpDto) {
     return this.authService.topUp(user.id, payload);
   }
 
   @Post('logout')
-  @UseGuards(JwtAuthGuard)
-  logout(@Res({ passthrough: true }) res: Response) {
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    // Idempotent: expired/missing credentials must not prevent clearing the cookie.
+    await this.authService.logout(loginToken(req));
     res.clearCookie(COOKIE_NAME, { path: '/v1' });
     return { ok: true };
   }
@@ -71,13 +74,13 @@ export class AuthController {
     return { invitationCode: code };
   }
 
-  private setTokenCookie(res: Response, token: string): void {
+  private setTokenCookie(res: Response, token: string, rememberMe = false): void {
     const isProd = process.env.NODE_ENV === 'production';
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
       secure: isProd,
       sameSite: isProd ? 'strict' : 'lax',
-      maxAge: COOKIE_MAX_AGE,
+      ...(rememberMe ? { maxAge: REMEMBER_LOGIN_SECONDS * 1000 } : {}),
       path: '/v1',
     });
   }

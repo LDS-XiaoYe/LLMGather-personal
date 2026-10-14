@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { DatabaseService, dbNow } from '../database/database.service';
 import { ApiKeyPool, ApiKeyPoolInput, ApiKeyPoolOptions, ApiKeyPoolSnapshot, ApiKeyPoolStrategy } from './api-key-pool';
 import { parseKeysFromEnv } from './openai-compatible.provider';
@@ -227,6 +227,7 @@ export class ProviderApiKeyStore implements OnModuleInit {
     const db = this.databaseService.connection;
     const id = randomUUID();
     const trimmedKey = apiKey.trim();
+    if (!trimmedKey) throw new BadRequestException('API Key 不能为空');
     const keyPrefix = maskApiKey(trimmedKey);
     const now = dbNow();
 
@@ -336,6 +337,7 @@ export class ProviderApiKeyStore implements OnModuleInit {
   }
 
   async createConfig(input: ProviderConfigInput): Promise<ProviderConfig> {
+    this.validateConfig(input);
     const db = this.databaseService.connection;
     const id = randomUUID();
     const now = dbNow();
@@ -367,7 +369,7 @@ export class ProviderApiKeyStore implements OnModuleInit {
 
   async updateConfig(
     id: string,
-    input: Partial<ProviderConfigInput>,
+    input: Partial<ProviderConfigInput> & { expectedUpdatedAt?: string },
   ): Promise<ProviderConfig> {
     const db = this.databaseService.connection;
     const now = dbNow();
@@ -377,6 +379,8 @@ export class ProviderApiKeyStore implements OnModuleInit {
       .get(id)) as Record<string, unknown> | undefined;
 
     if (!existing) throw new Error(`ProviderConfig not found: ${id}`);
+    if (input.providerName !== undefined && input.providerName !== existing.provider_name) throw new BadRequestException('供应商标识创建后不可修改，请新增供应商');
+    this.validateConfig({ ...existing, ...input } as Partial<ProviderConfigInput>);
 
     const fields: string[] = [];
     const params: (string | number | null)[] = [];
@@ -422,9 +426,9 @@ export class ProviderApiKeyStore implements OnModuleInit {
       fields.push('updated_at = ?');
       params.push(now);
       params.push(id);
-      await db
-        .prepare(`UPDATE provider_configs SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params);
+      if (input.expectedUpdatedAt !== undefined) params.push(dbNow(new Date(input.expectedUpdatedAt)));
+      const result = await db.prepare(`UPDATE provider_configs SET ${fields.join(', ')} WHERE id = ?${input.expectedUpdatedAt === undefined ? '' : ' AND updated_at = ?'}`).run(...params);
+      if (!result.changes) throw new ConflictException('供应商配置已变化，请刷新后重新编辑');
     }
 
     return (await this.getConfig(
@@ -432,7 +436,7 @@ export class ProviderApiKeyStore implements OnModuleInit {
     ))!;
   }
 
-  async toggleEnabled(id: string, enabled: boolean): Promise<ProviderConfig> {
+  async toggleEnabled(id: string, enabled: boolean, expectedUpdatedAt?: string): Promise<ProviderConfig> {
     const db = this.databaseService.connection;
     const now = dbNow();
 
@@ -442,15 +446,16 @@ export class ProviderApiKeyStore implements OnModuleInit {
 
     if (!existing) throw new Error(`ProviderConfig not found: ${id}`);
 
-    await db
+    const changed = await db
       .prepare(
-        'UPDATE provider_configs SET enabled = ?, updated_at = ? WHERE id = ?',
+        'UPDATE provider_configs SET enabled = ?, updated_at = ? WHERE id = ?' + (expectedUpdatedAt === undefined ? '' : ' AND updated_at = ?'),
       )
-      .run(enabled ? 1 : 0, now, id);
+      .run(enabled ? 1 : 0, now, id, ...(expectedUpdatedAt === undefined ? [] : [dbNow(new Date(expectedUpdatedAt))]));
+    if (!changed.changes) throw new ConflictException('供应商状态已变化，请刷新后重试');
 
     if (enabled) {
       await this.reloadPool(existing.provider_name);
-    }
+    } else this.pools.delete(existing.provider_name);
 
     return (await this.getConfig(existing.provider_name))!;
   }
@@ -464,11 +469,11 @@ export class ProviderApiKeyStore implements OnModuleInit {
 
     if (!existing) throw new Error(`ProviderConfig not found: ${id}`);
 
-    // Delete associated keys and config
-    await db
-      .prepare('DELETE FROM provider_api_keys WHERE provider_name = ?')
-      .run(existing.provider_name);
-    await db.prepare('DELETE FROM provider_configs WHERE id = ?').run(id);
+    await this.databaseService.transaction(async tx => {
+      await tx.prepare('SELECT id FROM provider_configs WHERE id=? FOR UPDATE').get(id);
+      await tx.prepare('DELETE FROM provider_api_keys WHERE provider_name=?').run(existing.provider_name);
+      await tx.prepare('DELETE FROM provider_configs WHERE id=?').run(id);
+    });
 
     this.pools.delete(existing.provider_name);
 
@@ -476,6 +481,16 @@ export class ProviderApiKeyStore implements OnModuleInit {
   }
 
   /** Count keys for a given provider (for admin UI display). */
+  private validateConfig(input: Partial<ProviderConfigInput>): void {
+    if (input.baseUrl !== undefined) {
+      let url: URL;
+      try { url = new URL(input.baseUrl); } catch { throw new BadRequestException('供应商地址格式无效'); }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash || url.search) throw new BadRequestException('供应商地址仅支持不含凭证和查询参数的 HTTP(S) URL');
+    }
+    if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 100 || input.timeoutMs > 300000)) throw new BadRequestException('请求超时时间无效');
+    if (input.retryCount !== undefined && (!Number.isInteger(input.retryCount) || input.retryCount < 0 || input.retryCount > 5)) throw new BadRequestException('重试次数无效');
+  }
+
   async keyCount(providerName: string): Promise<number> {
     const db = this.databaseService.connection;
     const { count } = (await db

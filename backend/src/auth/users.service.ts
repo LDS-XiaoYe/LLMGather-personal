@@ -21,8 +21,8 @@ export class UsersService {
     const db = this.databaseService.connection;
     const now = this.databaseService.now();
     const existing = await db.prepare(
-      'SELECT id FROM system_settings WHERE `key` = ?',
-    ).get('invitation_credits') as { id: string } | undefined;
+      'SELECT `key` FROM system_settings WHERE `key` = ?',
+    ).get('invitation_credits') as { key: string } | undefined;
 
     if (existing) {
       await db.prepare(
@@ -30,8 +30,8 @@ export class UsersService {
       ).run(String(value), '邀请奖励余额', now, 'invitation_credits');
     } else {
       await db.prepare(
-        'INSERT INTO system_settings (`key`, value, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      ).run('invitation_credits', String(value), '邀请奖励余额', now, now);
+        'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?)',
+      ).run('invitation_credits', String(value), '邀请奖励余额', now);
     }
   }
 
@@ -132,7 +132,7 @@ export class UsersService {
     const username = usernameRaw.trim().toLowerCase();
     const db = this.databaseService.connection;
     const row = await db.prepare(
-      'SELECT id, username, email, email_verified as emailVerified, role, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE username = ?',
+      'SELECT id, username, email, email_verified as emailVerified, role, auth_version as authVersion, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE username = ?',
     ).get(username) as unknown as StoredUser | undefined;
 
     if (!row) return null;
@@ -142,7 +142,7 @@ export class UsersService {
   async getById(userId: string): Promise<StoredUser> {
     const db = this.databaseService.connection;
     const user = await db.prepare(
-      'SELECT id, username, email, email_verified as emailVerified, role, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE id = ?',
+      'SELECT id, username, email, email_verified as emailVerified, role, auth_version as authVersion, password_hash as passwordHash, salt, credits, total_spent as totalSpent, created_at as createdAt FROM users WHERE id = ?',
     ).get(userId) as unknown as StoredUser | undefined;
 
     if (!user) {
@@ -183,19 +183,15 @@ export class UsersService {
     const salt = randomBytes(16).toString('hex');
     const passwordHash = this.hashPassword(newPassword, salt);
     await this.databaseService.connection
-      .prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?')
+      .prepare('UPDATE users SET password_hash = ?, salt = ?, auth_version = auth_version + 1 WHERE id = ?')
       .run(passwordHash, salt, userId);
   }
 
   async topUpCredits(userId: string, amount: number): Promise<AuthUser> {
-    const user = await this.getById(userId);
-    user.credits = Number((Number(user.credits) + amount).toFixed(6));
-
     await this.databaseService.connection
-      .prepare('UPDATE users SET credits = ? WHERE id = ?')
-      .run(user.credits, userId);
-
-    return this.toPublicUser(user);
+      .prepare('UPDATE users SET credits = credits + ? WHERE id = ?')
+      .run(Number(amount.toFixed(6)), userId);
+    return this.getPublicById(userId);
   }
 
   private async awardInvitationCredits(userId: string): Promise<void> {

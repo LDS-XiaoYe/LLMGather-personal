@@ -5,6 +5,9 @@ import { JwtService } from './jwt.service';
 import { UsersService } from './users.service';
 import { VerificationCodeService } from './verification-code.service';
 import { RiskService } from '../security/risk.service';
+import { randomUUID } from 'crypto';
+import { DatabaseService } from '../database/database.service';
+import { tokenHash } from './login-session';
 
 @Injectable()
 export class AuthService {
@@ -13,6 +16,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly riskService: RiskService,
+    private readonly database: DatabaseService,
   ) {}
 
   async register(payload: RegisterDto, ip = 'unknown', userAgent = ''): Promise<{ accessToken: string; user: AuthUser }> {
@@ -44,7 +48,7 @@ export class AuthService {
     }
     const user = await this.usersService.createUser(payload.username, payload.password, payload.email, invitedBy);
     await this.riskService.clearFailures(ip);
-    const accessToken = this.jwtService.sign(user.id, user.username, user.role);
+    const accessToken = await this.issueSession(user);
     return { accessToken, user };
   }
 
@@ -65,12 +69,31 @@ export class AuthService {
     }
 
     await this.riskService.clearFailures(ip);
-    const accessToken = this.jwtService.sign(user.id, user.username, user.role);
+    const accessToken = await this.issueSession(user, payload.rememberMe === true, Number(user.authVersion ?? 0));
     return { accessToken, user: await this.usersService.getPublicById(user.id) };
   }
 
   async me(userId: string): Promise<AuthUser> {
     return this.usersService.getPublicById(userId);
+  }
+
+  private async issueSession(user: AuthUser, rememberMe = false, version = 0): Promise<string> {
+    const id = randomUUID();
+    const token = this.jwtService.sign(user.id, user.username, user.role, version, { rememberMe, sessionId: id });
+    const expiresAt = this.jwtService.verify(token).exp * 1000;
+    await this.database.connection.prepare('DELETE FROM auth_login_sessions WHERE expires_at <= ? LIMIT 1000').run(Date.now());
+    await this.database.connection.prepare('INSERT INTO auth_login_sessions (id,user_id,token_hash,expires_at) VALUES (?,?,?,?)').run(id, user.id, tokenHash(token), expiresAt);
+    return token;
+  }
+
+  async logout(token: string): Promise<void> {
+    if (!token) return;
+    let payload;
+    try { payload = this.jwtService.verify(token); }
+    catch (error) { if (error instanceof UnauthorizedException) return; throw error; }
+    if (payload.sessionId) {
+      await this.database.connection.prepare('DELETE FROM auth_login_sessions WHERE id=? AND token_hash=?').run(payload.sessionId, tokenHash(token));
+    }
   }
 
   async topUp(userId: string, payload: TopUpDto): Promise<AuthUser> {

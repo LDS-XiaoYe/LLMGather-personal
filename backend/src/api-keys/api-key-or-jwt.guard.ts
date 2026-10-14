@@ -2,20 +2,20 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { JwtService } from '../auth/jwt.service';
 import { Request } from 'express';
 import { ApiKeysService } from './api-keys.service';
+import { DatabaseService } from '../database/database.service';
+import { loginToken, verifyLoginSession } from '../auth/login-session';
 
 @Injectable()
 export class ApiKeyOrJwtGuard implements CanActivate {
   constructor(
     private readonly apiKeysService: ApiKeysService,
     private readonly jwtService: JwtService,
+    private readonly database: DatabaseService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
-    const authHeader = request.headers.authorization || '';
-
-    // Bearer token
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const token = loginToken(request);
 
     // 1) sk-xxx → API Key 认证
     if (token.startsWith('sk-')) {
@@ -28,8 +28,7 @@ export class ApiKeyOrJwtGuard implements CanActivate {
     // 2) JWT token → JWT 认证
     if (token) {
       try {
-        const payload = this.jwtService.verify(token);
-        (request as any).user = { id: payload.sub, username: payload.username, role: payload.role || 'user' };
+        (request as any).user = await verifyLoginSession(this.jwtService, this.database, token);
         return true;
       } catch {
         throw new UnauthorizedException('Token 无效或已过期');

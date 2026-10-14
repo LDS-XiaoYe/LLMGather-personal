@@ -47,6 +47,10 @@ export class RegisterDto {
 }
 
 export class LoginDto {
+  @IsOptional()
+  @IsBoolean()
+  rememberMe?: boolean;
+
   @IsString()
   @MaxLength(64)
   username!: string;

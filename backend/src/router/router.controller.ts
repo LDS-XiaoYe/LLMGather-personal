@@ -11,6 +11,9 @@ import { AgentsService } from '../agents/agents.service';
 import { RunAgentDto } from '../agents/dto/agent.dto';
 import { RouteDecision, RouterService } from './router.service';
 import { ProviderKeyAuditInfo } from '../providers/provider.types';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../common/guards/admin.guard';
+import { RouterRuleDto, DeleteRouterRuleDto } from '../admin/admin.dto';
 
 function flushSse(res: Response): void {
   (res as Response & { flush?: () => void }).flush?.();
@@ -73,18 +76,21 @@ export class RouterController {
   // ── Admin: CRUD router rules ──
 
   @Get('admin/rules')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   async getRulesRaw() {
     return { data: await this.routerService.getRulesRaw() };
   }
 
   @Post('admin/rules')
-  async saveRule(@Body() body: { intent: string; models: string[] }) {
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async saveRule(@Body() body: RouterRuleDto) {
     await this.routerService.updateRule(body.intent, body.models);
     return { ok: true };
   }
 
   @Post('admin/rules/delete')
-  async deleteRule(@Body() body: { intent: string }) {
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async deleteRule(@Body() body: DeleteRouterRuleDto) {
     await this.routerService.deleteRule(body.intent);
     return { ok: true };
   }

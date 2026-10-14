@@ -73,7 +73,7 @@ export class ApiKeysService {
     const row = await db.prepare(
       `SELECT ak.user_id as userId, COALESCE(u.username, '') as username, COALESCE(u.role, 'user') as role
        FROM api_keys ak
-       LEFT JOIN users u ON u.id = ak.user_id
+         JOIN users u ON u.id = ak.user_id
        WHERE ak.key_hash = ?`,
     ).get(keyHash) as { userId: string; username: string; role: string } | undefined;
     return row ?? null;

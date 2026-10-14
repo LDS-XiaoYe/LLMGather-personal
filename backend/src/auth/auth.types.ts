@@ -10,6 +10,8 @@ export interface AuthUser {
 }
 
 export interface AuthTokenPayload {
+  sessionId?: string;
+  version?: number;
   sub: string;
   username: string;
   role: string;
@@ -24,6 +26,7 @@ export interface AuthenticatedRequestUser {
 }
 
 export interface StoredUser {
+  authVersion?: number;
   id: string;
   username: string;
   email: string | null;

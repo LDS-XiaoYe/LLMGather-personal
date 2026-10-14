@@ -2,6 +2,8 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { AuthTokenPayload } from './auth.types';
 
+export const REMEMBER_LOGIN_SECONDS = 30 * 24 * 3600;
+
 function base64UrlEncode(input: string): string {
   return Buffer.from(input)
     .toString('base64')
@@ -19,16 +21,25 @@ function base64UrlDecode(input: string): string {
 @Injectable()
 export class JwtService {
   private readonly secret = process.env.JWT_SECRET || 'dev-jwt-secret-change-me';
-  private readonly expiresInSeconds = Number(process.env.JWT_EXPIRES_SECONDS || 7 * 24 * 3600);
+  readonly expiresInSeconds = (() => {
+    const value = Number(process.env.JWT_EXPIRES_SECONDS || 7 * 24 * 3600);
+    return Number.isSafeInteger(value) && value > 0 ? Math.min(value, REMEMBER_LOGIN_SECONDS) : 7 * 24 * 3600;
+  })();
 
-  sign(userId: string, username: string, role = 'user'): string {
+  constructor() {
+    if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || this.secret.length < 32 || this.secret === 'dev-jwt-secret-change-me')) throw new Error('Production JWT_SECRET must contain at least 32 characters');
+  }
+
+  sign(userId: string, username: string, role = 'user', version = 0, options: { rememberMe?: boolean; sessionId?: string } = {}): string {
     const now = Math.floor(Date.now() / 1000);
     const payload: AuthTokenPayload = {
       sub: userId,
+      version,
       username,
       role,
       iat: now,
-      exp: now + this.expiresInSeconds,
+      exp: now + (options.rememberMe === true ? REMEMBER_LOGIN_SECONDS : this.expiresInSeconds),
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     };
 
     const headerEncoded = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
@@ -60,6 +71,9 @@ export class JwtService {
     }
 
     const now = Math.floor(Date.now() / 1000);
+    if (!payload || typeof payload.sub !== 'string' || !payload.sub || typeof payload.username !== 'string' || !Number.isSafeInteger(payload.exp) || !Number.isSafeInteger(payload.iat) || payload.iat > now + 60) throw new UnauthorizedException('Invalid token payload');
+    if (payload.version !== undefined && (!Number.isSafeInteger(payload.version) || payload.version < 0)) throw new UnauthorizedException('Invalid token version');
+    if (payload.sessionId !== undefined && (typeof payload.sessionId !== 'string' || !/^[a-f0-9-]{36}$/.test(payload.sessionId))) throw new UnauthorizedException('Invalid token session');
     if (payload.exp <= now) {
       throw new UnauthorizedException('Token expired');
     }

@@ -7,6 +7,20 @@ export interface VectorChunk {
   documentId: string;
   userId: string;
 }
+export interface MemoryVectorPoint {
+  id: string;
+  userId: string;
+  agentId: string | null;
+  memoryType: string;
+  revision: string;
+  contentHash: string;
+}
+export interface MemoryVectorHit {
+  id: string;
+  score: number;
+  revision: string;
+  contentHash: string;
+}
 
 @Injectable()
 export class QdrantService {
@@ -41,7 +55,9 @@ export class QdrantService {
     return { status: 'ok' };
   }
   async ensure(descriptor: EmbeddingDescriptor): Promise<string> {
-    const collection = this.collection(descriptor);
+    return this.ensureCollection(this.collection(descriptor), descriptor, ['user_id', 'kb_id', 'document_id']);
+  }
+  private async ensureCollection(collection: string, descriptor: EmbeddingDescriptor, fields: string[]): Promise<string> {
     try {
       await this.api.getCollection(collection);
     } catch (error) {
@@ -58,11 +74,60 @@ export class QdrantService {
     const vectors = info.config.params.vectors;
     if (!vectors || !('size' in vectors) || vectors.size !== descriptor.dimensions || vectors.distance !== 'Cosine')
       throw new Error('Qdrant vector space mismatch');
-    for (const field of ['user_id', 'kb_id', 'document_id'])
+    for (const field of fields)
       await this.retry(() =>
         this.api.createPayloadIndex(collection, { field_name: field, field_schema: 'keyword', wait: true }),
       );
     return collection;
+  }
+  memoryCollection(descriptor: EmbeddingDescriptor): string {
+    return `llmgather_memory_${descriptor.fingerprint.slice(0, 32)}`;
+  }
+  async ensureMemory(descriptor: EmbeddingDescriptor): Promise<string> {
+    return this.ensureCollection(this.memoryCollection(descriptor), descriptor, ['user_id', 'agent_id', 'memory_type', 'fingerprint']);
+  }
+  async upsertMemory(descriptor: EmbeddingDescriptor, memory: MemoryVectorPoint, vector: number[]): Promise<void> {
+    if (vector.length !== descriptor.dimensions || !vector.every(Number.isFinite) || !vector.some(v => v !== 0))
+      throw new Error('Memory vector dimensions or values mismatch');
+    await this.retry(() => this.api.upsert(this.memoryCollection(descriptor), {
+      wait: true,
+      points: [{ id: memory.id, vector, payload: {
+        user_id: memory.userId, agent_id: memory.agentId || '', memory_type: memory.memoryType,
+        fingerprint: descriptor.fingerprint, revision: memory.revision, content_hash: memory.contentHash,
+      } }],
+    }));
+  }
+  async searchMemories(
+    descriptor: EmbeddingDescriptor, vector: number[], userId: string,
+    agentId: string | undefined, limit: number, memoryType?: string,
+  ): Promise<MemoryVectorHit[]> {
+    if (vector.length !== descriptor.dimensions || !vector.every(Number.isFinite))
+      throw new Error('Memory query vector dimension mismatch');
+    const must = [
+      { key: 'user_id', match: { value: userId } },
+      { key: 'fingerprint', match: { value: descriptor.fingerprint } },
+      ...(agentId ? [{ key: 'agent_id', match: { any: ['', agentId] } }] : []),
+      ...(memoryType ? [{ key: 'memory_type', match: { value: memoryType } }] : []),
+    ];
+    const hits = await this.retry(() => this.api.search(this.memoryCollection(descriptor), {
+      vector, limit, filter: { must }, with_payload: ['revision', 'content_hash'],
+    }));
+    return hits.map(hit => ({
+      id: String(hit.id), score: hit.score,
+      revision: String(hit.payload?.revision ?? ''), contentHash: String(hit.payload?.content_hash ?? ''),
+    }));
+  }
+  async deleteMemory(collection: string, userId: string, id: string): Promise<void> {
+    try {
+      await this.retry(() => this.api.delete(collection, {
+        wait: true, filter: { must: [
+          { has_id: [id] }, { key: 'user_id', match: { value: userId } },
+        ] },
+      }));
+    } catch (error) {
+      // A removed collection contains no stale points; other failures remain retryable by the outbox.
+      if (!(error instanceof Error && error.message === 'Qdrant request failed: HTTP 404')) throw error;
+    }
   }
   async upsert(descriptor: EmbeddingDescriptor, chunks: VectorChunk[], vectors: number[][]): Promise<void> {
     if (
@@ -88,6 +153,7 @@ export class QdrantService {
     user: string,
     kbIds: string[],
     limit: number,
+    minScore?: number,
   ): Promise<Array<{ id: string; score: number }>> {
     if (!kbIds.length) return [];
     if (vector.length !== descriptor.dimensions) throw new Error('Query vector dimension mismatch');
@@ -96,6 +162,7 @@ export class QdrantService {
         vector,
         limit,
         with_payload: false,
+        ...(minScore === undefined ? {} : { score_threshold: minScore }),
         filter: {
           must: [
             { key: 'user_id', match: { value: user } },

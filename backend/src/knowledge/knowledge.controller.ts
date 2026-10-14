@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -14,8 +14,14 @@ export class KnowledgeController {
 
   @Get('embedding-providers') async embeddingProviders(){return{data:await this.modelServices.providers()};}
   @Post('bases/:id/embedding') async bindEmbedding(@CurrentUser() user:AuthenticatedRequestUser,@Param('id') id:string,@Body() input:{instanceId:string}){
-    if(typeof input.instanceId!=='string')throw new BadRequestException('Invalid embedding instance');
-    return{data:await this.managed.bind(user.id,id,input.instanceId)};
+    if(typeof input?.instanceId!=='string')throw new BadRequestException('Invalid embedding instance');
+    const binding=await this.managed.bind(user.id,id,input.instanceId);
+    try{
+      const index=await this.knowledgeService.reindex(user.id,id,true);
+      return{data:{...binding,reindexRequired:false,index}};
+    }catch{
+      throw new BadGatewayException({message:'模型绑定已保存，但自动重建索引失败，请重新绑定重试。',bindingSaved:true,reindexRequired:true});
+    }
   }
 
   @Get('bases')
@@ -147,7 +153,8 @@ export class KnowledgeController {
     @Param('id') id: string,
     @Body() payload: SearchKnowledgeDto,
   ) {
-    return { data: await this.knowledgeService.search(user.id, [id], payload.query, payload.limit ?? 5, { mode: payload.mode }) };
+    return this.knowledgeService.searchDetailed(user.id, [id], payload.query, payload.limit ?? 5,
+      { mode: payload.mode, minDenseScore: payload.minDenseScore, failurePolicy: 'strict' });
   }
   @Post('bases/:id/reindex')
   async reindex(@CurrentUser() user: AuthenticatedRequestUser, @Param('id') id: string, @Body() payload: { reset?: boolean }) {

@@ -59,7 +59,8 @@ export class EmbeddingService implements EmbeddingProvider {
     return (await this.configuration(false)).descriptor;
   }
   async health(): Promise<{ status: string; dimensions: number }> {
-    const [probe] = await this.embed(['embedding health probe']);
+    const descriptor = await this.managed?.defaultDescriptor() || await this.describe();
+    const [probe] = await this.embed(['embedding health probe'], descriptor);
     return { status: 'ok', dimensions: probe.length };
   }
   async embed(texts: string[], expected?: EmbeddingDescriptor): Promise<number[][]> {

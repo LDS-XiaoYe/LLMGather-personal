@@ -1,4 +1,17 @@
 import { MemoryItem, MemoryRow, MemoryType, MEMORY_TYPES } from './memory.types';
+import { createHash } from 'crypto';
+
+export const MEMORY_COLUMNS = `id, user_id as userId, agent_id as agentId, namespace,
+  memory_type as memoryType, content, importance, metadata, provider,
+  external_id as externalId, provider_payload as providerPayload,
+  created_at as createdAt, updated_at as updatedAt`;
+
+/** Bind a vector to the exact current memory, not to untrusted vector payload text. */
+export function memoryIndexHash(row: Pick<MemoryRow, 'content' | 'agentId' | 'namespace' | 'memoryType'>): string {
+  return createHash('sha256').update(JSON.stringify([
+    row.content, row.agentId || '', row.namespace, normalizeMemoryType(row.memoryType),
+  ])).digest('hex');
+}
 
 export function normalizeMemoryType(value?: string): MemoryType {
   if (value === 'episode') return 'messages';
@@ -59,7 +72,7 @@ export function mapMemory(row: MemoryRow): MemoryItem {
     content: row.content,
     importance: Number(row.importance),
     metadata: row.metadata ?? '',
-    provider: row.provider === 'langgraph' ? 'langgraph' : 'native',
+    provider: 'native',
     externalId: row.externalId || '',
     providerPayload: row.providerPayload || '',
     createdAt: row.createdAt,

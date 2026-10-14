@@ -3,8 +3,10 @@ import { EmbeddingService } from './retrieval/embedding.service';
 import { QdrantService } from './retrieval/qdrant.service';
 import { NativeRetrievalService } from './retrieval/native-retrieval.service';
 import { KnowledgeIndexService } from './retrieval/knowledge-index.service';
-import { reciprocalRankFusion } from './retrieval/rrf';
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { fuseKnowledgeResults, diversifyKnowledgeResults, mayDegrade } from './retrieval/retrieval-results';
+import { analyzeLexicalQuery } from './retrieval/lexical-query';
+import type { RetrievalOptions, RetrievalMeta, RetrievalScores, RetrievalMode } from './retrieval/retrieval.types';
+import { BadRequestException, ConflictException, HttpException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ManagedEmbeddingService } from '../model-services/managed-embedding.service';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../database/database.service';
@@ -34,7 +36,7 @@ export interface KnowledgeBase {
   updatedAt: string;
 }
 
-export interface KnowledgeSearchResult {
+export interface KnowledgeSearchResult extends RetrievalScores {
   id: string;
   kbId: string;
   documentId: string;
@@ -596,31 +598,62 @@ export class KnowledgeService {
     }
   }
 
-  async search(
-    userId: string,
-    kbIds: string[],
-    query: string,
-    limit = 5,
-    options: { mode?: 'hybrid' | 'keyword' | 'vector' } = {},
-  ): Promise<KnowledgeSearchResult[]> {
-    const uniqueKbIds = Array.from(new Set(kbIds.filter(Boolean)));
-    if (uniqueKbIds.length === 0 || !query.trim()) return [];
+  async search(userId: string, kbIds: string[], query: string, limit = 5, options: RetrievalOptions = {}): Promise<KnowledgeSearchResult[]> {
+    return (await this.searchDetailed(userId, kbIds, query, limit, options)).data;
+  }
 
+  async searchDetailed(userId: string, kbIds: string[], query: string, limit = 5, options: RetrievalOptions = {}): Promise<{ data: KnowledgeSearchResult[]; meta: RetrievalMeta }> {
+    const mode = options.mode || 'hybrid';
+    if (options.minDenseScore !== undefined && (!Number.isFinite(options.minDenseScore) || options.minDenseScore < -1 || options.minDenseScore > 1))
+      throw new BadRequestException('余弦相似度门槛须在 -1 至 1 之间');
+    const meta: RetrievalMeta = { requestedMode: mode, effectiveMode: mode, degraded: false, warnings: [], minDenseScore: options.minDenseScore };
+    const uniqueKbIds = Array.from(new Set(kbIds.filter(Boolean)));
+    if (!uniqueKbIds.length || !query.trim()) return { data: [], meta };
     const kbs = await this.loadKnowledgeBasesByIds(userId, uniqueKbIds);
     if (kbs.length !== uniqueKbIds.length) throw new NotFoundException('知识库不存在');
-    const nativeKbIds = kbs.filter((kb) => kb.provider === 'native').map((kb) => kb.id);
-    const ragflowKbs = kbs.filter((kb) => kb.provider === 'ragflow');
+    const nativeKbIds = kbs.filter(kb => kb.provider === 'native').map(kb => kb.id);
+    const externalKbs = kbs.filter(kb => kb.provider === 'ragflow');
+    if (externalKbs.length && options.minDenseScore !== undefined) throw new BadRequestException('RAGFlow 相似度门槛由外部引擎管理');
     const topK = Math.max(1, Math.min(50, Math.floor(limit)));
-    const candidates = Math.min(200, topK * 4);
-    const groups: KnowledgeSearchResult[][] = [];
+    const candidates = Math.min(200, Math.max(20, topK * 4));
+    const groups: KnowledgeSearchResult[][] = [], modes = new Set<RetrievalMeta['effectiveMode']>();
+    let firstError: unknown, successful = false;
     if (nativeKbIds.length) {
-      groups.push(process.env.NATIVE_RAG_BACKEND === 'legacy'
-        ? await this.nativeRetrieval.keyword(userId, nativeKbIds, query, candidates)
-        : await this.nativeRetrieval.search(userId, nativeKbIds, query, candidates, options.mode ?? 'hybrid'));
+      try {
+        if (process.env.NATIVE_RAG_BACKEND === 'legacy') {
+          if (mode !== 'keyword' && options.failurePolicy !== 'degrade') throw new ConflictException('原生语义检索未启用，请使用关键词模式');
+          groups.push(await this.nativeRetrieval.keyword(userId, nativeKbIds, query, candidates));
+          meta.queryTerms = analyzeLexicalQuery(query).terms;
+          modes.add('keyword'); successful = true;
+          if (mode !== 'keyword') { meta.degraded = true; meta.warnings.push({ stage: 'vector', code: 'SEMANTIC_DISABLED' }); }
+        } else {
+          const native = await this.nativeRetrieval.searchDetailed(userId, nativeKbIds, query, candidates, { ...options, candidates });
+          groups.push(native.data); modes.add(native.meta.effectiveMode); successful = true;
+          meta.degraded ||= native.meta.degraded; meta.warnings.push(...native.meta.warnings); meta.queryTerms = native.meta.queryTerms;
+        }
+      } catch (error) {
+        if (options.failurePolicy !== 'degrade' || !mayDegrade(error)) throw error;
+        firstError = error; meta.degraded = true;
+        meta.warnings.push(...nativeKbIds.map(kbId => ({ kbId, stage: 'vector' as const, code: 'NATIVE_UNAVAILABLE' })));
+      }
     }
-    const ragflow = new RagflowRetrievalProvider(ragflowKbs, (kb, text, count) => this.searchRagflow(kb, text, count));
-    if (ragflowKbs.length) groups.push(await ragflow.search(userId, ragflowKbs.map(kb => kb.id), query, candidates, options.mode ?? 'hybrid'));
-    return reciprocalRankFusion(groups, topK, item => item.kbId + ':' + item.id);
+    // Isolate external KB failures as well; strict laboratory requests still propagate errors.
+    for (const kb of externalKbs) {
+      try {
+        const provider = new RagflowRetrievalProvider([kb], (base, text, count, selectedMode) => this.searchRagflow(base, text, count, selectedMode));
+        groups.push(await provider.search(userId, [kb.id], query, candidates, mode));
+        modes.add(mode); successful = true;
+      } catch (error) {
+        if (options.failurePolicy !== 'degrade' || !mayDegrade(error)) throw error;
+        firstError ??= error; meta.degraded = true;
+        meta.warnings.push({ kbId: kb.id, stage: 'external', code: 'EXTERNAL_UNAVAILABLE' });
+      }
+    }
+    if (!successful) throw firstError || new Error('No retrieval route is available');
+    meta.effectiveMode = modes.size === 1 ? [...modes][0] : 'mixed';
+    const nonempty = groups.filter(rows => rows.length);
+    const data = nonempty.length === 1 ? nonempty[0] : fuseKnowledgeResults(nonempty, candidates);
+    return { data: diversifyKnowledgeResults(data, topK), meta };
   }
 
   async reindex(userId: string, kbId: string, reset = false) {
@@ -826,7 +859,7 @@ export class KnowledgeService {
     });
   }
 
-  private async searchRagflow(kb: KnowledgeBase, query: string, limit: number): Promise<KnowledgeSearchResult[]> {
+  private async searchRagflow(kb: KnowledgeBase, query: string, limit: number, mode: RetrievalMode = 'hybrid'): Promise<KnowledgeSearchResult[]> {
     const config = await this.requireRagflowConfig(kb);
     const data = await this.ragflowRequest(config, '/api/v1/retrieval', {
       method: 'POST',
@@ -835,6 +868,8 @@ export class KnowledgeService {
         dataset_ids: [config.datasetId],
         page: 1,
         page_size: limit,
+        vector_similarity_weight: mode === 'keyword' ? 0 : mode === 'vector' ? 1 : 0.3,
+        keywords_similarity_weight: mode === 'keyword' ? 1 : mode === 'vector' ? 0 : 0.7,
       }),
     });
     const chunks = this.extractRagflowChunks(data);
@@ -844,7 +879,9 @@ export class KnowledgeService {
       documentId: String(chunk.document_id || chunk.doc_id || ''),
       title: String(chunk.document_name || chunk.document_keyword || chunk.docnm_kwd || chunk.title || kb.name),
       content: String(chunk.content || chunk.content_with_weight || chunk.text || ''),
-      score: Number(chunk.similarity || chunk.score || chunk.vector_similarity || 0),
+      score: Number(chunk.similarity ?? chunk.score ?? chunk.vector_similarity ?? 0),
+      externalScore: Number(chunk.similarity ?? chunk.score ?? chunk.vector_similarity ?? 0),
+      scoreType: 'external' as const, sources: ['external' as const], ranks: { external: index + 1 },
     })).filter((item) => item.content.trim());
   }
 
@@ -852,11 +889,11 @@ export class KnowledgeService {
     const headers = new Headers(init.headers);
     if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
     headers.set('Authorization', `Bearer ${config.apiKey}`);
-    const response = await fetch(`${config.baseUrl}${path}`, { ...init, headers });
+    const response = await fetch(`${config.baseUrl}${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(30_000) });
     const text = await response.text();
     const payload = text ? this.parseJsonSafe(text) : {};
     if (!response.ok) {
-      throw new BadRequestException(this.ragflowErrorMessage(payload, text, response.status));
+      throw new HttpException(this.ragflowErrorMessage(payload, text, response.status), response.status);
     }
     if (this.isRecord(payload) && typeof payload.code !== 'undefined' && Number(payload.code) !== 0) {
       throw new BadRequestException(this.ragflowErrorMessage(payload, text, response.status));

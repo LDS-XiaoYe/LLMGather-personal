@@ -15,6 +15,7 @@ import { AgentsService } from '../agents/agents.service';
 import { RouteDecision } from '../router/router.service';
 import { RunAgentDto } from '../agents/dto/agent.dto';
 import { ProviderKeyAuditInfo } from '../providers/provider.types';
+import { ChatMemoryContextService } from './chat-memory-context.service';
 
 function flushSse(res: Response): void {
   (res as Response & { flush?: () => void }).flush?.();
@@ -63,6 +64,7 @@ export class ChatController {
     private readonly routerService: RouterService,
     @Inject(forwardRef(() => AgentsService))
     private readonly agentsService: AgentsService,
+    private readonly memoryContext: ChatMemoryContextService,
   ) {}
 
   @Post('completions')
@@ -73,6 +75,15 @@ export class ChatController {
     @CurrentUser() user: AuthenticatedRequestUser,
     @Res() res: Response,
   ) {
+    const { cache_enabled, ...request } = payload;
+    const context = await this.memoryContext.prepare(request, user.id);
+    payload = context.payload;
+    if (context.enabled) {
+      res.setHeader('x-memory-count', String(context.count));
+      res.setHeader('x-memory-status', context.status);
+    }
+    // Cache keys currently cover only query/model, not current memory or conversation context.
+    const cacheAllowed = cache_enabled !== false && !context.enabled;
     // ── Auto routing: if model is 'auto', classify intent and pick best model ──
     if (payload.model === 'auto') {
       return this.handleAutoRoute(payload, user, res);
@@ -83,7 +94,7 @@ export class ChatController {
     const queryText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
 
     // Check semantic cache for both stream and non-stream
-    if (queryText) {
+    if (cacheAllowed && queryText) {
       const cached = await this.cacheService.lookup(user.id, queryText, payload.model);
       if (cached) {
         if (payload.stream) {
@@ -180,7 +191,7 @@ export class ChatController {
       void updatedUser;
 
       // Store in cache
-      if (queryText && generatedText) {
+      if (cacheAllowed && queryText && generatedText) {
         const tokensSaved = finalUsage.total_tokens;
         const costSaved = 0; // Actual cost is already charged, cache is for future savings
         this.cacheService.store(user.id, queryText, payload.model, generatedText, tokensSaved, costSaved).catch(() => {});
@@ -207,7 +218,7 @@ export class ChatController {
 
     // Store in cache
     const replyContent = completion.choices?.[0]?.message?.content ?? '';
-    if (queryText && replyContent) {
+    if (cacheAllowed && queryText && replyContent) {
       const tokens = (completion.usage?.total_tokens) ?? 0;
       this.cacheService.store(user.id, queryText, payload.model, replyContent, tokens, 0).catch(() => {});
     }

@@ -13,6 +13,6 @@ import { ModelServicesModule } from '../model-services/model-services.module';
   imports: [AuthModule, ProvidersModule, ModelServicesModule],
   controllers: [KnowledgeController],
   providers: [KnowledgeService, EmbeddingService, QdrantService, KnowledgeIndexService, NativeRetrievalService],
-  exports: [KnowledgeService],
+  exports: [KnowledgeService, EmbeddingService, QdrantService],
 })
 export class KnowledgeModule {}

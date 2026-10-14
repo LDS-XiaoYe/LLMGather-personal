@@ -1,25 +1,34 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { CreateMemoryDto, UpdateMemoryDto } from './dto/memory.dto';
-import { LangGraphMemoryProvider } from './providers/langgraph-memory.provider';
 import { NativeMemoryProvider } from './providers/native-memory.provider';
 import { MemoryProvider } from './providers/memory-provider';
 import { MemoryItem, MemoryProviderCapabilities, MemoryProviderName } from './memory.types';
 import { normalizeMemoryType, similarity } from './memory-utils';
+import { MemoryIndexService, memorySemanticEnabled } from './memory-index.service';
+import { reciprocalRankFusion } from '../knowledge/retrieval/rrf';
 
 @Injectable()
 export class MemoryService {
+  private readonly logger = new Logger(MemoryService.name);
   constructor(
     private readonly nativeProvider: NativeMemoryProvider,
-    private readonly langGraphProvider: LangGraphMemoryProvider,
+    private readonly index: MemoryIndexService,
   ) {}
 
   getProviderName(): MemoryProviderName {
-    return process.env.MEMORY_PROVIDER === 'langgraph' ? 'langgraph' : 'native';
+    return 'native';
   }
 
   capabilities(): MemoryProviderCapabilities[] {
-    return [this.nativeProvider.capabilities(), this.langGraphProvider.capabilities()];
+    return [this.nativeProvider.capabilities()];
   }
+
+  retrievalCapabilities() {
+    return { primaryStore: 'mysql', semanticIndexEnabled: memorySemanticEnabled(),
+      searchMode: memorySemanticEnabled() ? 'hybrid' : 'keyword' };
+  }
+
+  rebuildIndex(userId: string, agentId?: string) { return this.index.rebuild(userId, agentId); }
 
   async list(userId: string, agentId?: string): Promise<MemoryItem[]> {
     return this.provider().list(userId, agentId);
@@ -30,15 +39,35 @@ export class MemoryService {
   }
 
   async search(userId: string, query: string, agentId?: string, limit = 5, memoryType?: string): Promise<MemoryItem[]> {
-    const results = await this.provider().search(userId, query, agentId, limit * 2);
     const normalizedType = memoryType ? normalizeMemoryType(memoryType) : '';
-    return results
-      .filter((memory) => !normalizedType || memory.memoryType === normalizedType)
-      .slice(0, limit);
+    const topK = Math.max(1, Math.min(20, Math.floor(limit) || 5));
+    const keyword = await this.nativeProvider.search(userId, query, agentId, topK * 2, normalizedType);
+    if (!memorySemanticEnabled()) return keyword.slice(0, topK);
+    try {
+      const semantic = await this.index.search(userId, query, agentId, topK * 2, normalizedType);
+      return semantic.length ? reciprocalRankFusion([semantic, keyword], topK) : keyword.slice(0, topK);
+    } catch {
+      this.logger.warn('Memory semantic retrieval unavailable; using MySQL keyword retrieval');
+      return keyword.slice(0, topK);
+    }
   }
 
   async update(userId: string, id: string, dto: UpdateMemoryDto): Promise<MemoryItem> {
     return this.provider().update(userId, id, dto);
+  }
+
+  /** Fresh MySQL reads; filter user-level scope before candidate limits, never use Agent-private memories. */
+  async chatContext(userId: string, query: string, limit = 12): Promise<MemoryItem[]> {
+    const topK = Math.max(1, Math.min(12, Math.floor(limit) || 12));
+    const [preferences, relevant] = await Promise.all([
+      this.nativeProvider.search(userId, query, undefined, Math.min(4, topK), 'preference', true),
+      this.nativeProvider.search(userId, query, undefined, topK, undefined, true),
+    ]);
+    const unique = new Map<string, MemoryItem>();
+    for (const item of [...preferences, ...relevant]) {
+      if (item.userId === userId && !item.agentId && item.content?.trim() && !unique.has(item.id)) unique.set(item.id, item);
+    }
+    return [...unique.values()].slice(0, topK);
   }
 
   async remove(userId: string, id: string): Promise<void> {
@@ -110,7 +139,7 @@ export class MemoryService {
   }
 
   private provider(): MemoryProvider {
-    return this.getProviderName() === 'langgraph' ? this.langGraphProvider : this.nativeProvider;
+    return this.nativeProvider;
   }
 
   private defaultNamespace(memoryType?: string): string {

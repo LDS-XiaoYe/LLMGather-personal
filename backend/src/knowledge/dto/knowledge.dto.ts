@@ -84,6 +84,12 @@ export class SearchKnowledgeDto {
   @IsOptional()
   @IsIn(['hybrid', 'keyword', 'vector'])
   mode?: 'hybrid' | 'keyword' | 'vector';
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-1)
+  @Max(1)
+  minDenseScore?: number;
 }
 
 export class CreateUserLibraryFileDto {

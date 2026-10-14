@@ -59,6 +59,14 @@ export class ChatRequestDto {
   stream?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  memory_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  cache_enabled?: boolean;
+
+  @IsOptional()
   @IsString()
   user?: string;
 

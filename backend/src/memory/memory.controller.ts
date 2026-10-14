@@ -16,6 +16,7 @@ export class MemoryController {
       data: {
         active: this.memoryService.getProviderName(),
         providers: this.memoryService.capabilities(),
+        retrieval: this.memoryService.retrievalCapabilities(),
       },
     };
   }
@@ -26,6 +27,11 @@ export class MemoryController {
     @Query('agentId') agentId?: string,
   ) {
     return { data: await this.memoryService.list(user.id, agentId) };
+  }
+
+  @Post('index/rebuild')
+  async rebuildIndex(@CurrentUser() user: AuthenticatedRequestUser, @Query('agentId') agentId?: string) {
+    return { data: await this.memoryService.rebuildIndex(user.id, agentId) };
   }
 
   @Post()

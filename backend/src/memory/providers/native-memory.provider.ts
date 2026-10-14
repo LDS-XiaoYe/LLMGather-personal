@@ -4,7 +4,7 @@ import { DatabaseService } from '../../database/database.service';
 import { CreateMemoryDto, UpdateMemoryDto } from '../dto/memory.dto';
 import { MemoryProvider } from './memory-provider';
 import { MemoryItem, MemoryRow, MEMORY_TYPES } from '../memory.types';
-import { mapMemory, normalizeMemoryType, recencyBoost, scoreText, terms, typeBoost } from '../memory-utils';
+import { mapMemory, MEMORY_COLUMNS, normalizeMemoryType, recencyBoost, scoreText, terms, typeBoost } from '../memory-utils';
 
 @Injectable()
 export class NativeMemoryProvider implements MemoryProvider {
@@ -13,11 +13,12 @@ export class NativeMemoryProvider implements MemoryProvider {
   capabilities() {
     return {
       provider: 'native' as const,
-      displayName: '本地记忆',
+      displayName: 'MySQL 长期记忆',
       configured: true,
       writable: true,
       searchable: true,
       supportedTypes: MEMORY_TYPES,
+      note: 'MySQL 是唯一主存储；旧 LangGraph 镜像兼容读取。语义索引可选且不影响写入。',
     };
   }
 
@@ -28,7 +29,7 @@ export class NativeMemoryProvider implements MemoryProvider {
               external_id as externalId, provider_payload as providerPayload,
               created_at as createdAt, updated_at as updatedAt
        FROM memories
-       WHERE user_id = ? AND deleted_at IS NULL AND (? = '' OR agent_id = ? OR agent_id = '')
+       WHERE user_id = ? AND deleted_at IS NULL AND (? = '' OR agent_id = ? OR agent_id = '' OR agent_id IS NULL)
        ORDER BY importance DESC, updated_at DESC
        LIMIT 100`,
     ).all(userId, agentId ?? '', agentId ?? '') as unknown as MemoryRow[];
@@ -70,9 +71,18 @@ export class NativeMemoryProvider implements MemoryProvider {
     return this.getOwned(userId, id);
   }
 
-  async search(userId: string, query: string, agentId?: string, limit = 5): Promise<MemoryItem[]> {
-    const memories = await this.list(userId, agentId);
-    const queryTerms = terms(query);
+  async search(userId: string, query: string, agentId?: string, limit = 5, memoryType?: string, globalOnly = false): Promise<MemoryItem[]> {
+    const queryTerms = terms(query).slice(0, 16);
+    // Rank matches in SQL before bounding the candidate set; older matches are not hidden by list()'s 100-row cap.
+    const matches = queryTerms.map(() => 'CASE WHEN LOCATE(LOWER(?), LOWER(content)) > 0 THEN 1 ELSE 0 END').join(' + ') || '0';
+    const rows = await this.databaseService.connection.prepare(
+      `SELECT ${MEMORY_COLUMNS}, (${matches}) AS keywordMatches FROM memories
+       WHERE user_id = ? AND deleted_at IS NULL
+         AND ${globalOnly ? "(agent_id = '' OR agent_id IS NULL)" : "(? = '' OR agent_id = ? OR agent_id = '' OR agent_id IS NULL)"}
+         AND (? = '' OR memory_type = ?)
+       ORDER BY keywordMatches DESC, importance DESC, updated_at DESC, id ASC LIMIT 500`,
+    ).all(...queryTerms, userId, ...(globalOnly ? [] : [agentId ?? '', agentId ?? '']), memoryType ?? '', memoryType ?? '') as unknown as MemoryRow[];
+    const memories = rows.map(mapMemory);
     const now = Date.now();
     return memories
       .map((memory) => ({
@@ -92,7 +102,8 @@ export class NativeMemoryProvider implements MemoryProvider {
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
       `UPDATE memories
-       SET namespace = ?, memory_type = ?, content = ?, importance = ?, metadata = ?, updated_at = ?
+       SET namespace = ?, memory_type = ?, content = ?, importance = ?, metadata = ?, updated_at = ?,
+           index_revision = index_revision + 1, index_pending = 1, index_attempts = 0, index_next_attempt_at = NULL
        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
     ).run(
       dto.namespace?.trim() || current.namespace,
@@ -125,7 +136,9 @@ export class NativeMemoryProvider implements MemoryProvider {
     await this.getOwned(userId, id);
     const now = this.databaseService.now();
     await this.databaseService.connection.prepare(
-      `UPDATE memories SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+      `UPDATE memories SET deleted_at = ?, updated_at = ?,
+        index_revision = index_revision + 1, index_pending = 1, index_attempts = 0, index_next_attempt_at = NULL
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
     ).run(now, now, id, userId);
   }
 
@@ -133,7 +146,8 @@ export class NativeMemoryProvider implements MemoryProvider {
     const now = this.databaseService.now();
     const result = await this.databaseService.connection.prepare(
       `UPDATE memories
-       SET deleted_at = ?, updated_at = ?
+       SET deleted_at = ?, updated_at = ?,
+           index_revision = index_revision + 1, index_pending = 1, index_attempts = 0, index_next_attempt_at = NULL
        WHERE user_id = ? AND deleted_at IS NULL AND (? = '' OR agent_id = ?)`,
     ).run(now, now, userId, agentId ?? '', agentId ?? '');
     return Number((result as { changes?: number }).changes ?? 0);

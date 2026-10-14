@@ -12,11 +12,13 @@ import { ProvidersModule } from '../providers/providers.module';
 import { RouterModule } from '../router/router.module';
 import { RelayController } from './relay.controller';
 import { TtsController } from './tts.controller';
+import { MemoryModule } from '../memory/memory.module';
+import { ChatMemoryContextService } from './chat-memory-context.service';
 
 @Module({
-  imports: [ProvidersModule, AuthModule, ApiKeysModule, forwardRef(() => RouterModule), forwardRef(() => AgentsModule)],
+  imports: [ProvidersModule, AuthModule, ApiKeysModule, MemoryModule, forwardRef(() => RouterModule), forwardRef(() => AgentsModule)],
   controllers: [ChatController, ModelsController, ConversationsController, RelayController, TtsController],
-  providers: [ChatService, ModelsService, ConversationsService],
+  providers: [ChatService, ModelsService, ConversationsService, ChatMemoryContextService],
   exports: [ChatService],
 })
 export class GatewayModule {}

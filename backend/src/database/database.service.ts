@@ -1,8 +1,13 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { IDatabaseAdapter } from './database.adapter.interface';
 import { MysqlDatabaseAdapter } from './adapters/mysql.adapter';
 import { migrateP0 } from './migrations/p0-infrastructure';
 import { migrateModelServices } from './migrations/model-services';
+import { migrateMemoryIndex } from './migrations/memory-index';
+import { migrateKnowledgeLexical } from './migrations/knowledge-lexical';
+import { seedSystemSettings } from './seeds/system-settings.seed';
+import { bootstrapErrorCode, bootstrapInteger, retryMysqlConnection } from './bootstrap-retry';
 
 /**
  * 返回当前时间戳字符串（MySQL DATETIME(3) 兼容）
@@ -23,29 +28,52 @@ export function dbNow(d = new Date()): string {
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private adapter!: IDatabaseAdapter;
+  private readonly sessions = new AsyncLocalStorage<IDatabaseAdapter>();
 
   constructor() {}
 
-  async onModuleInit(): Promise<void> {
+  private initialization?: Promise<void>;
+  private ready = false;
+
+  get isReady(): boolean { return this.ready; }
+
+  initialize(): Promise<void> {
+    return this.initialization ??= this.bootstrap();
+  }
+
+  async onModuleInit(): Promise<void> { await this.initialize(); }
+
+  private async bootstrap(): Promise<void> {
+    let stage = 'connection';
     console.log('[Database] Initializing: type = mysql');
-    await this.initMysql();
-    await this.createTables();
-    await this.migrateColumnsIfNeeded();
-    await migrateP0(this.adapter);
-    await migrateModelServices(this.adapter);
-    await this.seedBuiltinTools();
-    await this.seedDefaultAgentSkills();
-    await this.seedProviderConfigs();
-    await this.ensureQwen37ProviderConfig();
-    await this.ensureGeminiProviderConfig();
-    await this.seedSystemSettings();
-    await this.ensureNoAutoModelSystemSettings();
-    await this.ensureGeminiSystemSettings();
-    await this.ensureQwen37SystemSettings();
-    await this.seedRouterRules();
-    await this.ensureGeminiRouterRules();
-    await this.ensureQwen37RouterRules();
-    console.log('[Database] Tables & seed data ready.');
+    try {
+      await this.initMysql();
+      stage = 'bootstrap lock';
+      await (this.adapter as MysqlDatabaseAdapter).withInitializationLock(async () => {
+        stage = 'schema';
+        await this.createTables();
+        await this.migrateColumnsIfNeeded();
+        await migrateP0(this.adapter);
+        await migrateModelServices(this.adapter);
+        await migrateMemoryIndex(this.adapter);
+        stage = 'knowledge lexical index';
+        await migrateKnowledgeLexical(this.adapter);
+        stage = 'system_settings seed/validation';
+        await seedSystemSettings(this.adapter);
+        stage = 'existing bootstrap data';
+        await this.seedBuiltinTools();
+        await this.seedDefaultAgentSkills();
+        await this.seedProviderConfigs();
+        await this.seedRouterRules();
+      }, bootstrapInteger('MYSQL_BOOTSTRAP_LOCK_TIMEOUT_SECONDS', 60, 1, 300));
+      this.ready = true;
+      console.log('[Database] Tables & seed data ready.');
+    } catch (error) {
+      if (this.adapter) await this.adapter.close().catch(() => {});
+      const code = bootstrapErrorCode(error);
+      console.error('[Database] initialization failed at ' + stage + ' (' + code + '); application not ready');
+      throw new Error('[Database] initialization failed at ' + stage + ' (' + code + '); application not ready');
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -55,7 +83,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   get connection(): IDatabaseAdapter {
-    return this.adapter;
+    return this.sessions.getStore() ?? this.adapter;
+  }
+
+  transaction<T>(work: (session: Pick<IDatabaseAdapter, 'prepare' | 'exec'>) => Promise<T>): Promise<T> {
+    const nested = this.sessions.getStore();
+    if (nested) return work(nested);
+    if (!this.adapter.transaction) throw new Error('Database transaction support is required');
+    return this.adapter.transaction(tx => {
+      // Every collaborating service resolves the same request-local SQL session.
+      // Other concurrent requests continue to use the pool, not this transaction.
+      const scoped = new Proxy(this.adapter, { get: (target, key) =>
+        key === 'prepare' ? tx.prepare.bind(tx) : key === 'exec' ? tx.exec.bind(tx) : Reflect.get(target, key),
+      });
+      return this.sessions.run(scoped, () => work(scoped));
+    });
   }
 
   /** 返回当前时间戳字符串（MySQL DATETIME(3) 兼容） */
@@ -67,22 +109,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   /*  MySQL 初始化                                                       */
   /* ------------------------------------------------------------------ */
   private async initMysql(): Promise<void> {
-    console.log(`[Database] MySQL connecting to ${process.env.MYSQL_HOST || '127.0.0.1'}:${process.env.MYSQL_PORT || 3306}/${process.env.MYSQL_DATABASE || 'llmgather'}`);
-    const adapter = new MysqlDatabaseAdapter({
-      host: process.env.MYSQL_HOST || '127.0.0.1',
-      port: Number(process.env.MYSQL_PORT || 3306),
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
-      database: process.env.MYSQL_DATABASE || 'llmgather',
-    });
-    await adapter.init();
-    this.adapter = adapter;
+    const attempts = bootstrapInteger('MYSQL_BOOTSTRAP_RETRIES', 10, 1, 30);
+    const delayMs = bootstrapInteger('MYSQL_BOOTSTRAP_RETRY_DELAY_MS', 2000, 0, 30000);
+    const connectTimeout = bootstrapInteger('MYSQL_CONNECT_TIMEOUT_MS', 5000, 100, 30000);
+    this.adapter = await retryMysqlConnection(async () => {
+      const adapter = new MysqlDatabaseAdapter({
+        host: process.env.MYSQL_HOST || '127.0.0.1',
+        port: Number(process.env.MYSQL_PORT || 3306),
+        user: process.env.MYSQL_USER || 'root',
+        password: process.env.MYSQL_PASSWORD || '',
+        database: process.env.MYSQL_DATABASE || 'llmgather',
+        connectTimeout,
+      });
+      await adapter.init();
+      return adapter;
+    }, attempts, delayMs);
   }
 
   /* ------------------------------------------------------------------ */
   /*  建表（双引擎兼容）                                                  */
   /* ------------------------------------------------------------------ */
   private async createTables(): Promise<void> {
+    await this.adapter.exec(`CREATE TABLE IF NOT EXISTS bootstrap_seed_state (
+      name VARCHAR(64) PRIMARY KEY, completed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+    )`);
     // ── 类型别名（MySQL） ──
     const pk      = 'VARCHAR(36) PRIMARY KEY';
     const autoId  = 'INT AUTO_INCREMENT';
@@ -101,10 +151,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         invitation_code VARCHAR(6) UNIQUE,
         invited_by VARCHAR(36),
         role VARCHAR(16) NOT NULL DEFAULT 'user',
+        auth_version INT NOT NULL DEFAULT 0,
         password_hash ${txt}, salt ${txt},
         credits ${real}, total_spent ${real},
         created_at ${ts}
       )${fk};`);
+
+    await this.adapter.exec(`CREATE TABLE IF NOT EXISTS auth_login_sessions (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      token_hash CHAR(64) NOT NULL,
+      expires_at BIGINT NOT NULL,
+      INDEX idx_login_sessions_user (user_id),
+      INDEX idx_login_sessions_expiry (expires_at)
+    ) ENGINE=InnoDB${fk};`);
 
     await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS conversations (
@@ -172,6 +232,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at ${ts},
         updated_at ${ts}
       )${fk};`);
+
+    await this.adapter.exec(`
+      CREATE TABLE IF NOT EXISTS bailian_sync_credentials (
+        id CHAR(64) PRIMARY KEY,
+        owner_id VARCHAR(36) NOT NULL,
+        region VARCHAR(32) NOT NULL,
+        workspace_id VARCHAR(128) NOT NULL DEFAULT '',
+        key_cipher TEXT NOT NULL,
+        key_prefix VARCHAR(16) NOT NULL,
+        updated_at ${ts},
+        INDEX idx_bailian_credential_owner (owner_id)
+      ) ENGINE=InnoDB${fk};`);
 
     await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS system_settings (
@@ -575,7 +647,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         status VARCHAR(24) NOT NULL DEFAULT 'draft',
         traffic_percent INT NOT NULL DEFAULT 0,
         notes TEXT,
-        snapshot_json TEXT NOT NULL,
+        snapshot_json LONGTEXT NOT NULL,
         published_at DATETIME(3) DEFAULT NULL,
         rolled_back_at DATETIME(3) DEFAULT NULL,
         created_at ${ts},
@@ -766,6 +838,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 统一字符集为 utf8mb4，避免 collation 不兼容错误
+    const versionSnapshotColumn = await this.adapter.prepare("SELECT DATA_TYPE as dataType FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_versions' AND COLUMN_NAME = 'snapshot_json'").get() as { dataType?: string } | undefined;
+    if (versionSnapshotColumn && versionSnapshotColumn.dataType !== 'longtext') await this.adapter.exec('ALTER TABLE agent_versions MODIFY COLUMN snapshot_json LONGTEXT NOT NULL');
     const tables = ['users', 'conversations', 'conversation_messages', 'billing_ledger', 'api_keys', 'provider_api_keys', 'provider_configs', 'agents', 'agent_runs', 'agent_tasks', 'agent_run_steps', 'agent_evaluations', 'agent_skills', 'agent_skill_bindings', 'agent_teams', 'agent_team_runs', 'agent_versions', 'agent_test_suites', 'agent_test_cases', 'agent_test_runs', 'mcp_servers', 'tools', 'agent_tools', 'agent_marketplace_templates', 'tool_invocations', 'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'user_library_files', 'agent_knowledge_bases', 'agent_workflows', 'agent_sub_agents', 'memories', 'workflows', 'workflow_runs', 'workflow_run_steps'];
     for (const table of tables) {
       try {
@@ -1000,11 +1074,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       // column already exists
     }
 
-    try {
-      await this.adapter.exec(
-        `UPDATE users SET email_verified = 1 WHERE email IS NOT NULL AND email <> '' AND (email_verified IS NULL OR email_verified = 0)`,
-      );
-    } catch {}
+    // Never turn an administrator's unverified account back into a verified account on restart.
+    try { await this.adapter.exec('ALTER TABLE users ADD COLUMN auth_version INT NOT NULL DEFAULT 0'); }
+    catch (error) { if ((error as {code?: string}).code !== 'ER_DUP_FIELDNAME') throw error; }
 
     // email_verification_codes table
     await this.adapter.exec(`
@@ -1579,11 +1651,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
 
   private async seedProviderConfigs(): Promise<void> {
+    if (await this.adapter.prepare('SELECT name FROM bootstrap_seed_state WHERE name=?').get('provider_configs')) return;
     // Only seed if table is empty — don't override user edits
     const { count } = (await this.adapter
       .prepare('SELECT COUNT(*) as count FROM provider_configs')
       .get()) as { count: number };
-    if (count > 0) return;
+    if (count > 0) {
+      await this.adapter.prepare('INSERT INTO bootstrap_seed_state (name) VALUES (?)').run('provider_configs');
+      return;
+    }
 
     const now = dbNow();
     const randomUUID = (await import('crypto')).randomUUID;
@@ -1691,305 +1767,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
     }
     console.log(`[Database] Seeded ${defaults.length} default provider configs.`);
+    await this.adapter.prepare('INSERT INTO bootstrap_seed_state (name) VALUES (?)').run('provider_configs');
   }
 
-  private async ensureQwen37ProviderConfig(): Promise<void> {
-    const existing = (await this.adapter
-      .prepare('SELECT id, models FROM provider_configs WHERE provider_name = ?')
-      .get('qwen')) as { id: string; models: string } | undefined;
-    if (!existing?.models) return;
 
-    const values = existing.models.split(',').map((item) => item.trim()).filter(Boolean);
-    const next = Array.from(new Set(values
-      .map((model) => ['qwen3.6-plus', 'qwen-3.6-plus', 'qwen-3.7-max'].includes(model) ? 'qwen3.7-max' : model)
-      .concat('qwen3.7-max')));
-    if (next.join(',') === values.join(',')) return;
-    await this.adapter
-      .prepare('UPDATE provider_configs SET models = ?, updated_at = ? WHERE id = ?')
-      .run(next.join(','), dbNow(), existing.id);
-  }
 
-  private async ensureGeminiProviderConfig(): Promise<void> {
-    const existing = (await this.adapter
-      .prepare('SELECT id, models FROM provider_configs WHERE provider_name = ?')
-      .get('gemini')) as { id: string } | undefined;
-    if (existing) {
-      await this.adapter
-        .prepare('UPDATE provider_configs SET models = ?, updated_at = ? WHERE provider_name = ?')
-        .run('gemini-3.5-flash', dbNow(), 'gemini');
-      return;
-    }
 
-    const randomUUID = (await import('crypto')).randomUUID;
-    const now = dbNow();
-    await this.adapter
-      .prepare(
-        `INSERT INTO provider_configs (id, provider_name, display_name, base_url, models, model_prefix, auth_header, auth_prefix, timeout_ms, retry_count, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'Authorization', 'Bearer', ?, ?, 1, ?, ?)`,
-      )
-      .run(
-        randomUUID(),
-        'gemini',
-        'Gemini (Google)',
-        process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta',
-        'gemini-3.5-flash',
-        null,
-        Number(process.env.GEMINI_TIMEOUT_MS || 30000),
-        Number(process.env.GEMINI_RETRY_COUNT || 2),
-        now,
-        now,
-      );
-    console.log('[Database] Added missing Gemini provider config.');
-  }
-
-  private async seedSystemSettings(): Promise<void> {
-    const modelTags: Record<string, string[]> = {
-      'qwen-turbo': ['language'],
-      'qwen-plus': ['language'],
-      'qwen-max': ['language'],
-      'qwen-vl-plus-latest': ['language', 'vision'],
-      'qwen-vl-max-latest': ['language', 'vision'],
-      'qwen-vl-ocr-latest': ['language', 'vision'],
-      'qwen2.5-vl-7b-instruct': ['language', 'vision'],
-      'qwen2.5-vl-72b-instruct': ['language', 'vision'],
-      'qwen2.5-14b-instruct': ['language'],
-      'qwen2.5-7b-instruct': ['language'],
-      'qwen3.7-max': ['language', 'vision'],
-      'glm-5': ['language'],
-      'glm-5.1': ['language'],
-      'glm-4.5-air': ['language'],
-      'deepseek-r1-distill-qwen-7b': ['language'],
-      'deepseek-v3.2': ['language'],
-      'deepseek-r1': ['language'],
-      'deepseek-v4-pro': ['language'],
-      'deepseek-v4-flash': ['language'],
-      'MiniMax-M2.5': ['language'],
-      'kimi-k2.6': ['language', 'vision'],
-      'gui-plus': ['language', 'vision'],
-      'gemini-3.5-flash': ['language', 'vision'],
-      'mimo-latest': ['language'],
-      'mimo-v2.5-tts': ['audio'],
-      'mimo-v2.5-tts-voicedesign': ['audio'],
-      'mimo-v2.5-tts-voiceclone': ['audio'],
-    };
-
-    const settings: Array<[string, string, string]> = [
-      ['page_models_chat', '*', '聊天页面可用模型（* 表示全部，或逗号分隔模型 ID）'],
-      ['page_models_battle', '*', 'Battle 页面可用模型'],
-      ['page_models_group', '*', '群组讨论参与模型（* 表示全部，或逗号分隔模型 ID）'],
-      ['page_models_vision', 'qwen3.7-max,qwen-vl-plus-latest,qwen-vl-max-latest,qwen-vl-ocr-latest,qwen2.5-vl-7b-instruct,qwen2.5-vl-72b-instruct,kimi-k2.6,gui-plus,gemini-3.5-flash', '视觉理解页面可用模型'],
-      ['page_models_tts', 'mimo-v2.5-tts,mimo-v2.5-tts-voicedesign,mimo-v2.5-tts-voiceclone', '语音生成页面可用模型'],
-      ['model_tags', JSON.stringify(modelTags), '模型能力标签（JSON）：language=语言, vision=视觉, audio=音频'],
-      // Runtime configuration keys (can be edited via管理后台)
-      ['api_key_cooldown_ms', '30000', 'Provider API key 冷却时间（毫秒）'],
-      ['default_temperature', '0.7', '全局默认 temperature（0-2）'],
-      ['frontend_request_timeout_ms', '30000', '前端请求超时时间（毫秒）'],
-      ['max_image_upload_size_bytes', '5242880', '最大图片上传大小（字节）'],
-      ['max_json_body_size', '2097152', 'JSON 请求体大小上限（字节），默认为 2MB'],
-      ['model_tier_mapping', JSON.stringify({
-        tier_budget: ['qwen-turbo','qwen2.5-7b-instruct','deepseek-r1-distill-qwen-7b','mimo-latest'],
-        tier_mainstream: ['qwen-plus','qwen2.5-14b-instruct','deepseek-v3.2','deepseek-v4-flash','glm-4.5-air','MiniMax-M2.5','gui-plus'],
-        tier_flagship: ['qwen-max','qwen3.7-max','glm-5','glm-5.1','deepseek-r1','deepseek-v4-pro','kimi-k2.6'],
-        tier_super_flagship: [] as string[],
-        tier_ultra: [] as string[],
-        tier_vision: ['qwen-vl-plus-latest','qwen-vl-max-latest','qwen-vl-ocr-latest','qwen2.5-vl-7b-instruct','qwen2.5-vl-72b-instruct','gemini-3.5-flash'],
-        tier_audio: ['mimo-v2.5-tts','mimo-v2.5-tts-voicedesign','mimo-v2.5-tts-voiceclone']
-      }), '模型到计费档位的映射（JSON）'],
-      ['rate_limit_login', '10', '登录接口单位 ttl 的最大请求数（默认 10）'],
-      ['rate_limit_register', '5', '注册接口单位 ttl 的最大请求数（默认 5）'],
-      ['rate_limit_relay', '60', 'Relay 接口单位 ttl 的最大请求数（默认 60）'],
-      ['tts_default_format', 'wav', 'TTS 默认音频格式'],
-      ['tts_default_voice', '冰糖', 'TTS 默认发音人'],
-      ['invitation_credits', '10', '邀请注册奖励额度（元）'],
-      ['tier_prices', JSON.stringify({
-        tier_budget: { prompt: 0.001, completion: 0.002 },
-        tier_mainstream: { prompt: 0.002, completion: 0.008 },
-        tier_flagship: { prompt: 0.004, completion: 0.012 },
-        tier_super_flagship: { prompt: 0.010, completion: 0.030 },
-        tier_ultra: { prompt: 0.055, completion: 0.219 },
-        tier_vision: { prompt: 0.005, completion: 0.015 },
-        tier_audio: { prompt: 0.002, completion: 0.006 },
-      }), '各档位价格（元/千token，JSON）'],
-      ['tier_examples', JSON.stringify({
-        tier_budget: 'qwen-turbo-latest, glm-4.5-flash, deepseek-v4-flash',
-        tier_mainstream: 'qwen-plus-latest, glm-4.6, kimi-k2.6',
-        tier_flagship: 'qwen-max-latest, deepseek-v4-pro, glm-4.5',
-        tier_super_flagship: 'qwen3.7-max, gui-plus',
-        tier_ultra: 'qwen3.6-max',
-        tier_vision: 'gemini-3.5-flash, qwen-vl-max-latest',
-        tier_audio: 'qwen-audio-asr-latest, qwen-tts-latest',
-      }), '控制台计费规则模型举例（JSON）'],
-      ['default_prices', JSON.stringify({ prompt: 0.002, completion: 0.006 }), '默认价格（未分配档位的模型使用，JSON）'],
-    ];
-
-    const stmt = this.adapter.prepare(
-      'INSERT IGNORE INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP(3))',
-    );
-    for (const [key, value, desc] of settings) {
-      await stmt.run(key, value, desc);
-    }
-  }
-
-  private async ensureGeminiSystemSettings(): Promise<void> {
-    const geminiModels = ['gemini-3.5-flash'];
-    await this.removeModelFromCsvSettings('auto');
-    await this.replaceGeminiModelsInCsvSetting('page_models_vision', geminiModels);
-
-    const tagRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('model_tags')) as { value: string } | undefined;
-    if (tagRow?.value) {
-      try {
-        const tags = JSON.parse(tagRow.value) as Record<string, string[]>;
-        let changed = false;
-        const allowedTags = new Set(['language', 'vision', 'audio']);
-        for (const model of Object.keys(tags)) {
-          if (model === 'auto' || (model.startsWith('gemini-') && !geminiModels.includes(model))) {
-            delete tags[model];
-            changed = true;
-            continue;
-          }
-          const next = Array.from(new Set((tags[model] || []).filter((tag) => allowedTags.has(tag))));
-          if (JSON.stringify(tags[model] || []) !== JSON.stringify(next)) {
-            changed = true;
-            if (next.length > 0) tags[model] = next;
-            else delete tags[model];
-          }
-        }
-        for (const model of geminiModels) {
-          const next = Array.from(new Set([...(tags[model] || []), 'language', 'vision']));
-          if (JSON.stringify(tags[model] || []) !== JSON.stringify(next)) changed = true;
-          tags[model] = next;
-        }
-        if (changed) await this.updateSystemSetting('model_tags', JSON.stringify(tags));
-      } catch {}
-    }
-
-    const tierRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('model_tier_mapping')) as { value: string } | undefined;
-    if (tierRow?.value) {
-      try {
-        const tiers = JSON.parse(tierRow.value) as Record<string, string[]>;
-        let changed = false;
-        for (const [tier, models] of Object.entries(tiers)) {
-          const next = Array.from(new Set((models || []).filter((model) => model && model !== 'auto' && (!model.startsWith('gemini-') || geminiModels.includes(model)))));
-          if (next.length !== (models || []).length) changed = true;
-          tiers[tier] = next;
-        }
-        changed = [
-          this.appendUnique(tiers, 'tier_vision', geminiModels),
-        ].some(Boolean) || changed;
-        if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
-      } catch {}
-    }
-  }
-
-  private async ensureNoAutoModelSystemSettings(): Promise<void> {
-    await this.removeModelFromCsvSettings('auto');
-
-    const classifierRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('router_classifier_model')) as { value: string } | undefined;
-    if (classifierRow?.value?.trim() === 'auto') {
-      await this.updateSystemSetting('router_classifier_model', 'qwen-plus');
-    }
-
-    const tagRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('model_tags')) as { value: string } | undefined;
-    if (tagRow?.value) {
-      try {
-        const tags = JSON.parse(tagRow.value) as Record<string, string[]>;
-        if (Object.prototype.hasOwnProperty.call(tags, 'auto')) {
-          delete tags.auto;
-          await this.updateSystemSetting('model_tags', JSON.stringify(tags));
-        }
-      } catch {}
-    }
-
-    const tierRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('model_tier_mapping')) as { value: string } | undefined;
-    if (tierRow?.value) {
-      try {
-        const tiers = JSON.parse(tierRow.value) as Record<string, string[]>;
-        let changed = false;
-        for (const [tier, models] of Object.entries(tiers)) {
-          const next = Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
-          if (next.length !== (models || []).length) changed = true;
-          tiers[tier] = next;
-        }
-        if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
-      } catch {}
-    }
-
-    const routerRows = (await this.adapter
-      .prepare('SELECT intent, models FROM router_rules')
-      .all()) as Array<{ intent: string; models: string }>;
-    for (const row of routerRows) {
-      try {
-        const models = JSON.parse(row.models) as string[];
-        const next = Array.from(new Set((models || []).filter((model) => model && model !== 'auto')));
-        if (next.length === models.length) continue;
-        await this.adapter
-          .prepare('UPDATE router_rules SET models = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE intent = ?')
-          .run(JSON.stringify(next), row.intent);
-      } catch {}
-    }
-  }
-
-  private async ensureQwen37SystemSettings(): Promise<void> {
-    const legacyModels = new Set(['qwen3.6-plus', 'qwen-3.6-plus', 'qwen-3.7-max']);
-    const nextModel = 'qwen3.7-max';
-    for (const key of ['page_models_vision', 'page_models_chat', 'page_models_battle', 'page_models_group']) {
-      await this.replaceLegacyModelInCsvSetting(key, legacyModels, nextModel);
-    }
-
-    const tagRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('model_tags')) as { value: string } | undefined;
-    if (tagRow?.value) {
-      try {
-        const tags = JSON.parse(tagRow.value) as Record<string, string[]>;
-        let changed = false;
-        for (const legacy of legacyModels) {
-          if (tags[legacy]) {
-            tags[nextModel] = Array.from(new Set([...(tags[nextModel] || []), ...tags[legacy], 'language', 'vision']));
-            delete tags[legacy];
-            changed = true;
-          }
-        }
-        if (!tags[nextModel]) {
-          tags[nextModel] = ['language', 'vision'];
-          changed = true;
-        }
-        if (changed) await this.updateSystemSetting('model_tags', JSON.stringify(tags));
-      } catch {}
-    }
-
-    const tierRow = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get('model_tier_mapping')) as { value: string } | undefined;
-    if (tierRow?.value) {
-      try {
-        const tiers = JSON.parse(tierRow.value) as Record<string, string[]>;
-        let changed = false;
-        for (const [tier, models] of Object.entries(tiers)) {
-          const next = Array.from(new Set((models || []).map((model) => legacyModels.has(model) ? nextModel : model)));
-          if (JSON.stringify(next) !== JSON.stringify(models || [])) changed = true;
-          tiers[tier] = next;
-        }
-        changed = this.appendUnique(tiers, 'tier_flagship', [nextModel]) || changed;
-        if (changed) await this.updateSystemSetting('model_tier_mapping', JSON.stringify(tiers));
-      } catch {}
-    }
-  }
 
   private async seedRouterRules(): Promise<void> {
+    if (await this.adapter.prepare('SELECT name FROM bootstrap_seed_state WHERE name=?').get('router_rules')) return;
     const { count } = (await this.adapter
       .prepare('SELECT COUNT(*) as count FROM router_rules')
       .get()) as { count: number };
-    if (count > 0) return;
+    if (count > 0) {
+      await this.adapter.prepare('INSERT INTO bootstrap_seed_state (name) VALUES (?)').run('router_rules');
+      return;
+    }
 
     const rules: Record<string, string[]> = {
       coding: ['deepseek-v4-pro', 'deepseek-v4-flash', 'qwen-plus'],
@@ -2008,106 +1801,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     for (const [intent, models] of Object.entries(rules)) {
       await stmt.run(intent, JSON.stringify(models));
     }
+    await this.adapter.prepare('INSERT INTO bootstrap_seed_state (name) VALUES (?)').run('router_rules');
   }
 
-  private async ensureGeminiRouterRules(): Promise<void> {
-    const row = (await this.adapter
-      .prepare('SELECT models FROM router_rules WHERE intent = ?')
-      .get('vision')) as { models: string } | undefined;
-    if (!row?.models) return;
 
-    try {
-      const models = JSON.parse(row.models) as string[];
-      const next = Array.from(new Set(['gemini-3.5-flash', ...models.filter((model) => !model.startsWith('gemini-'))]));
-      if (JSON.stringify(next) === JSON.stringify(models)) return;
-      await this.adapter
-        .prepare('UPDATE router_rules SET models = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE intent = ?')
-        .run(JSON.stringify(next), 'vision');
-    } catch {}
-  }
 
-  private async ensureQwen37RouterRules(): Promise<void> {
-    const rows = (await this.adapter
-      .prepare('SELECT intent, models FROM router_rules')
-      .all()) as Array<{ intent: string; models: string }>;
 
-    for (const row of rows) {
-      try {
-        const models = JSON.parse(row.models) as string[];
-        const next = Array.from(new Set(models.map((model) =>
-          ['qwen3.6-plus', 'qwen-3.6-plus', 'qwen-3.7-max'].includes(model) ? 'qwen3.7-max' : model,
-        )));
-        if (JSON.stringify(next) === JSON.stringify(models)) continue;
-        await this.adapter
-          .prepare('UPDATE router_rules SET models = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE intent = ?')
-          .run(JSON.stringify(next), row.intent);
-      } catch {}
-    }
-  }
 
-  private async appendModelsToCsvSetting(key: string, models: string[]): Promise<void> {
-    const row = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get(key)) as { value: string } | undefined;
-    if (!row?.value || row.value.trim() === '*') return;
-
-    const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
-    const next = Array.from(new Set([...values, ...models]));
-    if (next.length === values.length) return;
-    await this.updateSystemSetting(key, next.join(','));
-  }
-
-  private async replaceGeminiModelsInCsvSetting(key: string, models: string[]): Promise<void> {
-    const row = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get(key)) as { value: string } | undefined;
-    if (!row?.value || row.value.trim() === '*') return;
-
-    const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
-    const next = Array.from(new Set([...values.filter((model) => !model.startsWith('gemini-')), ...models]));
-    if (next.join(',') === values.join(',')) return;
-    await this.updateSystemSetting(key, next.join(','));
-  }
-
-  private async replaceLegacyModelInCsvSetting(key: string, legacyModels: Set<string>, nextModel: string): Promise<void> {
-    const row = (await this.adapter
-      .prepare('SELECT value FROM system_settings WHERE `key` = ?')
-      .get(key)) as { value: string } | undefined;
-    if (!row?.value || row.value.trim() === '*') return;
-
-    const values = row.value.split(',').map((item) => item.trim()).filter(Boolean);
-    const replaced = values.map((model) => legacyModels.has(model) ? nextModel : model);
-    const next = Array.from(new Set(replaced.includes(nextModel) ? replaced : [nextModel, ...replaced]));
-    if (next.join(',') === values.join(',')) return;
-    await this.updateSystemSetting(key, next.join(','));
-  }
-
-  private async removeModelFromCsvSettings(modelId: string): Promise<void> {
-    const rows = (await this.adapter
-      .prepare('SELECT `key`, value FROM system_settings WHERE `key` LIKE ?')
-      .all('page_models_%')) as Array<{ key: string; value: string }>;
-
-    for (const row of rows) {
-      const value = row.value?.trim();
-      if (!value || value === '*') continue;
-      const models = value.split(',').map((item) => item.trim()).filter(Boolean);
-      const next = models.filter((model) => model !== modelId);
-      if (next.length !== models.length) {
-        await this.updateSystemSetting(row.key, next.length > 0 ? next.join(',') : '*');
-      }
-    }
-  }
-
-  private appendUnique(target: Record<string, string[]>, key: string, values: string[]): boolean {
-    const current = target[key] || [];
-    const next = Array.from(new Set([...current, ...values]));
-    target[key] = next;
-    return next.length !== current.length;
-  }
-
-  private async updateSystemSetting(key: string, value: string): Promise<void> {
-    await this.adapter
-      .prepare('UPDATE system_settings SET value = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE `key` = ?')
-      .run(value, key);
-  }
 }

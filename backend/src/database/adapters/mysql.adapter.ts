@@ -1,5 +1,6 @@
 import { IDatabaseAdapter, IStatement, RowArray, RowRecord } from '../database.adapter.interface';
 import type { Pool, PoolConnection, ResultSetHeader } from 'mysql2/promise';
+import { createHash } from 'crypto';
 
 /**
  * 在 npm workspace 环境下，ESM import 无法找到提升到根 node_modules 的依赖。
@@ -81,6 +82,7 @@ export class MysqlDatabaseAdapter implements IDatabaseAdapter {
     user: string;
     password: string;
     database: string;
+    connectTimeout?: number;
   }) {}
 
   async init(): Promise<void> {
@@ -88,11 +90,12 @@ export class MysqlDatabaseAdapter implements IDatabaseAdapter {
     const { host, port, user, password, database } = this.config;
 
     // Step 1: 先不指定数据库连接（用于自动建库）
-    console.log(`[Database] Connecting to ${host}:${port} (no db) ...`);
-    const tempConn = await mysql.createConnection({ host, port, user, password });
+    const connectTimeout = this.config.connectTimeout ?? 5000;
+    console.log('[Database] Connecting to configured MySQL ...');
+    const tempConn = await mysql.createConnection({ host, port, user, password, connectTimeout });
     try {
-      await tempConn.query(`CREATE DATABASE IF NOT EXISTS \`${database}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-      console.log(`[Database] MySQL database "${database}" ready.`);
+      await tempConn.query(`CREATE DATABASE IF NOT EXISTS \`${database.replace(/`/g, '``')}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+      console.log('[Database] MySQL database ready.');
     } finally {
       await tempConn.end();
     }
@@ -104,9 +107,23 @@ export class MysqlDatabaseAdapter implements IDatabaseAdapter {
       connectionLimit: 10,
       multipleStatements: false,
       charset: 'utf8mb4',
+      connectTimeout,
     });
-    this.connection = await this.pool.getConnection();
+    try { this.connection = await this.pool.getConnection(); }
+    catch (error) { await this.pool.end(); throw error; }
     console.log('[Database] MySQL pool initialized.');
+  }
+
+  /** A connection-owned lock serializes the existing schema/bootstrap chain across instances.
+   * Queries still use the existing pool; this is NOT a transaction API replacement. */
+  async withInitializationLock(work: () => Promise<void>, timeoutSeconds: number): Promise<void> {
+    const name = 'llmgather:init:' + createHash('sha256').update(this.config.database).digest('hex').slice(0, 40);
+    const [rows] = await this.connection.execute('SELECT GET_LOCK(?, ?) AS acquired', [name, timeoutSeconds]);
+    if (Number((rows as RowArray)[0]?.acquired) !== 1) {
+      throw Object.assign(new Error('Database bootstrap lock timeout'), { code: 'BOOTSTRAP_LOCK_TIMEOUT' });
+    }
+    try { await work(); }
+    finally { await this.connection.execute('SELECT RELEASE_LOCK(?)', [name]); }
   }
 
   async exec(sql: string): Promise<void> {
@@ -117,6 +134,22 @@ export class MysqlDatabaseAdapter implements IDatabaseAdapter {
     // Use the pool so that each query gets a healthy connection.
     // This avoids stale-connection errors after MySQL wait_timeout.
     return new MysqlStatement(this.pool, sql);
+  }
+
+  async transaction<T>(work: (session: Pick<IDatabaseAdapter, 'prepare' | 'exec'>) => Promise<T>): Promise<T> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await work({
+        prepare: sql => new MysqlStatement(connection, sql),
+        exec: async sql => { await connection.query(sql); },
+      });
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally { connection.release(); }
   }
 
   async beginTransaction(): Promise<void> {
@@ -132,7 +165,7 @@ export class MysqlDatabaseAdapter implements IDatabaseAdapter {
   }
 
   async close(): Promise<void> {
-    this.connection.release();
-    await this.pool.end();
+    this.connection?.release();
+    if (this.pool) await this.pool.end();
   }
 }

@@ -8,6 +8,8 @@ export interface IStatement {
 }
 
 export interface IDatabaseAdapter {
+  /** Callback statements share one checked-out connection; no pool autocommits. */
+  transaction?<T>(work: (session: Pick<IDatabaseAdapter, 'prepare' | 'exec'>) => Promise<T>): Promise<T>;
   /** 执行任意 SQL（DDL 等） */
   exec(sql: string): Promise<void>;
 

@@ -13,7 +13,8 @@
     "test": "jest",
     "backup:sanitized": "node scripts/export-sanitized-sql.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit --incremental false",
-    "test:p0:integration": "node scripts/p0-integration.cjs"
+    "test:p0:integration": "node scripts/p0-integration.cjs",
+    "test:database:integration": "node scripts/test-database-bootstrap.cjs"
   },
   "dependencies": {
     "@langchain/langgraph": "^1.3.6",

@@ -9,7 +9,7 @@ import { REQUEST_ID_HEADER } from './common/constants';
 import { SystemSettingsService } from './common/system-settings.service';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
 
   const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
     .split(',')
@@ -25,16 +25,16 @@ async function bootstrap(): Promise<void> {
       'x-cache-hit',
       'x-cache-tokens-saved',
       'x-credit-balance',
+        'x-memory-count',
+        'x-memory-status',
     ],
   });
   // JSON body size limit from system settings (bytes). fallback to 2mb.
   let jsonLimit = '2mb';
   try {
     const settings = app.get(SystemSettingsService);
-    const maxJson = settings.getNumber('max_json_body_size', NaN);
-    if (Number.isFinite(maxJson) && maxJson > 0) {
-      jsonLimit = `${maxJson}b`;
-    }
+    const configured = settings.getString('max_json_body_size', '2mb');
+    if (/^\d+(?:\.\d+)?\s*(?:b|kb|mb)?$/i.test(configured)) jsonLimit = configured;
   } catch (e) {
     // ignore — use default
   }

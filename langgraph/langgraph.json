@@ -1,8 +1,0 @@
-{
-  "node_version": "22",
-  "dependencies": ["."],
-  "graphs": {
-    "memory": "./src/memory-graph.js:graph"
-  },
-  "env": ".env"
-}

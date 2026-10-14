@@ -55,7 +55,7 @@ MEMORY_EMBEDDING_INSTANCE_ID=
 
 ## 从旧独立服务迁移
 
-1. 备份 MySQL，并保留旧 `langgraph/` 目录及旧服务数据。普通旧写入已有 MySQL 镜像，切换后原 UUID 和内容继续可读。
+1. 备份 MySQL，并保留旧服务数据。旧独立服务源码已移除，需要历史源码时可从 Git 历史中恢复。普通旧写入已有 MySQL 镜像，切换后原 UUID 和内容继续可读。
 2. 若旧服务存在远端写入成功、MySQL 镜像失败的记录，需从旧 Store 导出并按用户与范围核对后导入 MySQL，再停旧服务。此次代码变更不会连接或自动导入远端-only 记录。
 3. 更新 Compose 后，通过部署脚本启动。新配置不再创建 `langgraph-memory`，也不依赖 2024 端口。旧的 orphan 容器不会被自动删数据；核对数据后可单独停止它。
 4. `MEMORY_PROVIDER=langgraph` 与 `LANGGRAPH_MEMORY_*` 不再控制当前后端。数据库中的旧 provider、external_id、provider_payload 保留，API 统一按 MySQL 原生记忆返回。
@@ -63,7 +63,7 @@ MEMORY_EMBEDDING_INSTANCE_ID=
 
 ## 回滚
 
-本次迁移只新增字段、队列索引和 Collection 登记表，不删除旧内容、旧 provider 信息或旧服务源文件。回滚应用与 Compose 时保留新增数据库字段，不执行 drop 操作；旧代码忽略这些字段。恢复独立服务前应核对切换期间新增/更新/删除的 MySQL 记忆，旧远端副本不会自动同步这些变更。代码回滚不等于远端数据自动一致。
+记忆迁移只新增字段、队列索引和 Collection 登记表，不删除旧记忆内容或旧 provider 信息。旧独立服务源码的清理不涉及数据库或 Docker 数据卷，需要时可从 Git 历史恢复。回滚应用与 Compose 时保留新增数据库字段，不执行 drop 操作；旧代码忽略这些字段。恢复独立服务前应核对切换期间新增/更新/删除的 MySQL 记忆，旧远端副本不会自动同步这些变更。代码回滚不等于远端数据自动一致。
 
 ## 验证
 

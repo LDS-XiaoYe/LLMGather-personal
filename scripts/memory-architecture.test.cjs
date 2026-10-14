@@ -20,6 +20,8 @@ test('templates consistently opt out of memory embeddings until explicitly enabl
   }
 });
 test('LangGraph stays embedded, MySQL stays authoritative and the former adapter is not registered', () => {
+  assert(!fs.existsSync(path.join(root, 'langgraph')));
+  assert(read('backend/package.json').includes('"@langchain/langgraph"'));
   assert.match(read('backend/src/agents/agents.service.ts'), /graph\.compile\(/);
   assert.match(read('backend/src/workflows/runtime/workflow-engine.ts'), /checkpointer: context\.checkpointer/);
   assert(!read('backend/src/memory/memory.module.ts').includes('LangGraphMemoryProvider'));
@@ -30,7 +32,7 @@ test('README remains emoji-free and all relative Markdown links resolve', () => 
   const source = read('README.md');
   assert(!/[\p{Extended_Pictographic}\uFE0F\u200D]/u.test(source));
   assert(!/MEMORY_PROVIDER=langgraph|记忆服务 `2024`/.test(source));
-  for(const file of ['README.md','docs/MEMORY-ARCHITECTURE.md','docs/P0-ARCHITECTURE.md','langgraph/README.md']) {
+  for(const file of ['README.md','docs/MEMORY-ARCHITECTURE.md','docs/P0-ARCHITECTURE.md']) {
     for(const match of read(file).matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
       const link = match[1].split('#')[0];
       if(!link || /^[a-z]+:/i.test(link)) continue;

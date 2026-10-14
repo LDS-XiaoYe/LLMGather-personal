@@ -114,7 +114,7 @@ flowchart LR
 - **前端**：Vue 3 + TypeScript + Element Plus，Vite 开发代理；构建部署使用 Nginx。
 - **后端**：NestJS 11 模块化 API，JWT / API Key 鉴权，模型网关、Agent 与工作流分别组织。
 - **存储**：MySQL 保存业务数据、运行轨迹、工作流 Checkpoint 与模型任务；Redis 承担缓存和安全验证等用途；Qdrant 保存原生 RAG 向量与可选长期记忆索引，两者使用独立 Collection。
-- **执行基础设施**：LangGraph 在 NestJS 内嵌运行 Agent / Team / Workflow；工作流 Checkpointer 位于 `backend/src/workflows/runtime/`，默认部署不启动独立记忆服务。`langgraph/` 仅保留旧服务源代码用于历史数据核对。默认 Compose 自动启动独立 Deployment Agent 并登记默认 Docker CPU 部署节点，业务后端不挂载 Docker Socket；原生 GPU / Apple 节点可作为高级选项连接。
+- **执行基础设施**：LangGraph 在 NestJS 内嵌运行 Agent / Team / Workflow；工作流 Checkpointer 位于 `backend/src/workflows/runtime/`，不需要独立记忆服务，旧服务源码已移除。默认 Compose 自动启动独立 Deployment Agent 并登记默认 Docker CPU 部署节点，业务后端不挂载 Docker Socket；原生 GPU / Apple 节点可作为高级选项连接。
 
 <a id="quick-start"></a>
 
@@ -209,7 +209,6 @@ LLMGather-personal/
 ├── frontend/          # Vue 工作台与管理界面
 ├── backend/           # NestJS API、Agent、Workflow、RAG 与迁移
 ├── deployment-agent/  # 模型下载、计算节点控制与运行时适配器
-├── langgraph/         # 历史记忆服务源码（不再参与默认部署）
 ├── scripts/           # Docker 开发入口、Code Runner 等辅助脚本
 ├── docs/              # 架构、部署与验收手册
 ├── docker-compose.yml           # 开发环境
@@ -231,7 +230,7 @@ npm run dev:frontend
 
 在 `backend/.env` 配置数据库、`REDIS_URL`、`QDRANT_URL` / 密钥、Checkpoint 密钥和所需 Embedding。本地前端默认 **[http://localhost:5199](http://localhost:5199)**，后端默认 `3000`；前端通过 Vite 代理 `/v1`，后端 `FRONTEND_ORIGIN` 应设为 `http://localhost:5199`。Vite 端口以 `frontend/vite.config.ts` 为准，覆盖 `VITE_PORT` 时需在启动进程环境中设置。
 
-长期记忆默认使用 MySQL，启动后端即可使用，不需要运行 `langgraph/`。可选语义检索按 [记忆配置指南](docs/MEMORY-ARCHITECTURE.md) 启用；本地代码工具仍需单独运行 Code Runner。
+长期记忆默认使用 MySQL，启动后端即可使用，不需要独立记忆服务。可选语义检索按 [记忆配置指南](docs/MEMORY-ARCHITECTURE.md) 启用；本地代码工具仍需单独运行 Code Runner。
 
 ### 检查与构建
 

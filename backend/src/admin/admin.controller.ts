@@ -20,8 +20,11 @@ import { AdminGuard } from '../common/guards/admin.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import { AdminService } from './admin.service';
+import { BailianModelsService } from './bailian-models.service';
+import { ApplyBailianModelsDto, BailianCredentialScopeDto, PreviewBailianModelsDto } from './bailian-models.dto';
 import { BillingService } from '../billing/billing.service';
 import { UsersService } from '../auth/users.service';
+import { CreateAdminUserDto, UpdateAdminUserDto, ResetAdminPasswordDto, UpdateSettingDto, BillingRuleDto, InvitationCreditsDto, ProviderKeyDto, CreateProviderDto, UpdateProviderDto, TierModelsDto } from './admin.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, AdminGuard)
@@ -30,6 +33,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly billingService: BillingService,
     private readonly usersService: UsersService,
+    private readonly bailianModels: BailianModelsService,
   ) {}
 
   /** GET /v1/admin/stats — dashboard overview */
@@ -80,7 +84,7 @@ export class AdminController {
   @Post('users')
   @HttpCode(HttpStatus.CREATED)
   async createUser(
-    @Body() body: { username?: string; password?: string; email?: string; role?: string; credits?: number; emailVerified?: boolean },
+    @Body() body: CreateAdminUserDto,
   ) {
     const username = body.username?.trim();
     const email = body.email?.trim();
@@ -113,7 +117,7 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async updateUser(
     @Param('id') userId: string,
-    @Body() body: { credits?: number; role?: string; emailVerified?: boolean },
+    @Body() body: UpdateAdminUserDto,
   ) {
     if (body.credits === undefined && body.role === undefined && body.emailVerified === undefined) {
       throw new BadRequestException('至少需要提供 credits、role 或 emailVerified 字段');
@@ -141,7 +145,7 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async resetUserPassword(
     @Param('id') userId: string,
-    @Body() body: { password: string },
+    @Body() body: ResetAdminPasswordDto,
   ) {
     if (!body.password || body.password.length < 4) {
       throw new BadRequestException('密码长度至少 4 位');
@@ -187,7 +191,7 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async updateBillingRule(
     @Param('key') key: string,
-    @Body() body: { value: number; description?: string },
+    @Body() body: BillingRuleDto,
   ) {
     if (typeof body.value !== 'number' || body.value < 0) {
       throw new BadRequestException('value 必须为非负数');
@@ -215,7 +219,7 @@ export class AdminController {
   @Post('provider-keys')
   @HttpCode(HttpStatus.CREATED)
   async addProviderKey(
-    @Body() body: { provider: string; name?: string; key: string },
+    @Body() body: ProviderKeyDto,
   ) {
     if (!body.provider || !body.key) {
       throw new BadRequestException('provider 和 key 为必填字段');
@@ -245,6 +249,30 @@ export class AdminController {
 
   /* ──────── Provider Config management ──────── */
 
+  @Post('bailian-models/credential/status')
+  @HttpCode(HttpStatus.OK)
+  async bailianCredentialStatus(@CurrentUser() user: AuthenticatedRequestUser, @Body() body: BailianCredentialScopeDto) {
+    return { data: await this.bailianModels.credentialStatus(user.id, body) };
+  }
+
+  @Post('bailian-models/credential/forget')
+  @HttpCode(HttpStatus.OK)
+  async forgetBailianCredential(@CurrentUser() user: AuthenticatedRequestUser, @Body() body: BailianCredentialScopeDto) {
+    return { data: await this.bailianModels.forgetCredential(user.id, body) };
+  }
+
+  @Post('bailian-models/preview')
+  @HttpCode(HttpStatus.OK)
+  async previewBailianModels(@CurrentUser() user: AuthenticatedRequestUser, @Body() body: PreviewBailianModelsDto) {
+    return { data: await this.bailianModels.preview(user.id, body) };
+  }
+
+  @Post('bailian-models/apply')
+  @HttpCode(HttpStatus.OK)
+  async applyBailianModels(@CurrentUser() user: AuthenticatedRequestUser, @Body() body: ApplyBailianModelsDto) {
+    return { data: await this.bailianModels.apply(user.id, body.previewId, body.selections) };
+  }
+
   /** GET /v1/admin/provider-configs — list all provider configs */
   @Get('provider-configs')
   async listProviderConfigs() {
@@ -256,18 +284,7 @@ export class AdminController {
   @Post('provider-configs')
   @HttpCode(HttpStatus.CREATED)
   async createProviderConfig(
-    @Body()
-    body: {
-      providerName: string;
-      displayName: string;
-      baseUrl: string;
-      models: string;
-      modelPrefix?: string;
-      authHeader?: string;
-      authPrefix?: string;
-      timeoutMs?: number;
-      retryCount?: number;
-    },
+    @Body() body: CreateProviderDto,
   ) {
     if (!body.providerName || !body.displayName || !body.baseUrl || !body.models) {
       throw new BadRequestException(
@@ -283,23 +300,11 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async updateProviderConfig(
     @Param('id') id: string,
-    @Body()
-    body: {
-      providerName?: string;
-      displayName?: string;
-      baseUrl?: string;
-      models?: string;
-      modelPrefix?: string;
-      authHeader?: string;
-      authPrefix?: string;
-      timeoutMs?: number;
-      retryCount?: number;
-      enabled?: boolean;
-    },
+    @Body() body: UpdateProviderDto,
   ) {
-    // Handle toggle separately
+    if (body.enabled !== undefined && Object.entries(body).some(([k,v]) => !['enabled','expectedUpdatedAt'].includes(k) && v !== undefined)) throw new BadRequestException('启用状态与配置编辑请分别提交');
     if (body.enabled !== undefined) {
-      const config = await this.adminService.toggleProviderEnabled(id, body.enabled);
+      const config = await this.adminService.toggleProviderEnabled(id, body.enabled, body.expectedUpdatedAt);
       return { data: config };
     }
     const config = await this.adminService.updateProviderConfig(id, body);
@@ -327,13 +332,13 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async updateSystemSetting(
     @Param('key') key: string,
-    @Body() body: { value: string },
+    @Body() body: UpdateSettingDto,
   ) {
     if (body.value === undefined) {
       throw new BadRequestException('value 为必填字段');
     }
-    await this.adminService.updateSystemSetting(key, body.value);
-    return { data: { key, value: body.value } };
+    await this.adminService.updateSystemSetting(key, body.value, body.expectedValue);
+    return { data: { key, value: await this.adminService.getSystemSetting(key) } };
   }
 
   /** GET /v1/admin/invitation/credits — get invitation credits reward */
@@ -346,11 +351,11 @@ export class AdminController {
   /** PATCH /v1/admin/invitation/credits — update invitation credits reward */
   @Patch('invitation/credits')
   @HttpCode(HttpStatus.OK)
-  async updateInvitationCredits(@Body() body: { credits: number }) {
+  async updateInvitationCredits(@Body() body: InvitationCreditsDto) {
     if (typeof body.credits !== 'number' || body.credits < 0) {
       throw new BadRequestException('credits 必须为非负数');
     }
-    await this.usersService.setInvitationCredits(body.credits);
+    await this.adminService.updateSystemSetting('invitation_credits', String(body.credits));
     return { data: { credits: body.credits } };
   }
 
@@ -373,7 +378,7 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async addModelsToTier(
     @Param('tierKey') tierKey: string,
-    @Body() body: { models: string[] },
+    @Body() body: TierModelsDto,
   ) {
     return { data: await this.adminService.addModelsToTier(tierKey, body.models) };
   }

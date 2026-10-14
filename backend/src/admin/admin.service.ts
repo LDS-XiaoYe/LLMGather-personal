@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { UsersService } from '../auth/users.service';
 import {
@@ -11,6 +11,13 @@ import { ApiKeyPoolSnapshot } from '../providers/api-key-pool';
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { SystemSettingsService } from '../common/system-settings.service';
 import { AuthUser } from '../auth/auth.types';
+import { modelMapping, price, record, validateSettingValue } from '../common/setting-validation';
+
+export function csvCell(value: unknown): string {
+  let text = String(value ?? '');
+  if (/^[\s]*[=+@-]/.test(text)) text = "'" + text;
+  return '"' + text.replace(/"/g, '""') + '"';
+}
 
 export interface AdminStats {
   totalUsers: number;
@@ -178,7 +185,7 @@ export class AdminService {
     return this.getAdminUserRow(user.id);
   }
 
-  async updateUser(userId: string, updates: { credits?: number; role?: string; emailVerified?: boolean }): Promise<AdminUserRow> {
+  async updateUser(userId: string, updates: { credits?: number; role?: string; emailVerified?: boolean; expectedCredits?: number }): Promise<AdminUserRow> {
     const db = this.databaseService.connection;
 
     const user = await db.prepare(
@@ -187,21 +194,20 @@ export class AdminService {
 
     if (!user) throw new NotFoundException('用户不存在');
 
-    if (updates.credits !== undefined) {
-      await db.prepare('UPDATE users SET credits = ? WHERE id = ?')
-        .run(Number(updates.credits.toFixed(6)), userId);
-    }
-    if (updates.role !== undefined) {
-      if (!['admin', 'user'].includes(updates.role)) {
-        throw new ForbiddenException('无效的角色值，仅支持 admin 或 user');
-      }
-      await db.prepare('UPDATE users SET role = ? WHERE id = ?')
-        .run(updates.role, userId);
-    }
-    if (updates.emailVerified !== undefined) {
-      await db.prepare('UPDATE users SET email_verified = ? WHERE id = ?')
-        .run(updates.emailVerified ? 1 : 0, userId);
-    }
+    if (updates.credits !== undefined) price(updates.credits, 'credits');
+    if (updates.role !== undefined && !['admin', 'user'].includes(updates.role)) throw new BadRequestException('无效的角色值');
+    if (updates.emailVerified !== undefined && typeof updates.emailVerified !== 'boolean') throw new BadRequestException('无效的邮箱验证状态');
+    await this.databaseService.transaction(async tx => {
+      // Serialize role changes so concurrent requests cannot remove every administrator.
+      const admins = updates.role !== undefined ? await tx.prepare("SELECT id FROM users WHERE role='admin' ORDER BY id FOR UPDATE").all() : [];
+      const current = await tx.prepare('SELECT id,role,credits FROM users WHERE id=? FOR UPDATE').get(userId);
+      if (!current) throw new NotFoundException('用户不存在');
+      if (current.role === 'admin' && updates.role === 'user' && admins.length <= 1) throw new ForbiddenException('至少保留一个管理员账户');
+      if (updates.credits !== undefined && updates.expectedCredits !== undefined && Number(current.credits) !== updates.expectedCredits) throw new ConflictException('用户余额已变化，请刷新用户列表后重新编辑');
+      if (updates.credits !== undefined) await tx.prepare('UPDATE users SET credits=? WHERE id=?').run(Number(updates.credits.toFixed(6)), userId);
+      if (updates.role !== undefined) await tx.prepare('UPDATE users SET role=? WHERE id=?').run(updates.role, userId);
+      if (updates.emailVerified !== undefined) await tx.prepare('UPDATE users SET email_verified=? WHERE id=?').run(updates.emailVerified ? 1 : 0, userId);
+    });
 
     // Re-fetch with request count
     const updated = await db.prepare(
@@ -232,7 +238,7 @@ export class AdminService {
        FROM users u
        LEFT JOIN (SELECT user_id, COUNT(*) as req_count FROM billing_ledger GROUP BY user_id) bc ON bc.user_id = u.id
        WHERE u.id = ?`,
-    ).get(userId) as (AdminUserRow & { emailVerified: number | string | boolean }) | undefined;
+    ).get(userId) as unknown as (AdminUserRow & { emailVerified: number | string | boolean }) | undefined;
     if (!row) throw new NotFoundException('用户不存在');
     return {
       ...row,
@@ -316,22 +322,11 @@ export class AdminService {
     };
   }
 
-  async updateBillingRule(key: string, value: number, description?: string): Promise<{ key: string; value: number; description: string }> {
-    // Route to the appropriate system_settings key
-    if (key === 'default_prompt_price_per_1k' || key === 'default_completion_price_per_1k') {
-      // Read current default_prices, update, save back
-      const db = this.databaseService.connection;
-      const row = await db.prepare('SELECT value FROM system_settings WHERE `key` = ?').get('default_prices') as { value: string } | undefined;
-      const dp = row?.value ? JSON.parse(row.value) : { prompt: 0.002, completion: 0.006 };
-      if (key === 'default_prompt_price_per_1k') dp.prompt = value;
-      else dp.completion = value;
-      await db.prepare(
-        'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
-      ).run('default_prices', JSON.stringify(dp), description || '默认价格', this.databaseService.now());
-      await this.settings.reloadAll();
-      return { key, value, description: description || '' };
-    }
-    throw new NotFoundException('不支持直接编辑此计费规则，请通过定价映射页面管理');
+  async updateBillingRule(key: string, value: number, description?: string): Promise<{key: string; value: number; description: string}> {
+    price(value, key);
+    if (!['default_prompt_price_per_1k', 'default_completion_price_per_1k'].includes(key)) throw new NotFoundException('请通过定价映射页面管理此规则');
+    await this.settings.mutateJSON('default_prices', current => ({...current, [key === 'default_prompt_price_per_1k' ? 'prompt' : 'completion']: value}));
+    return {key, value, description: description || ''};
   }
 
   /** Simple check — returns true if the user has admin role */
@@ -355,12 +350,14 @@ export class AdminService {
     if (!user) throw new NotFoundException('用户不存在');
     if (user.role === 'admin') throw new ForbiddenException('不能删除管理员账户');
 
-    // Cascade delete user data
-    await db.prepare('DELETE FROM billing_ledger WHERE user_id = ?').run(userId);
-    await db.prepare('DELETE FROM conversation_messages WHERE user_id = ?').run(userId);
-    await db.prepare('DELETE FROM conversations WHERE user_id = ?').run(userId);
-    await db.prepare('DELETE FROM api_keys WHERE user_id = ?').run(userId);
-    await db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    await this.databaseService.transaction(async tx => {
+      const current = await tx.prepare('SELECT id,role FROM users WHERE id=? FOR UPDATE').get(userId);
+      if (!current) throw new NotFoundException('用户不存在');
+      if (current.role === 'admin') throw new ForbiddenException('不能删除管理员账户');
+      for (const table of ['billing_ledger','conversation_messages','conversations','api_keys']) await tx.prepare('DELETE FROM '+table+' WHERE user_id=?').run(userId);
+      await tx.prepare('DELETE FROM bailian_sync_credentials WHERE owner_id=?').run(userId);
+      await tx.prepare('DELETE FROM users WHERE id=?').run(userId);
+    });
   }
 
   async resetUserPassword(userId: string, newPassword: string): Promise<void> {
@@ -476,7 +473,7 @@ export class AdminService {
     const header = 'ID,用户,模型,请求类型,Provider,Provider Key,Key 前缀,审计元数据,输入Token,输出Token,总Token,费用,时间';
     const csvRows = rows.map((r) => {
       const providerName = r.providerName || modelProviderMap.get(r.model) || '';
-      return [r.id, r.username, r.model, r.requestType, providerName, r.providerKeyName || '', r.providerKeyPrefix || '', JSON.stringify(r.auditMetadata || ''), r.promptTokens, r.completionTokens, r.totalTokens, Number(r.cost).toFixed(6), r.createdAt].join(',');
+      return [r.id, r.username, r.model, r.requestType, providerName, r.providerKeyName || '', r.providerKeyPrefix || '', r.auditMetadata || '', r.promptTokens, r.completionTokens, r.totalTokens, Number(r.cost).toFixed(6), r.createdAt].map(csvCell).join(',');
     });
 
     // Add BOM for Excel UTF-8 compatibility
@@ -533,8 +530,9 @@ export class AdminService {
   async toggleProviderEnabled(
     id: string,
     enabled: boolean,
+    expectedUpdatedAt?: string,
   ): Promise<ProviderConfig> {
-    const config = await this.apiKeyStore.toggleEnabled(id, enabled);
+    const config = await this.apiKeyStore.toggleEnabled(id, enabled, expectedUpdatedAt);
     await this.providerRegistry.reloadProvider(config.providerName);
     return config;
   }
@@ -564,180 +562,77 @@ export class AdminService {
     return row?.value ?? null;
   }
 
-  async updateSystemSetting(key: string, value: string): Promise<void> {
-    const db = this.databaseService.connection;
-    const now = this.databaseService.now();
-    const sanitizedValue = this.sanitizeSystemSettingValue(key, value);
-    await db.prepare(
-      'UPDATE system_settings SET value = ?, updated_at = ? WHERE `key` = ?',
-    ).run(sanitizedValue, now, key);
-    await this.settings.reloadAll();
+  async updateSystemSetting(key: string, value: string, expectedValue?: string): Promise<void> {
+    await this.settings.updateValues({ [key]: value }, expectedValue === undefined ? {} : { [key]: expectedValue });
+    if (key.startsWith('api_key_')) {
+      try {
+        for (const config of await this.apiKeyStore.listConfigs()) if (config.enabled) {
+          await this.apiKeyStore.reloadPool(config.providerName);
+          await this.providerRegistry.reloadProvider(config.providerName);
+        }
+      } catch { throw new ServiceUnavailableException('配置已保存，但密钥池刷新失败，请刷新确认并重启后端'); }
+    }
   }
 
   /* ──────── Model Tier Management ──────── */
 
-  async getModelTiers(): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string>; examples: Record<string, string> }> {
-    const db = this.databaseService.connection;
-
-    const tierRow = await db.prepare(
-      'SELECT value FROM system_settings WHERE `key` = ?',
-    ).get('model_tier_mapping') as { value: string } | undefined;
-    const tiers = this.sanitizeModelTierMapping(tierRow ? JSON.parse(tierRow.value) : {});
-
-    const labelRow = await db.prepare(
-      'SELECT value FROM system_settings WHERE `key` = ?',
-    ).get('tier_labels') as { value: string } | undefined;
-    const labels: Record<string, string> = labelRow ? JSON.parse(labelRow.value) : {};
-
-    const exampleRow = await db.prepare(
-      'SELECT value FROM system_settings WHERE `key` = ?',
-    ).get('tier_examples') as { value: string } | undefined;
-    const examples: Record<string, string> = exampleRow ? JSON.parse(exampleRow.value) : {};
-
-    // Read prices from tier_prices system_settings
-    const priceRow = await db.prepare(
-      'SELECT value FROM system_settings WHERE `key` = ?',
-    ).get('tier_prices') as { value: string } | undefined;
-    const rawPrices: Record<string, { prompt: number; completion: number }> = priceRow?.value ? JSON.parse(priceRow.value) : {};
-    const prices: Record<string, { prompt: number; completion: number; description: string }> = {};
-    for (const [tier, p] of Object.entries(rawPrices)) {
-      prices[tier] = { prompt: p.prompt, completion: p.completion, description: `【${tier}】` };
+  async getModelTiers(): Promise<{ tiers: Record<string, string[]>; prices: Record<string, {prompt: number; completion: number; description: string}>; labels: Record<string, string>; examples: Record<string, string>; versions: Record<string, string> }> {
+    const rows = await this.databaseService.connection.prepare("SELECT `key`,value FROM system_settings WHERE `key` IN ('model_tier_mapping','tier_prices','tier_labels','tier_examples')").all();
+    const versions = Object.fromEntries(rows.map(r => [String(r.key), String(r.value)]));
+    const tiers = modelMapping(JSON.parse(versions.model_tier_mapping || '{}'), 'model_tier_mapping');
+    const rawPrices = record(JSON.parse(versions.tier_prices || '{}'), 'tier_prices');
+    const prices: Record<string, {prompt: number; completion: number; description: string}> = {};
+    for (const [tier, input] of Object.entries(rawPrices)) {
+      const p = record(input, 'tier_prices');
+      prices[tier] = {prompt: price(p.prompt, 'tier_prices'), completion: price(p.completion, 'tier_prices'), description: typeof p.description === 'string' ? p.description : '【'+tier+'】'};
     }
-
-    if (tierRow && tierRow.value !== JSON.stringify(tiers)) {
-      await db.prepare(
-        'UPDATE system_settings SET value = ?, updated_at = ? WHERE `key` = ?',
-      ).run(JSON.stringify(tiers), this.databaseService.now(), 'model_tier_mapping');
-      await this.settings.reloadAll();
-    }
-
-    return { tiers, prices, labels, examples };
+    return { tiers, prices, labels: JSON.parse(versions.tier_labels || '{}'), examples: JSON.parse(versions.tier_examples || '{}'), versions };
   }
 
-  async updateModelTiers(body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string>; examples?: Record<string, string> }): Promise<{ tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number; description: string }>; labels: Record<string, string>; examples: Record<string, string> }> {
-    const db = this.databaseService.connection;
-    const now = this.databaseService.now();
-    const tiers = this.sanitizeModelTierMapping(body.tiers);
-
-    await db.prepare(
-      'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
-    ).run('model_tier_mapping', JSON.stringify(tiers), '模型到计费档位的映射（JSON）', now);
-
-    if (body.labels) {
-      await db.prepare(
-        'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
-      ).run('tier_labels', JSON.stringify(body.labels), '计费档位显示名称', now);
-    }
-
-    if (body.examples) {
-      await db.prepare(
-        'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
-      ).run('tier_examples', JSON.stringify(body.examples), '控制台计费规则模型举例', now);
-    }
-
-    // Save prices to tier_prices system_settings
-    await db.prepare(
-      'INSERT INTO system_settings (`key`, value, description, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)',
-    ).run('tier_prices', JSON.stringify(body.prices), '各档位价格（元/千token）', now);
-
-    await this.settings.reloadAll();
+  async updateModelTiers(body: { tiers: Record<string, string[]>; prices: Record<string, { prompt: number; completion: number }>; labels?: Record<string, string>; examples?: Record<string, string>; expected?: Record<string, string> }): Promise<Awaited<ReturnType<AdminService['getModelTiers']>>> {
+    record(body, 'model tiers');
+    if (Object.keys(body).some(k => !['tiers','prices','labels','examples','expected'].includes(k))) throw new BadRequestException('无效的定价字段');
+    const tiers = modelMapping(body.tiers, 'model_tier_mapping');
+    const values: Record<string, string> = { model_tier_mapping: JSON.stringify(tiers), tier_prices: JSON.stringify(body.prices) };
+    if (body.labels !== undefined) values.tier_labels = JSON.stringify(body.labels);
+    if (body.examples !== undefined) values.tier_examples = JSON.stringify(body.examples);
+    const expected = body.expected === undefined ? {} : record(body.expected, 'expected');
+    if (Object.values(expected).some(v => typeof v !== 'string')) throw new BadRequestException('无效的配置版本');
+    if (Object.keys(values).some(key => typeof expected[key] !== 'string')) throw new BadRequestException('请先加载完整定价配置再保存');
+    await this.settings.updateValues(values, expected as Record<string, string>);
     return this.getModelTiers();
   }
 
-  async addModelsToTier(tierKey: string, models: string[]): Promise<{ tiers: Record<string, string[]> }> {
-    const db = this.databaseService.connection;
-    const now = this.databaseService.now();
-    const row = await db.prepare(
-      'SELECT value FROM system_settings WHERE `key` = ?',
-    ).get('model_tier_mapping') as { value: string } | undefined;
-    const tiers: Record<string, string[]> = row ? JSON.parse(row.value) : {};
-
-    if (models.includes('auto')) models = models.filter((model) => model !== 'auto');
-    if (!tiers[tierKey]) tiers[tierKey] = [];
-    for (const m of models) {
-      if (!tiers[tierKey].includes(m)) tiers[tierKey].push(m);
-      // Remove from other tiers
-      for (const [k, v] of Object.entries(tiers)) {
-        if (k !== tierKey) tiers[k] = v.filter((x) => x !== m);
+  async addModelsToTier(tierKey: string, models: string[]): Promise<{tiers: Record<string, string[]>}> {
+    const requested = modelMapping({[tierKey]: models}, 'model_tier_mapping')[tierKey];
+    await this.settings.mutateJSON('model_tier_mapping', value => {
+      const tiers = modelMapping(value, 'model_tier_mapping');
+      if (!Object.hasOwn(tiers, tierKey)) throw new NotFoundException('计费档位不存在');
+      for (const m of requested) {
+        if (!tiers[tierKey].includes(m)) tiers[tierKey].push(m);
+        for (const k of Object.keys(tiers)) if (k !== tierKey) tiers[k] = tiers[k].filter(x => x !== m);
       }
-    }
-
-    await db.prepare(
-      'UPDATE system_settings SET value = ?, updated_at = ? WHERE `key` = ?',
-    ).run(JSON.stringify(tiers), now, 'model_tier_mapping');
-
-    await this.settings.reloadAll();
-    return { tiers };
+      return tiers;
+    });
+    return {tiers: (await this.getModelTiers()).tiers};
   }
 
-  async removeModelFromTier(tierKey: string, modelId: string): Promise<{ tiers: Record<string, string[]> }> {
-    const db = this.databaseService.connection;
-    const now = this.databaseService.now();
-    const row = await db.prepare(
-      'SELECT value FROM system_settings WHERE `key` = ?',
-    ).get('model_tier_mapping') as { value: string } | undefined;
-    const tiers: Record<string, string[]> = row ? JSON.parse(row.value) : {};
-
-    if (tiers[tierKey]) {
-      tiers[tierKey] = tiers[tierKey].filter((x) => x !== modelId);
-    }
-
-    await db.prepare(
-      'UPDATE system_settings SET value = ?, updated_at = ? WHERE `key` = ?',
-    ).run(JSON.stringify(tiers), now, 'model_tier_mapping');
-
-    await this.settings.reloadAll();
-    return { tiers };
+  async removeModelFromTier(tierKey: string, modelId: string): Promise<{tiers: Record<string, string[]>}> {
+    record({[tierKey]: []}, 'model_tier_mapping');
+    await this.settings.mutateJSON('model_tier_mapping', value => {
+      const tiers = modelMapping(value, 'model_tier_mapping');
+      if (!Object.hasOwn(tiers, tierKey)) throw new NotFoundException('计费档位不存在');
+      tiers[tierKey] = tiers[tierKey].filter(m => m !== modelId);
+      return tiers;
+    });
+    return {tiers: (await this.getModelTiers()).tiers};
   }
 
-  private sanitizeModelTierMapping(tiers: Record<string, string[]>): Record<string, string[]> {
-    const allowedGeminiModels = new Set(['gemini-3.5-flash']);
-    const cleaned: Record<string, string[]> = {};
-    for (const [tier, models] of Object.entries(tiers || {})) {
-      cleaned[tier] = Array.from(new Set((models || []).filter((model) => (
-        model &&
-        model !== 'auto' &&
-        (!model.startsWith('gemini-') || allowedGeminiModels.has(model))
-      ))));
-    }
-    return cleaned;
-  }
+  private sanitizeModelTierMapping(tiers: Record<string, string[]>): Record<string, string[]> { return modelMapping(tiers, 'model_tier_mapping'); }
 
-  private sanitizeSystemSettingValue(key: string, value: string): string {
-    if (key === 'model_tags') {
-      return JSON.stringify(this.sanitizeModelTags(value));
-    }
-    if (key.startsWith('page_models_')) {
-      return this.sanitizeModelCsv(value);
-    }
-    if (key === 'model_tier_mapping') {
-      try {
-        return JSON.stringify(this.sanitizeModelTierMapping(JSON.parse(value) as Record<string, string[]>));
-      } catch {
-        return value;
-      }
-    }
-    if (key === 'router_classifier_model' && value.trim() === 'auto') {
-      return 'qwen-plus';
-    }
-    return value;
-  }
 
-  private sanitizeModelTags(value: string): Record<string, string[]> {
-    const allowedTags = new Set(['language', 'vision', 'audio']);
-    const parsed = JSON.parse(value) as Record<string, string[]>;
-    const cleaned: Record<string, string[]> = {};
-    for (const [model, tags] of Object.entries(parsed || {})) {
-      if (!model || model === 'auto') continue;
-      const next = Array.from(new Set((tags || []).filter((tag) => allowedTags.has(tag))));
-      if (next.length > 0) cleaned[model] = next;
-    }
-    return cleaned;
-  }
 
-  private sanitizeModelCsv(value: string): string {
-    const trimmed = value.trim();
-    if (!trimmed || trimmed === '*') return trimmed || '*';
-    return Array.from(new Set(trimmed.split(',').map((model) => model.trim()).filter((model) => model && model !== 'auto'))).join(',');
-  }
+
+
+
 }
